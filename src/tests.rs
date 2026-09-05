@@ -30,7 +30,10 @@ fn ids<'a>(it: impl Iterator<Item = (&'a Src, usize)>) -> Vec<(u32, usize)> {
 impl Error {
     /// A schedule or length rejection of a mix.
     fn is_sampling(&self) -> bool {
-        matches!(self, Self::MixTooLong | Self::InvalidSampling { .. } | Self::TooSteep { .. } | Self::Overcommitted { .. })
+        matches!(
+            self,
+            Self::MixTooLong | Self::InvalidSampling { .. } | Self::TooSteep { .. } | Self::Overcommitted { .. } | Self::ZeroWeights | Self::EmptyWeightedPart { .. }
+        )
     }
 }
 
@@ -69,6 +72,21 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             let sampling: Vec<Sampling> = parts.iter().map(|(_, s)| *s).collect();
             let il = Interleave::with_sampling(&lens, &sampling)?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
+        }
+        Seq::Weighted { total, parts } => {
+            let weights: Vec<f64> = parts.iter().map(|(_, w, _)| *w).collect();
+            let shares = crate::order::weighted_shares(*total as u64, &weights)?;
+            let mut mixed = Vec::new();
+            for (i, ((part, _, s), share)) in parts.iter().zip(shares).enumerate() {
+                let len = eval_at(part, ctx, depth)?.len();
+                if len == 0 && share > 0 {
+                    return Err(Error::EmptyWeightedPart { part: i });
+                }
+                let times = if len == 0 { 1 } else { (share as usize).div_ceil(len).max(1) };
+                let inner = if times > 1 { Seq::Repeat { times, inner: Box::new(part.clone()) } } else { part.clone() };
+                mixed.push((Seq::Take { n: share as usize, inner: Box::new(inner) }, *s));
+            }
+            eval_at(&Seq::Mix(mixed), ctx, depth)?
         }
         Seq::Shuffle { seed, inner } => {
             let v = eval_at(inner, ctx, depth)?;
@@ -113,7 +131,19 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         return src(id as u32, lens[id]);
     }
     let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens)).collect::<Vec<_>>();
-    match rng.below(7) {
+    match rng.below(8) {
+        7 => {
+            let total = rng.below(60);
+            let weighted: Vec<(Seq<Src>, f64, Sampling)> = parts(rng, depth - 1)
+                .into_iter()
+                .map(|p| {
+                    let w = (1 + rng.below(3)) as f64;
+                    let s = if rng.below(3) == 0 { Sampling::delayed(0.5) } else { Sampling::Uniform };
+                    (p, w, s)
+                })
+                .collect();
+            Seq::weighted_with(total, weighted)
+        }
         0 => Seq::concat(parts(rng, depth - 1)),
         1 => Seq::mix(parts(rng, depth - 1)),
         2 => Seq::mix_with(parts(rng, depth - 1).into_iter().map(|p| {
@@ -151,7 +181,7 @@ fn random_configurations_match_reference() {
     let mut rng = Rng(0x1234_5678_9ABC_DEF1);
     let lens = [0usize, 1, 2, 3, 7, 13, 40];
     let (mut checked, mut skipped) = (0, 0);
-    for round in 0..600 {
+    for round in 0..800 {
         let seq = random_seq(&mut rng, 4, &lens);
         let seed = rng.next();
         assert_eq!(seq.check(), Order::new(seq.clone()).map(|o| o.len()), "round {round}: check");
@@ -408,8 +438,9 @@ fn golden_orders() {
         ),
         ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).stride(7, 3), 0),
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
+        ("weighted", Seq::weighted(3000, [(src(0, 100).shuffle(1), 0.6), (src(1, 5000).shuffle(2), 0.4)]), 0),
     ];
-    const EXPECTED: [u64; 10] = [
+    const EXPECTED: [u64; 11] = [
         8944480274337887517,
         4625008917299269681,
         10153334795136506768,
@@ -420,6 +451,7 @@ fn golden_orders() {
         9703835265997803807,
         10527708798688175491,
         15930632077147421093,
+        102363814477202295,
     ];
     let actual: Vec<u64> = cases
         .iter()
@@ -529,4 +561,57 @@ fn steep_schedule_at_scale() {
     // Too steep is rejected, not looped over.
     let steep = Seq::mix_with([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
     assert!(matches!(Order::new(steep), Err(Error::TooSteep { part: 1 }) | Err(Error::MixTooLong)));
+}
+
+#[test]
+fn weighted_shares_sum_and_round() {
+    use crate::order::weighted_shares;
+    assert_eq!(weighted_shares(1000, &[0.6, 0.4]).unwrap(), [600, 400]);
+    assert_eq!(weighted_shares(10, &[1.0, 1.0, 1.0]).unwrap(), [4, 3, 3]);
+    assert_eq!(weighted_shares(0, &[]).unwrap(), Vec::<u64>::new());
+    assert_eq!(weighted_shares(7, &[0.0, 2.0]).unwrap(), [0, 7]);
+    for total in [1u64, 17, 999, 123_456] {
+        let w = [0.1, 0.25, 3.0, 0.65, 2.0];
+        let shares = weighted_shares(total, &w).unwrap();
+        assert_eq!(shares.iter().sum::<u64>(), total);
+        let sum: f64 = w.iter().sum();
+        for (share, w) in shares.iter().zip(w) {
+            assert!((*share as f64 - w / sum * total as f64).abs() < 1.0);
+        }
+    }
+    assert_eq!(weighted_shares(5, &[1.0, -1.0]).unwrap_err(), Error::InvalidWeight { part: 1, weight: -1.0 });
+    assert!(matches!(weighted_shares(5, &[f64::NAN]).unwrap_err(), Error::InvalidWeight { part: 0, .. }));
+    assert_eq!(weighted_shares(5, &[0.0, 0.0]).unwrap_err(), Error::ZeroWeights);
+    assert_eq!(weighted_shares(5, &[]).unwrap_err(), Error::ZeroWeights);
+}
+
+/// A weighted mix has the composition of its weights, repeats short parts (reshuffled) and
+/// cuts long ones.
+#[test]
+fn weighted_mix() {
+    let seq = Seq::weighted(3000, [(src(0, 100).shuffle(1), 0.6), (src(1, 5000).shuffle(2), 0.4)]);
+    assert_eq!(seq.check(), Ok(3000));
+    let order = Order::new(seq).unwrap();
+    let all = ids(order.iter(0..3000));
+    assert_eq!(all.iter().filter(|e| e.0 == 0).count(), 1800);
+    assert_eq!(all.iter().filter(|e| e.0 == 1).count(), 1200);
+    // Source 0 (100 elements) is repeated 18 times, each repetition a permutation, the
+    // first two different; source 1 contributes 1200 distinct elements.
+    let zeros: Vec<usize> = all.iter().filter(|e| e.0 == 0).map(|e| e.1).collect();
+    for epoch in zeros.chunks(100) {
+        let mut sorted = epoch.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..100).collect::<Vec<_>>());
+    }
+    assert_ne!(zeros[..100], zeros[100..200]);
+    let mut ones: Vec<usize> = all.iter().filter(|e| e.0 == 1).map(|e| e.1).collect();
+    ones.sort_unstable();
+    ones.dedup();
+    assert_eq!(ones.len(), 1200);
+    // Errors and edges.
+    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (src(1, 5), 1.0)])).unwrap_err(), Error::EmptyWeightedPart { part: 0 });
+    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 0.0), (src(1, 5), 1.0)])).unwrap().len(), 10);
+    assert_eq!(Order::new(Seq::weighted(0, [(src(0, 5), 1.0)])).unwrap().len(), 0);
+    assert_eq!(Order::new(Seq::<Src>::weighted(0, [])).unwrap().len(), 0);
+    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 5), 0.0)])).unwrap_err(), Error::ZeroWeights);
 }

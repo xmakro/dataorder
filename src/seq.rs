@@ -20,6 +20,18 @@ pub enum Seq<T> {
     /// [`Sampling`], balanced over the whole length. The total length of a mix is limited to
     /// 2⁴⁶.
     Mix(Vec<(Self, Sampling)>),
+    /// The parts mixed in the proportions of their weights, `total` elements in all: part `i`
+    /// contributes `round(wᵢ / Σw · total)` elements (the largest remainders take the
+    /// rounding up, so the counts sum to `total`), repeated as often as needed (reshuffling
+    /// any shuffle inside for each repetition) and cut to that count, then mixed like
+    /// [`Mix`](Seq::Mix) with the parts' schedules. Weights must be finite and nonnegative
+    /// with a positive sum, and a part with a positive share must have elements.
+    Weighted {
+        /// Length of the order.
+        total: usize,
+        /// The parts with their weights and schedules.
+        parts: Vec<(Seq<T>, f64, Sampling)>,
+    },
     /// `inner` in a pseudorandom order selected by `seed`. Inside a [`Repeat`](Seq::Repeat)
     /// the order also depends on the repetition, so every epoch is shuffled differently.
     Shuffle {
@@ -88,6 +100,20 @@ impl<T> Seq<T> {
     #[must_use]
     pub fn mix_with(parts: impl IntoIterator<Item = (Self, Sampling)>) -> Self {
         Self::Mix(parts.into_iter().collect())
+    }
+
+    /// The parts mixed by weight into `total` elements, all [`Sampling::Uniform`]; see
+    /// [`Weighted`](Seq::Weighted).
+    #[must_use]
+    pub fn weighted(total: usize, parts: impl IntoIterator<Item = (Seq<T>, f64)>) -> Seq<T> {
+        Self::Weighted { total, parts: parts.into_iter().map(|(p, w)| (p, w, Sampling::Uniform)).collect() }
+    }
+
+    /// The parts mixed by weight into `total` elements, each with its own schedule; see
+    /// [`Weighted`](Seq::Weighted).
+    #[must_use]
+    pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = (Seq<T>, f64, Sampling)>) -> Seq<T> {
+        Self::Weighted { total, parts: parts.into_iter().collect() }
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
@@ -171,6 +197,7 @@ impl<T> Seq<T> {
             Self::Source(t) => Seq::Source(f(t)),
             Self::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.map_with(f)).collect()),
             Self::Mix(parts) => Seq::Mix(parts.into_iter().map(|(p, s)| (p.map_with(f), s)).collect()),
+            Self::Weighted { total, parts } => Seq::Weighted { total, parts: parts.into_iter().map(|(p, w, s)| (p.map_with(f), w, s)).collect() },
             Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.map_with(f)) },
             Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.map_with(f)) },
             Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.map_with(f)) },
@@ -191,11 +218,12 @@ impl<T: Source> Seq<T> {
     }
 
     /// The same expression over the sources' lengths.
-    fn lens(&self) -> Seq<usize> {
+    pub(crate) fn lens(&self) -> Seq<usize> {
         match self {
             Self::Source(t) => Seq::Source(t.len()),
             Self::Concat(parts) => Seq::Concat(parts.iter().map(Self::lens).collect()),
             Self::Mix(parts) => Seq::Mix(parts.iter().map(|(p, s)| (p.lens(), *s)).collect()),
+            Self::Weighted { total, parts } => Seq::Weighted { total: *total, parts: parts.iter().map(|(p, w, s)| (p.lens(), *w, *s)).collect() },
             Self::Shuffle { seed, inner } => Seq::Shuffle { seed: *seed, inner: Box::new(inner.lens()) },
             Self::Repeat { times, inner } => Seq::Repeat { times: *times, inner: Box::new(inner.lens()) },
             Self::Skip { n, inner } => Seq::Skip { n: *n, inner: Box::new(inner.lens()) },

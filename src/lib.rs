@@ -1,8 +1,9 @@
 //! Deterministic, seekable data order for training, without materializing anything.
 //!
 //! A [`Seq`] is a tree: [`Source`](Seq::Source) leaves (anything that is a [`Source`]: a
-//! length) combined by [`Concat`](Seq::Concat) and [`Mix`](Seq::Mix) (balanced,
+//! length) combined by [`Concat`](Seq::Concat), [`Mix`](Seq::Mix) (balanced,
 //! order-preserving interleaving with per-part sampling schedules, see [`Sampling`]) and
+//! [`Weighted`](Seq::Weighted) (a mix in given proportions, repeating and cutting the parts) and
 //! transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat), [`Skip`](Seq::Skip),
 //! [`Take`](Seq::Take) and [`Stride`](Seq::Stride). [`Order::new`] validates it and precomputes what iteration
 //! needs; the elements, `(&source, index in the source)`, are never materialized:
@@ -47,6 +48,7 @@
 //! | `Source(t)` | `t.len()` | element `p` of `t` |
 //! | `Concat(parts)` | sum | the part containing `p`, at `p` minus the part's offset |
 //! | `Mix(parts)` | sum | what the interleave of the parts' lengths puts at `p` |
+//! | `Weighted { total, parts }` | `total` | the mix of each part repeated and cut to `round(wᵢ/Σw · total)` |
 //! | `Shuffle { seed, inner }` | `n` | `perm_seed(p)` of `inner` |
 //! | `Repeat { times, inner }` | `times·n` | `p mod n` of `inner`, in the context of epoch `p div n` |
 //! | `Skip { n, inner }` | `len − n` | `n + p` of `inner` |

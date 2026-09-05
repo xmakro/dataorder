@@ -235,6 +235,23 @@ impl<T: Source> Compiler<T> {
                     _ => Node::Mix { il, children },
                 }
             }
+            Seq::Weighted { total, parts } => {
+                // Each part becomes `part.repeat(times).take(share)`, then the parts are mixed;
+                // the lengths come from a validation pass over the parts' lengths.
+                let weights: Vec<f64> = parts.iter().map(|(_, w, _)| *w).collect();
+                let shares = weighted_shares(total as u64, &weights)?;
+                let mut mixed = Vec::with_capacity(parts.len());
+                for (i, ((part, _, sampling), share)) in parts.into_iter().zip(shares).enumerate() {
+                    let len = Order::new(part.lens())?.len() as u64;
+                    if len == 0 && share > 0 {
+                        return Err(Error::EmptyWeightedPart { part: i });
+                    }
+                    let times = if len == 0 { 1 } else { share.div_ceil(len).max(1) } as usize;
+                    let repeated = if times > 1 { Seq::Repeat { times, inner: Box::new(part) } } else { part };
+                    mixed.push((Seq::Take { n: share as usize, inner: Box::new(repeated) }, sampling));
+                }
+                self.compile(Seq::Mix(mixed), depth)?
+            }
             Seq::Shuffle { seed, inner } => {
                 let child = self.compile(*inner, depth)?;
                 if child.len() <= 1 {
@@ -290,6 +307,48 @@ impl<T: Source> Compiler<T> {
             }
         })
     }
+}
+
+/// The parts' element counts for the given weights, summing to `total`: the floors of the
+/// exact shares `wᵢ / Σw · total`, the remainder going one each to the parts with the largest
+/// fractional shares (lowest index first on ties).
+pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, Error> {
+    for (i, &w) in weights.iter().enumerate() {
+        if !(w.is_finite() && w >= 0.0) {
+            return Err(Error::InvalidWeight { part: i, weight: w });
+        }
+    }
+    if weights.is_empty() && total == 0 {
+        return Ok(Vec::new());
+    }
+    let sum: f64 = weights.iter().sum();
+    // The weights are finite and nonnegative here, so the sum is too (no NaN).
+    if sum <= 0.0 {
+        return Err(Error::ZeroWeights);
+    }
+    let mut shares = Vec::with_capacity(weights.len());
+    let mut fractions = Vec::with_capacity(weights.len());
+    let mut given = 0u64;
+    for (i, &w) in weights.iter().enumerate() {
+        let exact = w / sum * total as f64;
+        let floor = exact.floor();
+        let share = (floor as u64).min(total);
+        shares.push(share);
+        given += share;
+        fractions.push((exact - floor, i));
+    }
+    // Descending fraction, ascending index; `partial_cmp` is total here (no NaN).
+    fractions.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(&b.1)));
+    let mut rest = total.saturating_sub(given);
+    for (_, i) in fractions {
+        if rest == 0 {
+            break;
+        }
+        shares[i] += 1;
+        rest -= 1;
+    }
+    debug_assert_eq!(shares.iter().sum::<u64>(), total);
+    Ok(shares)
 }
 
 /// Positions `start..start + len` of `child`, folded into the child where that is exact.

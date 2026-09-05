@@ -47,6 +47,20 @@ pub enum Error {
         /// The scheduled parts' final rates, summed, as a fraction of the whole draw rate.
         demand: f64,
     },
+    /// A weight of a weighted mix is negative or not finite.
+    InvalidWeight {
+        /// Index of the part in the mix.
+        part: usize,
+        /// Its weight.
+        weight: f64,
+    },
+    /// The weights of a weighted mix sum to zero.
+    ZeroWeights,
+    /// A part of a weighted mix has a positive share but no elements.
+    EmptyWeightedPart {
+        /// Index of the part in the mix.
+        part: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -60,6 +74,9 @@ impl fmt::Display for Error {
             Self::InvalidSampling { part, sampling } => write!(f, "mix part {part}: invalid {sampling:?}"),
             Self::TooSteep { part } => write!(f, "mix part {part}: too long for the steepness of its schedule"),
             Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at the end", demand * 100.0),
+            Self::InvalidWeight { part, weight } => write!(f, "weighted mix part {part}: invalid weight {weight}"),
+            Self::ZeroWeights => write!(f, "weighted mix: the weights sum to zero"),
+            Self::EmptyWeightedPart { part } => write!(f, "weighted mix part {part} has a share but no elements"),
         }
     }
 }

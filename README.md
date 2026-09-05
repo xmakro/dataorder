@@ -27,7 +27,9 @@ for (shard, index) in order.iter(1000..1010) {              // positions 1000..1
 let (shard, index) = order.get(1005);
 ```
 
-Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with`, and on a
+Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with`,
+`Seq::weighted(total, [(seq, weight), …])` and `Seq::weighted_with` (a mix in given proportions:
+each part is repeated and cut to its share of `total`, epochs reshuffled), and on a
 `Seq`: `.shuffle(seed)`, `.repeat(times)`, `.slice(range)`, `.take(n)`, `.skip(n)`,
 `.stride(step, offset)`, `.shard(index, count)`, `.map(f)` (the same structure over other
 sources: handles become loaded datasets), `.check()` (validate and get the length without
@@ -47,6 +49,7 @@ Every node maps its positions to positions of its children:
 | `Source(t)` | `t.len()` | element `p` of `t` |
 | `Concat(parts)` | sum | the part containing `p`, at `p` minus the part's offset |
 | `Mix(parts)` | sum | what the interleave of the parts' lengths puts at `p` |
+| `Weighted { total, parts }` | `total` | the mix of each part repeated and cut to `round(wᵢ/Σw · total)` |
 | `Shuffle { seed, inner }` | `n` | `perm_seed(p)` of `inner` |
 | `Repeat { times, inner }` | `times·n` | `p mod n` of `inner`, in the context of epoch `p div n` |
 | `Skip { n, inner }` | `len − n` | `n + p` of `inner` |
