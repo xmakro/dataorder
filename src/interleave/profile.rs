@@ -16,6 +16,15 @@
 #[derive(Clone, Debug)]
 pub(crate) struct Profile {
     segs: Vec<Segment>,
+    /// `segs[m].start` and `segs[m].share`, contiguous, for the binary searches of [`share`]
+    /// and [`quantile`]: the uniform profile has a segment per distinct breakpoint of the
+    /// scheduled profiles, thousands of them in a mix with many distinct schedules, and a
+    /// search over the 72-byte segments would touch as many cache lines.
+    ///
+    /// [`share`]: Profile::share
+    /// [`quantile`]: Profile::quantile
+    starts: Vec<f64>,
+    shares: Vec<f64>,
 }
 
 /// On `[start, end]` the rate goes linearly from `r0` to `r1`; `share` is the integral of
@@ -51,7 +60,9 @@ impl Profile {
                 share += (r0 + r1) / 2.0 * (end - start);
             }
         }
-        Self { segs }
+        let starts = segs.iter().map(|s| s.start).collect();
+        let shares = segs.iter().map(|s| s.share).collect();
+        Self { segs, starts, shares }
     }
 
     /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the
@@ -136,25 +147,33 @@ impl Profile {
 
     /// The share drawn by progress `t`: the integral of the rate up to `t`.
     pub(crate) fn share(&self, t: f64) -> f64 {
-        let s = &self.segs[self.segs.partition_point(|s| s.start <= t).saturating_sub(1)];
+        let s = &self.segs[self.starts.partition_point(|&start| start <= t).saturating_sub(1)];
         let x = (t - s.start).clamp(0.0, s.end - s.start);
         s.share + x * (s.r0 + s.c * x)
     }
 
     /// The smallest `t` whose share is at least `y`. `hint` is the segment to try first and
-    /// is updated; consecutive keys of a sequence mostly stay on one segment or move on.
+    /// is updated: consecutive keys of a sequence mostly stay on one segment or move on to
+    /// the next, which costs one or two comparisons; any other hint (a seek starts every
+    /// sequence at segment 0) is a binary search over the shares, so that a seek of a mix
+    /// costs `O(log S)` per part in the number `S` of segments, not `O(S)`.
     ///
     /// Nondecreasing in `y` even under rounding: the segment index is monotone because
     /// shares are, the result is clamped to the segment, and inside a segment every operation
     /// is a correctly rounded monotone function of the previous one.
     #[inline(always)]
     pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
+        // The last segment whose share is at most `y`.
         let mut m = *hint;
-        while m + 1 < self.segs.len() && y >= self.segs[m + 1].share {
-            m += 1;
-        }
-        while m > 0 && y < self.segs[m].share {
-            m -= 1;
+        let last = self.segs.len() - 1;
+        if y < self.segs[m].share {
+            m = self.shares.partition_point(|&share| share <= y).saturating_sub(1);
+        } else if m < last && y >= self.segs[m + 1].share {
+            if m + 1 == last || y < self.segs[m + 2].share {
+                m += 1;
+            } else {
+                m = self.shares.partition_point(|&share| share <= y).saturating_sub(1);
+            }
         }
         *hint = m;
         let s = &self.segs[m];
