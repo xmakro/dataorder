@@ -132,7 +132,7 @@
 //! ARM.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs, unreachable_pub)]
+#![warn(missing_docs, unreachable_pub, clippy::doc_markdown, clippy::redundant_clone, clippy::use_self)]
 // No `mul_add`, however clippy's pedantic group may put it: a fused multiply-add rounds
 // differently from a multiply and an add, and the orders are promised to be the same on
 // every target.

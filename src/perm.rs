@@ -13,7 +13,7 @@
 //! a grid and in the low bits, serial correlation, fixed points) at every size tried, from 2
 //! to 10⁶ and beyond; there is no security claim.
 //!
-//! Alternatives measured and rejected: a masked multiply–xorshift mixer (MurmurHash3's
+//! Alternatives measured and rejected: a masked multiply–xorshift mixer (`MurmurHash3`'s
 //! finalizer cut to `k` bits) is twice as fast but maps consecutive inputs to outputs with
 //! a nearly constant difference (serial correlation over 100σ); four rounds with a
 //! two-multiply round function (multiply, xorshift, multiply) have the same quality and
@@ -59,7 +59,7 @@ impl Key {
     pub(crate) const UNSET: Self = Self { rk: [0; 6], mul: [1; 6] };
 }
 
-/// SplitMix64's finalizer: a fixed 64-bit bijection with good avalanche (maps 0 to 0).
+/// `SplitMix64`'s finalizer: a fixed 64-bit bijection with good avalanche (maps 0 to 0).
 #[inline]
 pub(crate) fn mix64(mut z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

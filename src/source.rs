@@ -76,7 +76,7 @@ impl<T, const N: usize> Source for [T; N] {
 
 impl<T> Source for Vec<T> {
     fn len(&self) -> usize {
-        Vec::len(self)
+        <[T]>::len(self)
     }
 }
 

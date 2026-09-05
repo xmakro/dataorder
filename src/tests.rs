@@ -508,9 +508,9 @@ fn errors() {
     assert_eq!(err.path(), [0, 1, 1, 0]);
     assert_eq!(err.to_string(), "cannot take 11 of 10 positions (at node 0/1/1/0)");
     assert_eq!(root(ErrorKind::ZeroStep).to_string(), "stride step is zero (at the root)");
-    assert_eq!(err.clone().into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
+    assert_eq!(err.into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
     // Weights: reported at the part, before any part is compiled.
-    let w = Seq::concat([a.clone(), Seq::weighted(10, [(a.clone(), 1.0), (a.clone().take(99), -1.0)])]);
+    let w = Seq::concat([a.clone(), Seq::weighted(10, [(a.clone(), 1.0), (a.take(99), -1.0)])]);
     let err = Order::new(w).unwrap_err();
     assert_eq!((err.kind(), err.path()), (&ErrorKind::InvalidWeight { weight: -1.0 }, &[1, 1][..]));
     assert_eq!(err.to_string(), "invalid weight -1 (at node 1/1)");

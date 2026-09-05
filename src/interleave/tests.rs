@@ -26,7 +26,7 @@ fn share(il: &Interleave, s: usize, t: f64) -> f64 {
     il.profile(s).share(t).clamp(0.0, 1.0)
 }
 
-/// Largest |count_s(t) − n_s·F_s(t/N)| over all t, per sequence (in elements of s).
+/// Largest `|count_s(t) − n_s·F_s(t/N)|` over all `t`, per sequence (in elements of `s`).
 fn worst_deviation(il: &Interleave, all: &[(usize, u64)]) -> Vec<f64> {
     let k = il.seqs.len();
     let n = il.len() as f64;
