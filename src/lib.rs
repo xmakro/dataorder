@@ -97,8 +97,13 @@
 //!   [`WeightedPart`] and [`Sampling`] (pulls in `serde` with `derive`). The format is
 //!   serde's derived representation with the variant and field names as written here,
 //!   `{"Shuffle":{"seed":1,"inner":{"Source":50}}}` for instance; unknown fields are
-//!   rejected. It is stable under the same policy as the orders: a change to it is a
-//!   breaking change.
+//!   rejected in every variant. It is stable under the same policy as the orders: a change
+//!   to it is a breaking change. Two caveats: lengths and counts are `usize`, so a
+//!   configuration written on a 64-bit machine need not read back on a 32-bit one; and
+//!   every level of a `Seq` is two levels of nesting in a self-describing format, so
+//!   `serde_json` reads at most 64 levels under its default recursion limit of 128
+//!   (`Deserializer::disable_recursion_limit`, behind its `unbounded_depth` feature, lifts
+//!   it).
 //!
 //! # Stability
 //!

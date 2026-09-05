@@ -14,7 +14,8 @@ exclude = ["/.github", "/scripts"]
 serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
-serde_json = "1"
+serde = "1"
+serde_json = { version = "1", features = ["unbounded_depth"] }
 
 [features]
 serde = ["dep:serde"]

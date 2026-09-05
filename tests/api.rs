@@ -111,8 +111,29 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
+    use serde::Deserialize;
     let seq = Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
+    // Unknown fields are rejected in every variant.
+    for json in [
+        r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
+        r#"{"Shuffle":{"seed":1,"inner":{"Source":5},"extra":true}}"#,
+        r#"{"Weighted":{"total":9,"parts":[],"x":0}}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform","extra":1}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2,"end":0.3}}}]}"#,
+    ] {
+        assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
+    }
+    // Every level of a `Seq` is two levels of JSON: past 64 levels serde_json needs its
+    // recursion limit lifted.
+    let deep = (1..dataorder::MAX_DEPTH).fold(Seq::source(10), |s, _| s.take(10));
+    let json = serde_json::to_string(&deep).unwrap();
+    assert!(serde_json::from_str::<Seq<usize>>(&json).is_err());
+    let mut de = serde_json::Deserializer::from_str(&json);
+    de.disable_recursion_limit();
+    let back = Seq::<usize>::deserialize(&mut de).unwrap();
+    assert_eq!(back, deep);
+    assert_eq!(back.check(), Ok(10));
 }
