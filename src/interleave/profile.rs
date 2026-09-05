@@ -174,21 +174,23 @@ impl Profile {
     /// their inverse against a monotone polynomial.
     #[inline(always)]
     pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
-        // The last segment whose share is at most `y`.
+        // The last segment whose starting share is strictly below `y` (or the first
+        // segment at zero). Equality belongs to the preceding segment, so a flat share
+        // interval is inverted at its left endpoint, including with a hint beyond it.
         let mut m = *hint;
         // A few schedules' worth of segments: within it the walk is what it always was.
         let mut budget = 16;
         loop {
-            if m + 1 < self.segs.len() && y >= self.segs[m + 1].share {
+            if m + 1 < self.segs.len() && y > self.segs[m + 1].share {
                 m += 1;
-            } else if m > 0 && y < self.segs[m].share {
+            } else if m > 0 && y <= self.segs[m].share {
                 m -= 1;
             } else {
                 break;
             }
             budget -= 1;
             if budget == 0 {
-                m = self.shares.partition_point(|&share| share <= y).saturating_sub(1);
+                m = self.shares.partition_point(|&share| share < y).saturating_sub(1);
                 break;
             }
         }
@@ -452,6 +454,32 @@ mod tests {
                     previous = t;
                 }
             }
+        }
+    }
+
+    #[test]
+    fn quantile_uses_the_left_endpoint_of_flat_shares() {
+        // F(t) = 1/2 from 1/4 through 3/4. Split the plateau into enough segments to
+        // exercise both the short hint walk and its binary-search fallback.
+        let p = Profile::from_rates((0..128).map(|i| {
+            let r = if (32..96).contains(&i) { 0.0 } else { 2.0 };
+            (i as f64 / 128.0, (i + 1) as f64 / 128.0, r, r)
+        }));
+        assert_eq!(p.share(0.25), 0.5);
+        assert_eq!(p.share(0.75), 0.5);
+        for start in 0..p.segs.len() {
+            let mut hint = start;
+            assert_eq!(p.quantile(0.5, &mut hint), 0.25, "hint {start}");
+            let left = p.quantile(0.5f64.next_down(), &mut hint);
+            let right = p.quantile(0.5f64.next_up(), &mut hint);
+            assert!(left <= 0.25 && right >= 0.75);
+        }
+        // Initial and final plateaus have the same left-endpoint convention.
+        let p = Profile::trapezoid(0.25, 0.25, 0.75, 0.75);
+        for start in 0..p.segs.len() {
+            let mut hint = start;
+            assert_eq!(p.quantile(0.0, &mut hint), 0.0);
+            assert_eq!(p.quantile(1.0, &mut hint), 0.75);
         }
     }
 

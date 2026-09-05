@@ -120,6 +120,10 @@ impl<V> TournamentTree<V> {
             winner[n + i] = Entry::new(REMOVED, i as u32);
         }
         self.nodes.clear();
+        // A cursor first positioned near the end may have only one live leaf. Reserve
+        // for the iterator's full upper bound so seeking backward does not grow this
+        // buffer when the earlier parts become live again, just as for values/scratch.
+        self.nodes.reserve(at_most.next_power_of_two());
         self.nodes.resize(n, Entry::new(REMOVED, 0));
         for m in (1..n).rev() {
             let (a, b) = (winner[2 * m], winner[2 * m + 1]);

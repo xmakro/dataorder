@@ -11,9 +11,12 @@ fn measure(name: &str, seq: Seq<usize>, count: usize) {
     let order = Order::new(seq).unwrap();
     let n = order.len();
     let seeks = 200;
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
     let t = Instant::now();
-    for i in 0..seeks {
-        let _ = black_box(order.iter(n / seeks * i + 1..).next());
+    for _ in 0..seeks {
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let pos = ((x >> 11) % n as u64) as usize;
+        let _ = black_box(order.iter(pos..).next());
     }
     let seek_us = t.elapsed().as_nanos() as f64 / seeks as f64 / 1000.0;
 

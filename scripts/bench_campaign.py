@@ -12,22 +12,33 @@ def load():
     return json.load(open(RES)) if os.path.exists(RES) else {'labels': [], 'rows': {}}
 
 def run(label, d, rounds=2, core=os.environ.get('BENCH_CORE', '2')):
+    d = os.path.abspath(d)
     subprocess.run(['cargo', 'build', '--release', '--example', 'bench'], cwd=d, check=True, capture_output=True)
     rows = {}
-    for _ in range(rounds):
+    for round_index in range(rounds):
         out = subprocess.run(['taskset', '-c', core, os.path.join(d, 'target/release/examples/bench')], cwd=d, check=True, capture_output=True, text=True).stdout
+        current = {}
         for line in out.splitlines():
             m = re.match(r'^(.*?)\s{2,}([\d.]+) µs\s+([\d.]+) ns\s+([\d.]+) ns$', line)
             if m:
                 name = m.group(1).strip()
                 v = [float(m.group(2)), float(m.group(3)), float(m.group(4))]
-                rows[name] = [min(a, b) for a, b in zip(rows[name], v)] if name in rows else v
+                current[name] = v
+        if not current:
+            raise RuntimeError(f'benchmark run {round_index + 1} produced no recognizable measurement rows')
+        for name, v in current.items():
+            rows[name] = [min(a, b) for a, b in zip(rows[name], v)] if name in rows else v
+    if not rows:
+        raise ValueError('at least one benchmark run is required')
     res = load()
     if label in res['labels']:
         res['labels'].remove(label)
     res['labels'].append(label)
+    for values in res['rows'].values():
+        values.pop(label, None)
     for name, v in rows.items():
         res['rows'].setdefault(name, {})[label] = v
+    res['rows'] = {name: values for name, values in res['rows'].items() if values}
     json.dump(res, open(RES, 'w'), indent=1)
     table(res)
 

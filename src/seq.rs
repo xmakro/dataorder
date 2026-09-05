@@ -31,8 +31,9 @@ use std::ops::{Bound, RangeBounds};
 /// Like any boxed tree, a `Seq` is cloned, compared, hashed, printed, mapped, serialized and
 /// dropped by recursion, one stack frame per level. [`Order::new`] and [`check`](Seq::check)
 /// cope with any depth: they stop at [`MAX_DEPTH`] and take the rest apart without
-/// recursion. Keep the values themselves within a few thousand levels of a thread's stack
-/// all the same; no order accepts them deeper.
+/// recursion. The other operations' stack use depends on both depth and the inline size
+/// of the source type: large array sources can exhaust a thread's stack even below
+/// `MAX_DEPTH`. Use source handles or boxed sources when mapping or cloning such trees.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
@@ -72,10 +73,13 @@ pub enum Seq<T> {
         /// The sequence to permute.
         inner: Box<Self>,
     },
-    /// `inner`, `times` times over: first as it is, then reshuffled at every shuffle inside
-    /// it for each further repetition. `x.repeat(1)` is `x`, and `x.repeat(0)` is empty
-    /// (`inner` is validated all the same). Schedules of a mix inside restart every
-    /// repetition.
+    /// `inner`, `times` times over, deriving a new shuffle context for each repetition
+    /// after the first. `x.repeat(1)` is `x`, and `x.repeat(0)` is empty (`inner` is
+    /// validated all the same). Schedules of a mix inside restart every repetition.
+    ///
+    /// With more than one repetition, any repeats inside `inner` become one level deeper.
+    /// Their later epochs then shuffle differently even during this repeat's first epoch:
+    /// adding an outer repeat does not preserve the whole prefix of a nested repeat.
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -83,8 +87,9 @@ pub enum Seq<T> {
         inner: Box<Self>,
     },
     /// `inner` repeated as often as `len` positions need and cut there: like
-    /// [`Repeat`](Seq::Repeat), the first time as it is and reshuffled at every shuffle
-    /// inside for each further repetition, the last repetition cut short. `x.cycle(n)` with
+    /// [`Repeat`](Seq::Repeat), deriving a new shuffle context for each further repetition,
+    /// the last repetition cut short. When more than one repetition is needed, nested
+    /// repeats change depth just as they do under `Repeat`. `x.cycle(n)` with
     /// `n` at most the length of `x` is `x.take(n)`, and `x.cycle(usize::MAX)` is an order
     /// that never runs out. A positive `len` over a sequence without elements is an error.
     Cycle {
@@ -292,7 +297,8 @@ impl<T> Seq<T> {
         Self::Shuffle { seed, inner: Box::new(self) }
     }
 
-    /// This sequence `times` times over: itself, then reshuffled for each further time.
+    /// This sequence `times` times over, reshuffled for each further time. Adding more than
+    /// one repetition also changes the shuffle contexts of nested repeats; see [`Repeat`](Seq::Repeat).
     ///
     /// ```
     /// use dataorder::{Order, Seq};

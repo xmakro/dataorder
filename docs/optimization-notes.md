@@ -171,3 +171,45 @@ timings varied substantially between runs, so they do not support a speedup clai
   This adds a construction pass and temporary storage, while making recursive frames
   independent of the source type's size. A maximum-depth tree with 8 KiB array sources
   is tested on a 2 MiB thread stack in debug and release builds.
+
+## Shuffle and API review (2026-09-05)
+
+The seven multiply-only Feistel rounds still retained strong adjacency patterns:
+`source(56_444).shuffle(1)` had serial correlation 0.0512 and consecutive-difference
+chi-square 556.7, and `source(65_536).shuffle(18_437)` had difference chi-square 13,622.
+The replacement uses six rounds of the full `SplitMix64` finalizer with independently
+derived round keys. The reported difference statistics fall to 74.94 and 58.74. The
+release suite checks 512 independent public seed/length pairs (79.4 million permutations),
+including lengths on both sides of powers of two. A separate 10,000-pair holdout over
+lengths 32,906–131,072 checked 767.6 million permutations: maximum difference chi-square
+110.01 and maximum absolute serial correlation 3.67 standard deviations. These checks
+support the change but do not prove statistical quality for every possible configuration.
+
+Public API timings below are medians of five alternating before/after runs on the same
+unpinned Apple Silicon Mac, comparing the previous development version with this change.
+They measure a shuffled source: walk by `next`, random `get`, and construction/seeking of
+a cursor followed by its first element. The key shrinks from 112 to 48 bytes, with no new
+allocation or dependency, but the stronger round costs about 3 ns per walked element.
+
+| source length | walk, before → after | get, before → after | seek, before → after |
+|---|---|---|---|
+| 65,536 | 8.63 → 11.32 ns | 16.89 → 18.95 ns | 24.96 → 27.50 ns |
+| 1,000,000 | 10.00 → 13.14 ns | 18.53 → 20.59 ns | 26.73 → 29.45 ns |
+| 1,000,000,000 | 10.71 → 14.09 ns | 19.02 → 21.61 ns | 27.23 → 30.57 ns |
+
+- Quantiles now use a strict lower bound on cumulative-share segment starts. An exact
+  plateau height selects its left endpoint in both the hint walk and binary search; the
+  change adds no arithmetic or allocation to iteration. Regression tests exercise all
+  hints across 128 segments, neighboring float values, and the resulting mix's seeks.
+- Tournament node buffers reserve against the full part-count upper bound, matching their
+  existing value and scratch buffers. A cursor entered near the end can then seek backward
+  without allocating when completed parts become live again. The allocation test starts
+  with one long part and 99 already-finished short parts.
+- Repeat documentation now describes depth-dependent inner epochs. A repeat, cycle or
+  weighted share that adds an effective repetition can change a nested part's existing
+  prefix. The context scheme is unchanged. Mapping and cloning likewise remain recursive;
+  their depth guidance now accounts for large inline source values.
+- The benchmark campaign resolves directory arguments before changing its working
+  directory, rejects runs with no recognized rows and replaces a reused label's results
+  completely. The seek benchmark now uses deterministic random positions rather than
+  regularly spaced positions that can align with epoch and concat boundaries.

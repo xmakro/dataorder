@@ -124,6 +124,18 @@ fn all_cases() -> Vec<Interleave> {
 }
 
 #[test]
+fn a_quantile_on_a_flat_share_is_drawn_before_the_plateau() {
+    // The uniform singleton's target share is 1/4. Its profile first reaches that
+    // share at 1/16, then stays flat while all three scheduled elements are drawn.
+    let il = Interleave::with_sampling(&[1, 3], &[Uniform, Sampling::trapezoid(0.0625, 0.0625, 0.8125, 0.8125)]).unwrap();
+    let expected = [(0, 0), (1, 0), (1, 1), (1, 2)];
+    assert_eq!(full(&il), expected);
+    for start in 0..=il.len() {
+        assert_eq!(il.iter(start..il.len()).collect::<Vec<_>>(), expected[start as usize..]);
+    }
+}
+
+#[test]
 fn matches_brute_force_sort() {
     for il in all_cases() {
         let expect = reference(&il);

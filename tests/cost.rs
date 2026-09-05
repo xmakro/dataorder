@@ -67,6 +67,18 @@ fn seeking_an_existing_cursor_allocates_nothing() {
     assert_eq!(cursor.position(), n / 4 + 200_000 + 100_004);
 }
 
+/// A cursor first entered near the end reserves its tournament for parts that a later
+/// backward seek can revive, even though almost all of them have already finished.
+#[test]
+fn seeking_backward_revives_parts_without_allocating() {
+    let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
+    let mut cursor = order.iter(order.len() - 1..);
+    assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(element(&order, order.len() - 1)));
+    let count = allocations(|| cursor.seek(0));
+    assert_eq!(count, 0, "reviving the exhausted mix parts allocated {count} times");
+    assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(element(&order, 0)));
+}
+
 #[test]
 fn forward_seeks_land_in_the_target_repetition_and_part() {
     // Every repetition entered rebuilds the concat's current part cursor (a mix: two

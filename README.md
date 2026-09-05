@@ -62,6 +62,12 @@ partition a sequence position by position, so a mix's schedule is preserved acro
 configuration and the seed on every platform. A release that changes any order is a breaking
 change and is listed in [CHANGELOG.md](CHANGELOG.md).
 
+Repeat contexts also depend on nesting depth. Adding an outer repeat changes the later
+epochs of inner repeats, even during the outer repeat's first epoch; the same applies when
+a cycle or weighted share needs to repeat its part. Extending a nested sequence this way
+can change its existing prefix. A single repetition or a cycle within its current length
+preserves that prefix.
+
 ## Mix
 
 ```text
@@ -109,21 +115,24 @@ A mix is at most 2⁴⁶ long (`MAX_MIX_LEN`), and a scheduled part must satisfy
 rejected; use equal adjacent breakpoints for an abrupt change. `cargo test --release -- --ignored --nocapture` runs this table
 and the tournament tree against `BinaryHeap`.
 
-These Ryzen measurements precede the numerical fixes below; the latest comparison is in
-[the numerical review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
+These Ryzen measurements precede the later numerical and shuffle fixes; local comparisons
+are in [the review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
 
 ## Shuffle
 
-A seeded permutation of `0..n` in O(1) per element on average and no state: a seven-round Feistel network
-on the `k`-bit numbers (`2^(k−1) < n ≤ 2^k`) with cycle walking to `0..n`. The round function
-adds the round key to half the bits, multiplies by the round's odd multiplier and keeps the top
-bits of the product. It passes joint-distribution (grid and low bits), serial-correlation,
-consecutive-difference and fixed-point checks at every size tested, from 2 to 10⁶, the
-difference check over hundreds of keys per size (`src/perm.rs` tests; six rounds left about one
-key in 300 with a visible structure in consecutive differences, which the seventh removes for
-0.9 ns per element). There is no security claim. A masked multiply–xorshift mixer
-(MurmurHash3's finalizer cut to `k` bits) is twice as fast but fails badly as a permutation:
-consecutive inputs map to outputs with a nearly constant difference.
+A seeded permutation of `0..n` in O(1) per element on average and no state: a six-round
+Feistel network on the `k`-bit numbers (`2^(k−1) < n ≤ 2^k`) with cycle walking to `0..n`.
+Each round adds its independently derived key to one half, applies the full `SplitMix64`
+finalizer, and keeps the low bits needed by the other half. A previous seven-round network
+with one multiplication per round retained strong adjacency patterns for some seeds and
+lengths, including `source(56_444).shuffle(1)`.
+
+Tests check bijectivity, joint distribution, serial correlation, consecutive differences,
+fixed points and small-domain coverage across seeds. They include the reported weak public
+configurations and independently chosen seeds and lengths. These checks provide evidence
+of statistical quality, not a guarantee for every configuration or a security claim. The
+[shuffle review notes](docs/optimization-notes.md#shuffle-and-api-review-2026-09-05) record
+the measured cost of the stronger round function.
 
 ## Cost
 
@@ -136,9 +145,9 @@ and positions a cursor and draws its first element, which is what enters the par
 of 1000 and 100 shuffled sources of 0.5–2 million elements, each source repeated 2–4 epochs,
 mixed together.
 
-These are the Ryzen measurements before the numerical review fixes. A comparison on
-Apple Silicon, including the pathological inputs, is recorded in
-[the numerical review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
+These are the Ryzen measurements before the numerical and shuffle review fixes. Comparisons
+on Apple Silicon, including the pathological inputs, are recorded in
+[the review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
 
 | order | walk | seek | get |
 |---|---|---|---|
@@ -166,7 +175,7 @@ Apple Silicon, including the pathological inputs, is recorded in
 in `O(log k)`, a `Mix` seeks its interleave as described above, and a `Shuffle` cycle-walks
 its permutation at constant average cost (an individual position can take longer). A walk keeps a
 cursor per node on the active path: a `Mix` costs `⌈log2 k⌉` comparisons per element plus one
-key computation, a `Shuffle` one permutation (about 5.5 ns) plus a `get`-style descent into its
+key computation, a `Shuffle` one permutation plus a `get`-style descent into its
 child (its positions are scattered, so a shuffle *over* a mix pays the interleave seek per
 element: shuffle the parts, not the mix), a `Stride` skips `step − 1` elements of its child
 (a mix steps its interleave, or re-seeks it when that is cheaper, and its parts skip along, a

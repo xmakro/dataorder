@@ -59,7 +59,7 @@
 //! | `Take { n, inner }` | `n` | `p` of `inner` |
 //! | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉`, or 0 | `offset + p·step` of `inner` |
 //!
-//! Shuffles are seeded permutations of `0..n` (a keyed seven-round Feistel network with
+//! Shuffles are seeded permutations of `0..n` (a keyed six-round Feistel network with
 //! cycle walking, see `src/perm.rs`): O(1) per element on average, no state. A shuffle's permutation depends
 //! on its `seed`, on the order's seed, on the *context*, which every `Repeat` of more than
 //! one repetition on the path above derives afresh for each repetition after its first,
@@ -73,6 +73,12 @@
 //! they have the same length and salt: give sources a salt, or shuffles their own seeds.
 //! Everything is deterministic in the configuration and the order's seed, and `iter(a..b)`
 //! yields exactly `get(a)..get(b)` whatever was iterated before.
+//!
+//! Repeat contexts also depend on nesting depth. Wrapping a sequence in a repeat of more
+//! than one epoch moves its inner repeats one level deeper, changing their later epochs
+//! even in the outer repeat's first epoch. Extending a nested sequence with `repeat`, or
+//! with a `cycle` or weighted share that needs another epoch, can therefore change its
+//! existing prefix. A single repetition, or a cycle within the existing length, preserves it.
 //!
 //! Compilation rejects skips and takes past the end, cycles of an empty sequence, zero
 //! strides, orders longer than `usize::MAX` (and intermediate lengths beyond 64 bits),

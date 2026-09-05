@@ -430,8 +430,8 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert_eq!(ids(Order::new(seq.clone().repeat(1)).unwrap().iter(..)), ids(order.iter(..)));
     assert_eq!(ids(Order::new(Seq::concat([seq.clone().repeat(1)]).repeat(1)).unwrap().iter(..)), ids(order.iter(..)));
     // A weighted part that fits its share once is not repeated, so it is the part itself;
-    // one that is repeated starts with the part (the first repetition keeps its context) and
-    // then, being one repeat deeper, reshuffles the part's own epochs differently.
+    // one that is repeated preserves the part's first inner epoch, but being one repeat
+    // deeper reshuffles the part's later epochs even during its first outer repetition.
     let part = || src(7, 100).shuffle(3).repeat(2);
     let fits = Order::new(Seq::weighted(400, [(part(), 1.0), (src(8, 1000), 1.0)])).unwrap();
     let repeats = Order::new(Seq::weighted(500, [(part(), 1.0), (src(8, 1000), 1.0)])).unwrap();
@@ -440,6 +440,12 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert_eq!(sevens(&fits), alone);
     assert_eq!(sevens(&repeats)[..100], alone[..100]);
     assert_ne!(sevens(&repeats)[100..200], alone[100..200]);
+    // Adding a repeat changes the nested prefix even if a take cuts away the new epoch.
+    for extended in [part().repeat(2), part().cycle(201), part().repeat(2).take(200)] {
+        let extended = Order::new(extended).unwrap();
+        assert_eq!(ids(extended.iter(..100)), alone[..100]);
+        assert_ne!(ids(extended.iter(100..200)), alone[100..200]);
+    }
     // Nested repeats: (outer 0, inner 1) and (outer 1, inner 0) are different orders.
     let nested = Order::new(src(7, 100).shuffle(3).repeat(2).repeat(2)).unwrap();
     let block = |b: usize| ids(nested.iter(b * 100..(b + 1) * 100));
