@@ -200,7 +200,7 @@ impl Interleave {
 
     /// Ideal progress of element `j` of `seq`. `seg` caches the profile segment.
     #[inline(always)]
-    fn key(&self, seq: usize, j: u64, seg: &mut usize) -> f64 {
+    fn key(&self, seq: usize, j: u64, seg: &mut u32) -> f64 {
         let s = &self.seqs[seq];
         self.profile(seq).quantile((j as f64 + s.phi) * s.inv_n, seg)
     }

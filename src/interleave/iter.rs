@@ -134,7 +134,7 @@ fn count_below(il: &Interleave, seq: usize, t: f64) -> u64 {
 /// The slot for element `j` of `seq` (whose key is `key`), with the following element's
 /// key already computed.
 #[inline(always)]
-fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: usize) -> Slot {
+fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: u32) -> Slot {
     let next_key = if j + 1 < il.seqs[seq].n {
         let next = il.key(seq, j + 1, &mut seg);
         debug_assert!(next >= key, "interleave: keys of sequence {seq} not monotone at {j}");
@@ -142,7 +142,7 @@ fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: usize) -> Slot {
     } else {
         f64::NAN
     };
-    Slot { seq: seq as u32, j, seg: seg as u32, next_key }
+    Slot { seq: seq as u32, j, seg, next_key }
 }
 
 /// Takes the tree's minimum and replaces it with the sequence's next element.
@@ -158,7 +158,7 @@ fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, u64) {
     if next_key.is_nan() {
         tree.remove_min();
     } else {
-        tree.set_min(next_key, slot(il, seq as usize, j + 1, next_key, seg as usize));
+        tree.set_min(next_key, slot(il, seq as usize, j + 1, next_key, seg));
     }
     (seq as usize, j)
 }

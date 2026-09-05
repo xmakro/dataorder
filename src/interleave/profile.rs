@@ -142,21 +142,23 @@ impl Profile {
     }
 
     /// The smallest `t` whose share is at least `y`. `hint` is the segment to try first and
-    /// is updated; consecutive keys of a sequence mostly stay on one segment or move on.
+    /// is updated; consecutive keys of a sequence mostly stay on one segment or move on. It
+    /// is a `u32`, the width the tree's slots store it at (a profile has at most five
+    /// segments per scheduled sequence, and no machine holds 2³² of them).
     ///
     /// Nondecreasing in `y` even under rounding: the segment index is monotone because
     /// shares are, the result is clamped to the segment, and inside a segment every operation
     /// is a correctly rounded monotone function of the previous one.
     #[inline(always)]
-    pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
-        let mut m = *hint;
+    pub(crate) fn quantile(&self, y: f64, hint: &mut u32) -> f64 {
+        let mut m = *hint as usize;
         while m + 1 < self.segs.len() && y >= self.segs[m + 1].share {
             m += 1;
         }
         while m > 0 && y < self.segs[m].share {
             m -= 1;
         }
-        *hint = m;
+        *hint = m as u32;
         let s = &self.segs[m];
         // Solve c·x² + r0·x = z for x ≥ 0; a constant rate is the common case.
         let z = (y - s.share).max(0.0);
@@ -400,7 +402,7 @@ mod tests {
                 }
             }
             // A hint far off still gives the same answer.
-            let mut far = p.segs.len() - 1;
+            let mut far = p.segs.len() as u32 - 1;
             let mut zero = 0;
             for i in 0..=1000 {
                 let y = i as f64 / 1000.0;

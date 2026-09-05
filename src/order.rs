@@ -466,7 +466,7 @@ impl<T: Source> Compiler<T> {
         }
         let lens: Vec<u64> = children.iter().map(Node::len).collect();
         let il = Interleave::with_sampling(&lens, sampling).map_err(|e| {
-            let (kind, part) = e.into();
+            let (kind, part) = e.into_kind();
             self.err_at(kind, part)
         })?;
         let mut nonempty = children.iter().filter(|c| c.len() > 0);

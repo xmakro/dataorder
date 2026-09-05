@@ -147,14 +147,14 @@ impl fmt::Display for ErrorKind {
     }
 }
 
-/// The kind and, for a problem with one part, the part's index.
-impl From<SamplingError> for (ErrorKind, Option<usize>) {
-    fn from(e: SamplingError) -> Self {
-        match e {
-            SamplingError::TooLong => (ErrorKind::MixTooLong, None),
-            SamplingError::InvalidParameter { seq, sampling } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
-            SamplingError::TooSteep { seq } => (ErrorKind::TooSteep, Some(seq)),
-            SamplingError::Overcommitted { demand } => (ErrorKind::Overcommitted { demand }, None),
+impl SamplingError {
+    /// The kind and, for a problem with one part, the part's index.
+    pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
+        match self {
+            Self::TooLong => (ErrorKind::MixTooLong, None),
+            Self::InvalidParameter { seq, sampling } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
+            Self::TooSteep { seq } => (ErrorKind::TooSteep, Some(seq)),
+            Self::Overcommitted { demand } => (ErrorKind::Overcommitted { demand }, None),
         }
     }
 }

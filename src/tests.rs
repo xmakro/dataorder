@@ -132,7 +132,7 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
             let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
-                let (kind, part): (ErrorKind, Option<usize>) = e.into();
+                let (kind, part) = e.into_kind();
                 at(kind, part.as_slice())
             })?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
