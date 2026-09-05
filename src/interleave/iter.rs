@@ -87,6 +87,9 @@ struct Slot {
     j: u64,
     /// Segment of the sequence's rate profile that this element's key came from, the
     /// starting point for locating the next key (see [`Profile::quantile`](super::profile::Profile::quantile)).
+    /// A `u32` here keeps the slot at 24 bytes; the hint is widened to `usize` for the key
+    /// computation and narrowed again, which is free, whereas a `u32` hint throughout was
+    /// measured 0.6 ns per element slower on mixes of 100 parts (2.3 ns on nested ones).
     seg: u32,
     /// Key of the element after this one, computed ahead of time so that replacing this
     /// element in the tree does not wait for the arithmetic; NaN for the last element
@@ -134,7 +137,7 @@ fn count_below(il: &Interleave, seq: usize, t: f64) -> u64 {
 /// The slot for element `j` of `seq` (whose key is `key`), with the following element's
 /// key already computed.
 #[inline(always)]
-fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: u32) -> Slot {
+fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: usize) -> Slot {
     let next_key = if j + 1 < il.seqs[seq].n {
         let next = il.key(seq, j + 1, &mut seg);
         debug_assert!(next >= key, "interleave: keys of sequence {seq} not monotone at {j}");
@@ -142,7 +145,7 @@ fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: u32) -> Slot {
     } else {
         f64::NAN
     };
-    Slot { seq: seq as u32, j, seg, next_key }
+    Slot { seq: seq as u32, j, seg: seg as u32, next_key }
 }
 
 /// Takes the tree's minimum and replaces it with the sequence's next element.
@@ -158,7 +161,7 @@ fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, u64) {
     if next_key.is_nan() {
         tree.remove_min();
     } else {
-        tree.set_min(next_key, slot(il, seq as usize, j + 1, next_key, seg));
+        tree.set_min(next_key, slot(il, seq as usize, j + 1, next_key, seg as usize));
     }
     (seq as usize, j)
 }
