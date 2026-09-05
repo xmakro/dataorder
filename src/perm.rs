@@ -101,8 +101,9 @@ pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
 }
 
 /// The salt of a shuffle: a fold over the sources under it that have elements, in order of
-/// appearance, of their salts and lengths (an empty source, or one in a part that is empty
-/// as a whole, contributes nothing to the sequence and counts for nothing here). Two
+/// appearance, of their salts and lengths (an empty source, one in a part that is empty as
+/// a whole, or one in a part of a concatenation that a slice cuts away, contributes nothing
+/// to the sequence and counts for nothing here). Two
 /// shuffles over sources of the same salts and lengths, in the same order, permute alike;
 /// any other difference in what is shuffled decorrelates them.
 pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64 {

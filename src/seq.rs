@@ -62,9 +62,10 @@ pub enum Seq<T> {
     },
     /// `inner` in a pseudorandom order selected by `seed`, by the order's seed and by the
     /// sources under it that have elements (their [salts](Source::salt) and lengths, in
-    /// order of appearance; an empty source, or a part that is empty as a whole, does not
-    /// count). Inside a [`Repeat`](Seq::Repeat) the order also depends on the repetition,
-    /// so every epoch is shuffled differently.
+    /// order of appearance; an empty source, a part that is empty as a whole, or a part of
+    /// a concatenation that a skip or take cuts away entirely, does not count). Inside a
+    /// [`Repeat`](Seq::Repeat) the order also depends on the repetition, so every epoch is
+    /// shuffled differently.
     Shuffle {
         /// Selects the permutation.
         seed: u64,

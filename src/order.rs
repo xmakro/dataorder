@@ -398,13 +398,7 @@ impl<T: Source> Compiler<T> {
                     0 => Node::Empty,
                     1 => children.pop().unwrap(),
                     _ => {
-                        let mut offsets = Vec::with_capacity(children.len() + 1);
-                        let mut total = 0u64;
-                        for child in &children {
-                            offsets.push(total);
-                            total = total.checked_add(child.len()).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
-                        }
-                        offsets.push(total);
+                        let offsets = offsets(&children).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
                         Node::Concat { offsets, children }
                     }
                 }
@@ -465,13 +459,7 @@ impl<T: Source> Compiler<T> {
                 let (step, offset) = (step as u64, offset as u64);
                 let n = child.len();
                 let len = if offset >= n { 0 } else { (n - offset - 1) / step + 1 };
-                if len == 0 {
-                    Node::Empty
-                } else if step == 1 {
-                    slice(child, offset, len)
-                } else {
-                    Node::Stride { step, offset, len, child: Box::new(child) }
-                }
+                stride(child, step, offset, len)
             }
         })
     }
@@ -609,8 +597,10 @@ pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, (
 }
 
 /// The sources of `node` that can contribute elements, in order of appearance: every
-/// `Source` of the compiled tree, since a subtree without elements folds to `Empty` and a
-/// source with elements stays wherever a node keeps it. What a shuffle above is salted with.
+/// `Source` of the compiled tree, since a subtree without elements folds to `Empty`, a
+/// slice of a concatenation keeps only the parts it touches (see [`slice()`]), and a source
+/// with elements stays wherever any other node keeps it (a stride over a concatenation, or a
+/// slice of a mix, may still never reach some of them). What a shuffle above is salted with.
 fn sources(node: &Node, out: &mut Vec<u32>) {
     match node {
         Node::Empty => {}
@@ -636,7 +626,23 @@ fn deepen(node: &mut Node) {
     }
 }
 
-/// Positions `start..start + len` of `child`, folded into the child where that is exact.
+/// `offsets[i]` is the position of `children[i]`'s first element and `offsets[k]` the total
+/// length; `None` when that does not fit in 64 bits.
+fn offsets(children: &[Node]) -> Option<Vec<u64>> {
+    let mut offsets = Vec::with_capacity(children.len() + 1);
+    let mut total = 0u64;
+    for child in children {
+        offsets.push(total);
+        total = total.checked_add(child.len())?;
+    }
+    offsets.push(total);
+    Some(offsets)
+}
+
+/// Positions `start..start + len` of `child`, folded into the child where that is exact: an
+/// offset into a source, a slice or a stride, and a concatenation narrowed to the parts the
+/// slice touches, so that a shuffle above is salted only with sources it can draw from and
+/// the cursor searches fewer parts.
 fn slice(child: Node, start: u64, len: u64) -> Node {
     if len == 0 {
         return Node::Empty;
@@ -646,8 +652,44 @@ fn slice(child: Node, start: u64, len: u64) -> Node {
     }
     match child {
         Node::Source { src, offset, .. } => Node::Source { src, offset: offset + start, len },
-        Node::Slice { start: inner, child, .. } => Node::Slice { start: inner + start, len, child },
-        Node::Stride { step, offset, child, .. } => Node::Stride { step, offset: offset + start * step, len, child },
+        Node::Slice { start: inner, child, .. } => slice(*child, inner + start, len),
+        Node::Stride { step, offset, child, .. } => {
+            let offset = offset + start * step;
+            if len == 1 { slice(*child, offset, 1) } else { Node::Stride { step, offset, len, child } }
+        }
+        Node::Concat { offsets: at, mut children } => {
+            // The parts holding the first and the last position.
+            let first = at.partition_point(|&o| o <= start) - 1;
+            let last = at.partition_point(|&o| o < start + len) - 1;
+            let start = start - at[first];
+            if first == last {
+                return slice(children.swap_remove(first), start, len);
+            }
+            children.truncate(last + 1);
+            children.drain(..first);
+            let child = Node::Concat { offsets: offsets(&children).expect("dataorder: a slice of a concat is shorter than it"), children };
+            if start == 0 && len == child.len() { child } else { Node::Slice { start, len, child: Box::new(child) } }
+        }
         child => Node::Slice { start, len, child: Box::new(child) },
+    }
+}
+
+/// Positions `offset, offset + step, …` of `child`, `len` of them (as many as exist, which
+/// the caller has counted), folded where that is exact: one position or a step of one is a
+/// slice, and a stride over a slice or over another stride is one stride (the products
+/// cannot overflow, since with `len ≥ 2` they are bounded by the child's length).
+fn stride(child: Node, step: u64, offset: u64, len: u64) -> Node {
+    if len == 0 {
+        return Node::Empty;
+    }
+    if step == 1 || len == 1 {
+        return slice(child, offset, len);
+    }
+    match child {
+        Node::Slice { start, child, .. } => Node::Stride { step, offset: start + offset, len, child },
+        Node::Stride { step: inner, offset: base, child, .. } => {
+            Node::Stride { step: step * inner, offset: base + offset * inner, len, child }
+        }
+        child => Node::Stride { step, offset, len, child: Box::new(child) },
     }
 }

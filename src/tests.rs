@@ -30,28 +30,44 @@ impl Source for Src {
 }
 
 /// Salts and lengths of the sources under `seq` that can contribute elements, in order of
-/// appearance: a subtree without elements counts for nothing, whatever is under it, and
-/// neither does a weighted part without a share. `seq` is valid.
+/// appearance: a subtree without elements counts for nothing, whatever is under it, neither
+/// does a weighted part without a share, nor a part of a concatenation that skips and takes
+/// above it cut away entirely. `seq` is valid.
 fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, u64)>) {
-    if eval(seq, 0).unwrap().is_empty() {
+    let n = eval(seq, 0).unwrap().len();
+    reachable(seq, 0..n, out);
+}
+
+/// [`salts`] of the sources that positions `range` of `seq` can reach. Skips and takes narrow
+/// the range, concatenations hand each part its share of it; every other node hands its
+/// children their whole range as soon as the range is not empty.
+fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, u64)>) {
+    if range.is_empty() {
         return;
     }
+    let whole = |s: &Seq<Src>, out: &mut Vec<(u64, u64)>| salts(s, out);
     match seq {
         Seq::Source(s) => out.push((s.salt(), s.len as u64)),
-        Seq::Concat(parts) => parts.iter().for_each(|p| salts(p, out)),
-        Seq::Mix(parts) => parts.iter().for_each(|p| salts(&p.seq, out)),
+        Seq::Concat(parts) => {
+            let mut offset = 0;
+            for p in parts {
+                let n = eval(p, 0).unwrap().len();
+                let (a, b) = (range.start.max(offset), range.end.min(offset + n));
+                if a < b {
+                    reachable(p, a - offset..b - offset, out);
+                }
+                offset += n;
+            }
+        }
+        Seq::Skip { n, inner } => reachable(inner, range.start + n..range.end + n, out),
+        Seq::Take { inner, .. } => reachable(inner, range, out),
+        Seq::Mix(parts) => parts.iter().for_each(|p| whole(&p.seq, out)),
         Seq::Weighted { total, parts } => {
             let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
             let shares = crate::order::weighted_shares(*total as u64, &weights).unwrap();
-            parts.iter().zip(shares).filter(|(_, share)| *share > 0).for_each(|(p, _)| salts(&p.seq, out));
+            parts.iter().zip(shares).filter(|(_, share)| *share > 0).for_each(|(p, _)| whole(&p.seq, out));
         }
-        Seq::Shuffle { inner, .. }
-        | Seq::Repeat { inner, .. }
-        | Seq::Skip { inner, .. }
-        | Seq::Take { inner, .. }
-        | Seq::Stride { inner, .. } => {
-            salts(inner, out);
-        }
+        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::Stride { inner, .. } => whole(inner, out),
     }
 }
 
@@ -604,10 +620,54 @@ fn empty_parts_do_not_affect_shuffles_above() {
     same(Seq::mix([x()]).shuffle(1));
     same(x().stride(1, 0).shuffle(1));
     same(Seq::concat([x(), Seq::weighted(0, [(src(1, 5), 1.0)])]).shuffle(1));
-    // A source with elements counts, wherever the elements end up.
-    let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(100).shuffle(1)).unwrap().iter(..));
+    // A part of a concatenation that a skip or take cuts away entirely does not count
+    // either, however the concatenation nests; a part it touches counts.
+    same(Seq::concat([x(), src(1, 50)]).take(100).shuffle(1));
+    same(Seq::concat([src(1, 50), x()]).skip(50).shuffle(1));
+    same(Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100).shuffle(1));
+    same(Seq::concat([src(1, 50), x(), src(2, 7)]).slice(50..150).shuffle(1));
+    same(Seq::concat([Seq::concat([src(1, 5), x()]), src(2, 3)]).skip(5).take(100).shuffle(1));
+    same(Seq::concat([src(1, 5), Seq::concat([x(), src(2, 3)])]).take(105).skip(5).shuffle(1));
+    let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter(..));
     assert_ne!(with(src(1, 1)), base);
     assert_ne!(with(src(0, 1)), base);
+    // A stride does not cut parts away, even ones it never reaches.
+    let strided = |seq: Seq<Src>| ids(Order::new(seq).unwrap().iter(..));
+    assert_eq!(strided(Seq::concat([src(1, 1), x()]).stride(2, 1)), strided(x().stride(2, 0)));
+    assert_ne!(strided(Seq::concat([src(1, 1), x()]).stride(2, 1).shuffle(1)), strided(x().stride(2, 0).shuffle(1)));
+}
+
+/// The folds: what compiles to a single node.
+#[test]
+fn folds() {
+    use crate::order::Node;
+    let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
+    let a = || src(0, 100);
+    assert!(
+        matches!(root(a().shard(8, 1).shard(4, 1)), Node::Stride { step: 32, offset: 9, len: 3, ref child } if matches!(**child, Node::Source { .. }))
+    );
+    assert!(matches!(root(a().shard(8, 1).shard(4, 1).shard(2, 1)), Node::Source { offset: 41, len: 1, .. }));
+    assert!(
+        matches!(root(a().shuffle(1).skip(10).stride(3, 2)), Node::Stride { step: 3, offset: 12, len: 30, ref child } if matches!(**child, Node::Shuffle { .. }))
+    );
+    assert!(matches!(root(a().shuffle(1).skip(10).take(50).skip(5)), Node::Slice { start: 15, len: 45, .. }));
+    assert!(
+        matches!(root(a().stride(4, 1).stride(2, 1)), Node::Stride { step: 8, offset: 5, len: 12, ref child } if matches!(**child, Node::Source { .. }))
+    );
+    let cat = || Seq::concat([src(1, 10), src(2, 20), src(3, 30)]);
+    assert!(matches!(root(cat().take(10)), Node::Source { src: 0, offset: 0, len: 10 }));
+    assert!(
+        matches!(root(cat().skip(15)), Node::Slice { start: 5, len: 45, ref child } if matches!(&**child, Node::Concat { children, .. } if children.len() == 2))
+    );
+    assert!(matches!(root(cat().skip(10).take(20)), Node::Source { src: 1, offset: 0, len: 20 }));
+    assert!(matches!(root(cat().skip(10)), Node::Concat { ref children, .. } if children.len() == 2));
+    assert!(
+        matches!(root(cat().slice(5..35)), Node::Slice { start: 5, len: 30, ref child } if matches!(&**child, Node::Concat { children, .. } if children.len() == 3))
+    );
+    assert_eq!(
+        ids(Order::new(cat().skip(15).stride(7, 3)).unwrap().iter(..)),
+        ids(Order::new(cat()).unwrap().iter(..)).into_iter().skip(18).step_by(7).collect::<Vec<_>>()
+    );
 }
 
 /// A mix's order does not depend on empty parts, wherever they sit, nor a weighted mix's on
