@@ -331,3 +331,77 @@ fn huge_lengths() {
         assert_eq!((s.id, i), e);
     }
 }
+
+/// FNV-1a over the elements: a stable fingerprint of an order.
+fn fingerprint<'a>(it: impl Iterator<Item = (&'a Src, usize)>) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for (s, i) in it {
+        for b in (s.id as u64).to_le_bytes().into_iter().chain((i as u64).to_le_bytes()) {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// The orders themselves, pinned. A mismatch means the crate's orders changed: that is a
+/// breaking change (see the crate docs on stability), to be made deliberately, with a
+/// version bump and new values here.
+#[test]
+fn golden_orders() {
+    use Sampling::*;
+    let cases: Vec<(&str, Seq<Src>, u64)> = vec![
+        ("shuffle", src(0, 1000).shuffle(7), 0),
+        ("shuffle, seeded order", src(0, 1000).shuffle(7), 42),
+        ("shuffle.repeat", src(0, 777).shuffle(1).repeat(3), 0),
+        ("shuffle(concat)", Seq::concat([src(0, 300), src(1, 500).shuffle(2)]).shuffle(3), 0),
+        ("slice of shuffle", src(0, 5000).shuffle(9).skip(100).take(2000), 0),
+        ("mix uniform", Seq::mix([src(0, 1000).shuffle(1), src(1, 300).shuffle(2), src(2, 50)]), 0),
+        (
+            "mix scheduled",
+            Seq::mix_with([
+                (src(0, 2000).shuffle(1), Uniform),
+                (src(1, 400).shuffle(2), DelayedLinear(0.5, 0.5)),
+                (src(2, 600), DelayedLinear(0.2, 0.6)),
+            ]),
+            0,
+        ),
+        (
+            "nested mixes, epochs, shard",
+            Seq::mix([
+                Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2).repeat(3)]),
+                src(2, 900).shuffle(3),
+            ])
+            .shard(1, 4),
+            0,
+        ),
+        ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).stride(7, 3), 0),
+        ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
+    ];
+    const EXPECTED: [u64; 10] = [
+        2858856362520336285,
+        8678721152593299605,
+        18167279318118302096,
+        2253643174293614737,
+        994532566028467186,
+        17815674728835076284,
+        7189627902135896981,
+        3838825843871225066,
+        18408440380577682910,
+        9825597195269644453,
+    ];
+    let actual: Vec<u64> = cases
+        .iter()
+        .map(|(name, seq, seed)| {
+            let order = Order::compile_seeded(seq.clone(), *seed).unwrap_or_else(|e| panic!("{name}: {e}"));
+            fingerprint(order.iter(0..order.len()))
+        })
+        .collect();
+    let names: Vec<&str> = cases.iter().map(|c| c.0).collect();
+    assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
+    // A few elements in the clear, for the first case.
+    let order = Order::compile(src(0, 1000).shuffle(7)).unwrap();
+    const FIRST: [usize; 6] = [186, 295, 837, 564, 496, 727];
+    assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
+    assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
+}

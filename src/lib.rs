@@ -83,7 +83,19 @@
 //! | `src/cursor.rs` | [`Cursor`]: per-node cursors with seek, next and skip |
 //! | `src/perm.rs` | seeded permutations of `0..n` and context derivation |
 //! | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` |
-//! | `src/tests.rs` | whole-crate tests against a materializing reference evaluator |
+//! | `src/tests.rs` | whole-crate tests against a materializing reference evaluator, golden orders |
+//!
+//! # Stability
+//!
+//! An order is a pure function of the configuration and the seed: the same `Seq` and seed
+//! give the same elements on every platform (the arithmetic is IEEE 754 binary64, correctly
+//! rounded, without fused operations) and in every release that does not say otherwise. A
+//! release that changes any order is a breaking change (a new minor version while the
+//! crate is 0.x). Golden tests in `src/tests.rs` pin fingerprints of a dozen orders, and CI
+//! runs them on 64-bit and 32-bit x86 and on 64-bit ARM.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod cursor;
 mod dataset;

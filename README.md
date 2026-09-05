@@ -63,6 +63,15 @@ intermediate lengths beyond 64 bits), invalid or overcommitted schedules, and mi
 than 2⁴⁶. It folds what is exact: nested concats flatten, empty parts vanish, slices of
 sources/slices/strides merge, a mix or shuffle of a single element is the element.
 
+## Stability
+
+An order is a pure function of the configuration and the seed: the same `Seq` and seed give the
+same elements on every platform (the arithmetic is IEEE 754 binary64, correctly rounded, without
+fused operations) and in every release that does not say otherwise. A release that changes any
+order is a breaking change (a new minor version while the crate is 0.x). Golden tests in
+`src/tests.rs` pin fingerprints of a dozen orders; CI runs the test suite on 64-bit and 32-bit
+x86 (Linux, Windows) and on 64-bit ARM (macOS), and checks the declared minimum Rust version.
+
 ## Mix
 
 ```text
@@ -203,7 +212,7 @@ Not worth it at all:
 | `src/cursor.rs` | `Cursor`: per-node cursors with seek, next and skip |
 | `src/perm.rs` | seeded permutations of `0..n` and context derivation |
 | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles and their integrals, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` merge against brute force, exact seeks, balance and schedule bounds |
-| `src/tests.rs` | random configurations against a materializing reference evaluator |
+| `src/tests.rs` | random configurations against a materializing reference evaluator, golden orders |
 | `scripts/bench_campaign.py` | pinned, repeated benchmark runs tabulated across labelled steps |
 
 Run `cargo run --release --example demo` for a small schedule, `--example bench` for the table, and

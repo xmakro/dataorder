@@ -8,7 +8,14 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
     /// A slice's `start..end` does not fit in the `len` of its inner sequence.
-    SliceOutOfRange { start: usize, end: usize, len: usize },
+    SliceOutOfRange {
+        /// First position of the slice.
+        start: usize,
+        /// One past its last position.
+        end: usize,
+        /// Length of the sliced sequence.
+        len: usize,
+    },
     /// A stride with `step == 0`.
     ZeroStep,
     /// The order is longer than `usize::MAX`, an intermediate length does not fit in 64 bits,
@@ -17,13 +24,24 @@ pub enum Error {
     /// The total length of a mix exceeds 2⁴⁶.
     MixTooLong,
     /// A schedule parameter of mix part `part` is out of range or not finite.
-    InvalidSampling { part: usize, sampling: Sampling },
+    InvalidSampling {
+        /// Index of the part in the mix.
+        part: usize,
+        /// Its schedule.
+        sampling: Sampling,
+    },
     /// Mix part `part` is too long for the steepness of its schedule
     /// (`length × final_rate` exceeds 2⁴⁶).
-    TooSteep { part: usize },
+    TooSteep {
+        /// Index of the part in the mix.
+        part: usize,
+    },
     /// The scheduled parts of a mix need `demand` (> 1) times the whole draw rate at the
     /// end, leaving nothing for the uniform parts.
-    Overcommitted { demand: f64 },
+    Overcommitted {
+        /// The scheduled parts' final rates, summed, as a fraction of the whole draw rate.
+        demand: f64,
+    },
 }
 
 impl fmt::Display for Error {

@@ -21,15 +21,39 @@ pub enum Seq<T> {
     Mix(Vec<(Seq<T>, Sampling)>),
     /// `inner` in a pseudorandom order selected by `seed`. Inside a [`Repeat`](Seq::Repeat)
     /// the order also depends on the repetition, so every epoch is shuffled differently.
-    Shuffle { seed: u64, inner: Box<Seq<T>> },
+    Shuffle {
+        /// Selects the permutation.
+        seed: u64,
+        /// The sequence to permute.
+        inner: Box<Seq<T>>,
+    },
     /// `inner`, `times` times over. Each repetition reshuffles every shuffle inside it
     /// (including the first: `x.repeat(n)` starts differently from `x`).
-    Repeat { times: usize, inner: Box<Seq<T>> },
+    Repeat {
+        /// Number of repetitions.
+        times: usize,
+        /// The sequence to repeat.
+        inner: Box<Seq<T>>,
+    },
     /// Positions `start..end` of `inner`; `end = None` means up to the end.
-    Slice { start: usize, end: Option<usize>, inner: Box<Seq<T>> },
+    Slice {
+        /// First position kept.
+        start: usize,
+        /// One past the last position kept, or `None` for the end of `inner`.
+        end: Option<usize>,
+        /// The sequence to slice.
+        inner: Box<Seq<T>>,
+    },
     /// Positions `offset, offset + step, offset + 2·step, …` of `inner`: shard `offset` of
     /// `step` shards.
-    Stride { step: usize, offset: usize, inner: Box<Seq<T>> },
+    Stride {
+        /// Distance between kept positions.
+        step: usize,
+        /// First kept position.
+        offset: usize,
+        /// The sequence to stride over.
+        inner: Box<Seq<T>>,
+    },
 }
 
 impl<T> Seq<T> {
@@ -64,14 +88,19 @@ impl<T> Seq<T> {
     }
 
     /// The positions in `range` of this sequence.
+    ///
+    /// # Panics
+    /// If a bound is `usize::MAX` where one more would be needed (an exclusive start or an
+    /// inclusive end at `usize::MAX`).
     pub fn slice(self, range: impl RangeBounds<usize>) -> Seq<T> {
+        let bump = |x: usize| x.checked_add(1).expect("dataorder: slice bound overflows usize");
         let start = match range.start_bound() {
             Bound::Included(&s) => s,
-            Bound::Excluded(&s) => s + 1,
+            Bound::Excluded(&s) => bump(s),
             Bound::Unbounded => 0,
         };
         let end = match range.end_bound() {
-            Bound::Included(&e) => Some(e + 1),
+            Bound::Included(&e) => Some(bump(e)),
             Bound::Excluded(&e) => Some(e),
             Bound::Unbounded => None,
         };
