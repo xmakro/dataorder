@@ -18,11 +18,11 @@ impl Source for Shard {
 }
 
 fn main() -> Result<(), dataorder::Error> {
+    // Worker 0 of 8: each part is sharded, then the shards are mixed (see Cost).
     let seq = Seq::mix_with([
-        (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3), Sampling::Uniform),
-        (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::delayed(0.5)),
-    ])
-    .shard(8, 0); // worker 0 of 8
+        (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3).shard(8, 0), Sampling::Uniform),
+        (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2).shard(8, 0), Sampling::delayed(0.5)),
+    ]);
     let order = Order::new(seq)?;
     for (shard, index) in order.iter(1000..1010) {
         println!("element {index} of {}", shard.path);
@@ -37,13 +37,14 @@ Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with
 `Seq::weighted(total, [(seq, weight), …])` and `Seq::weighted_with` (each part is repeated and
 cut to its share of `total`, epochs reshuffled), and on a `Seq`: `.shuffle(seed)`,
 `.repeat(times)`, `.slice(range)`, `.take(n)`, `.skip(n)`, `.stride(step, offset)`,
-`.shard(count, index)`, `.map(f)` (the same structure over other sources: handles become loaded
-datasets), `.check()` (validate and get the length without building the order).
-`Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once. A `Seq` is plain data (clone,
-compare, hash; the `serde` feature derives `Serialize` and `Deserialize`); building the order
-consumes it, and the order owns the sources, yields references to them and gives them back with
-`into_sources`. A bare `usize` is a source too, when only the order matters, as are slices and
-vectors.
+`.shard(count, index)`, `.map(f)` and `.try_map(f)` (the same structure over other sources:
+handles become loaded datasets), `.check()` (validate and get the length without building the
+order). `Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once;
+a cursor is repositioned with `seek(pos)` and re-ranged with `set_range(range)`. A `Seq` is
+plain data (clone, compare, hash; the `serde` feature derives `Serialize` and `Deserialize`);
+building the order consumes it, and the order owns the sources, yields references to them and
+gives them back with `into_sources`. A bare `usize` is a source too, when only the order
+matters, as are slices and vectors.
 
 The precise semantics of every node, what compilation rejects and folds, and the stability
 policy are in the [crate documentation](https://docs.rs/dataorder). In short: every node maps its
@@ -58,28 +59,33 @@ change and is listed in [CHANGELOG.md](CHANGELOG.md).
 ## Mix
 
 ```text
-  ramp(d0, d1)                       delayed(d)                      Uniform
-            ________________                 ________________     ________________
-           /                                 |
-  ________/                         ________|
-          d0     d1                          d
+  ramp(d0, d1)               delayed(d)              trapezoid(d0, d1, d2, d3)     Uniform
+            ________                 ________              ____
+           /                         |                    /    \                ________
+  ________/                  ________|            _______/      \_______
+          d0     d1                  d                  d0  d1  d2  d3
 ```
 
 Progress `τ` is the position in the mix divided by its length `N`. A scheduled part follows
 a share function `F(τ)`, the fraction of it drawn by progress `τ`: `Sampling::ramp(d0, d1)`
 (`DelayedLinear { start: d0, full: d1 }`) is the integral of a rate that is zero until `d0`,
 rises linearly until `d1` and stays constant afterwards; `Sampling::delayed(d)` switches the
-rate on at `d`. Every position holds exactly one element, so the uniform parts absorb the
-slack: they keep a constant rate relative to each other and take whatever share the scheduled
-parts leave free. If the scheduled parts alone would need more than 100% of the draw rate at
-some progress, `Order::new` fails with `ErrorKind::Overcommitted`.
+rate on at `d`. `Sampling::trapezoid(d0, d1, d2, d3)` (`Trapezoid { start, full, fade, off }`)
+also falls back to zero between `d2` and `d3`, so a source can be phased out; `until(d)` and
+`fading(d2, d3)` are its constant-then-off forms. Every position holds exactly one element, so
+the uniform parts absorb the slack: they keep a constant rate relative to each other and take
+whatever share the scheduled parts leave free. If the scheduled parts alone would need more
+than 100% of the draw rate at some progress, `Order::new` fails with
+`ErrorKind::Overcommitted`. Schedules are relative to their mix: repeat the parts, not the mix,
+to schedule over a run of several epochs.
 
 Every element gets an ideal progress `F⁻¹((j + φ)/n)` and the mix is the sort by that value
 (ties by part index; `φ` staggers the non-empty parts so that equal ones round-robin). Each
 part follows its schedule to within about one element at any position, and the position of an
 element is within `k` (typically `√k`) of `progress·N`, the same warp for all parts. Nothing is
 materialized: a seek counts, per part, the elements below the target progress (`O(k log s)`
-for `k` parts, `s` scheduled), and the walk takes the minimum of a tournament tree over the
+for `k` parts, `s` scheduled; building the mix is `O(k + s log s)`), and the walk takes the
+minimum of a tournament tree over the
 parts' next elements, `⌈log2 k⌉` branch-free comparisons per element. Seeks are exact
 whatever was walked before, because the order is defined as a sort by keys that are monotone
 within a part by construction.
@@ -100,7 +106,7 @@ A seeded permutation of `0..n` in O(1) per element and no state: a six-round Fei
 on the `k`-bit numbers (`2^(k−1) < n ≤ 2^k`) with cycle walking to `0..n`. The round function
 adds the round key to half the bits, multiplies by the round's odd multiplier and keeps the top
 bits of the product. It passes joint-distribution (grid and low bits), serial-correlation and
-fixed-point checks at every size from 2 to 10⁶ (`src/perm.rs` tests); there is no security
+fixed-point checks at every size tested, from 2 to 10⁶ (`src/perm.rs` tests); there is no security
 claim. A masked multiply–xorshift mixer (MurmurHash3's finalizer cut to `k` bits) is twice as
 fast but fails badly as a permutation: consecutive inputs map to outputs with a nearly constant
 difference.

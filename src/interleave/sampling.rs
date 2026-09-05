@@ -1,14 +1,9 @@
 //! The public schedule type and the errors of `Interleave::with_sampling`.
 
 use super::MAX_TOTAL_LEN;
+use crate::float_bits;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-
-/// The bits of a float with `-0.0` taken as `0.0`: what equality and hashing of schedules
-/// and weights compare.
-pub(crate) fn float_bits(x: f64) -> u64 {
-    (x + 0.0).to_bits()
-}
 
 /// How a sequence's elements are spread over the joint sequence. Equality and hashing
 /// compare the parameters bit for bit (with `-0.0` taken as `0.0`).

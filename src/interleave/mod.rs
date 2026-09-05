@@ -34,9 +34,9 @@
 //! `φ_i = (2r+1)/(2k')` staggers the sequences so that equal ones round-robin instead of
 //! bunching (`k'` is the number of non-empty sequences and `r` the rank of `i` among them,
 //! so empty sequences do not affect the order), and the joint sequence is the sort of all
-//! elements by ideal progress (ties by sequence index). Every sequence follows its schedule to within about one element at any
-//! joint position; the joint position of an element is within `k` (typically `√k`) of
-//! `progress·N`, the same warp for all sequences.
+//! elements by ideal progress (ties by sequence index). Every sequence follows its schedule
+//! to within about one element at any joint position; the joint position of an element is
+//! within `k` (typically `√k`) of `progress·N`, the same warp for all sequences.
 //!
 //! # Iteration
 //!
@@ -61,7 +61,7 @@ mod tournament;
 
 pub(crate) use iter::Iter;
 pub use sampling::Sampling;
-pub(crate) use sampling::{SamplingError, float_bits};
+pub(crate) use sampling::SamplingError;
 
 use profile::Profile;
 use std::ops::Range;
@@ -111,7 +111,7 @@ impl Interleave {
 
     /// Sequences of the given lengths and schedules (one per sequence). Zero lengths are
     /// allowed, their schedule is ignored and they do not affect the order of the others.
-    /// Cost `O(k + s²)` for `s` scheduled sequences, independent of the lengths.
+    /// Cost `O(k + s log s)` for `s` scheduled sequences, independent of the lengths.
     ///
     /// # Panics
     /// If `lens` and `sampling` differ in length.

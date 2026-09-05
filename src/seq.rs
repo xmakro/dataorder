@@ -1,8 +1,7 @@
 //! The configuration: a tree of sequence expressions over sources, built by hand or with
 //! the builder methods on [`Seq`].
 
-use crate::interleave::float_bits;
-use crate::{Error, MAX_DEPTH, Order, Sampling, Source};
+use crate::{Error, MAX_DEPTH, Order, Sampling, Source, float_bits};
 use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
@@ -19,12 +18,13 @@ use std::ops::{Bound, RangeBounds};
 ///
 /// # Errors and panics
 ///
-/// A builder panics only when its arguments are wrong on their own, without knowing any
-/// length: a reversed [`slice`](Seq::slice) range, a [`shard`](Seq::shard) index at or beyond
-/// the count. Everything that depends on the sources' lengths (skipping or taking past the
-/// end, a zero stride, overflow, schedules and weights) is reported by [`Order::new`] as an
-/// [`Error`], with the path of the node it was found at. Configurations nesting deeper than
-/// [`MAX_DEPTH`] levels are rejected as well.
+/// Anything a hand-built configuration can get wrong is reported by [`Order::new`] as an
+/// [`Error`] with the path of the node it was found at: skipping or taking past the end, a
+/// zero stride, overflow, schedules, weights, and nesting deeper than [`MAX_DEPTH`]. Two
+/// builders panic instead, on mistakes no configuration can express: a reversed
+/// [`slice`](Seq::slice) range (a `Skip` and a `Take` would need a negative length) and a
+/// [`shard`](Seq::shard) index at or beyond the count (a `Stride` with such an offset is a
+/// valid, merely empty, sequence).
 ///
 /// # Depth
 ///
@@ -42,8 +42,10 @@ pub enum Seq<T> {
     /// The parts one after another.
     Concat(Vec<Self>),
     /// The parts interleaved: each part keeps its order and is drawn according to its
-    /// [`Sampling`], balanced over the whole length. Empty parts do not affect the order of
-    /// the others. The total length of a mix is limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
+    /// [`Sampling`], balanced over the whole length. Schedules are relative to this mix (a
+    /// repeated mix restarts them every repetition; repeat the parts to schedule over a
+    /// whole run). Empty parts do not affect the order of the others. The total length of
+    /// a mix is limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     Mix(Vec<MixPart<T>>),
     /// The parts mixed in the proportions of their weights, `total` elements in all: part `i`
     /// contributes `round(wᵢ / Σw · total)` elements (the largest remainders take the
@@ -69,7 +71,9 @@ pub enum Seq<T> {
         inner: Box<Self>,
     },
     /// `inner`, `times` times over: first as it is, then reshuffled at every shuffle inside
-    /// it for each further repetition. `x.repeat(1)` is `x`, and `x.repeat(0)` is empty.
+    /// it for each further repetition. `x.repeat(1)` is `x`, and `x.repeat(0)` is empty
+    /// (`inner` is validated all the same). Schedules of a mix inside restart every
+    /// repetition.
     Repeat {
         /// Number of repetitions.
         times: usize,

@@ -89,7 +89,7 @@ pub enum ErrorKind {
     LengthOverflow,
     /// More than 2³² sources.
     TooManySources,
-    /// A mix has 2³¹ parts or more.
+    /// A mix has 2³¹ − 1 parts or more.
     TooManyMixParts,
     /// The configuration nests deeper than [`MAX_DEPTH`](crate::MAX_DEPTH).
     TooDeep,
@@ -131,7 +131,7 @@ impl fmt::Display for ErrorKind {
             Self::OrderTooLong { len } => write!(f, "order of {len} positions is longer than usize::MAX"),
             Self::LengthOverflow => write!(f, "a length does not fit in 64 bits"),
             Self::TooManySources => write!(f, "more than 2^32 sources"),
-            Self::TooManyMixParts => write!(f, "mix with 2^31 parts or more"),
+            Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),

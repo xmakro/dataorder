@@ -19,11 +19,11 @@
 //!     fn salt(&self) -> u64 { dataorder::salt(self.path) }
 //! }
 //!
+//! // Worker 0 of 8: each part is sharded, then the shards are mixed (see Cost).
 //! let seq = Seq::mix_with([
-//!     (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3), Sampling::Uniform),
-//!     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::delayed(0.5)),
-//! ])
-//! .shard(8, 0); // worker 0 of 8
+//!     (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3).shard(8, 0), Sampling::Uniform),
+//!     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2).shard(8, 0), Sampling::delayed(0.5)),
+//! ]);
 //! let order = Order::new(seq)?;
 //! for (shard, index) in order.iter(1000..1010) {
 //!     println!("element {index} of {}", shard.path);
@@ -72,17 +72,21 @@
 //! Compilation rejects skips and takes past the end, zero strides, orders longer than
 //! `usize::MAX` (and intermediate lengths beyond 64 bits), invalid or overcommitted
 //! schedules, invalid weights, mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
-//! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node.
-//! Builders panic only on arguments that are wrong on their own (see [`Seq`]). Compilation
-//! folds what is exact: nested concats flatten, empty parts vanish (an empty part of a mix
-//! does not affect the order of the others), skips and takes merge into sources, slices and
-//! strides, a mix or shuffle with a single non-empty part is that part, and a single
-//! repetition is the sequence.
+//! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node. Two
+//! builders panic instead, on mistakes no configuration can express (see [`Seq`]).
+//! Compilation folds what is exact: nested concats flatten, empty parts vanish (an empty
+//! part of a mix does not affect the order of the others), skips and takes merge into
+//! sources, slices and strides, a mix or shuffle with a single non-empty part is that part,
+//! and a single repetition is the sequence.
+//!
+//! A schedule is relative to the mix it belongs to, so `mix.repeat(n)` restarts every
+//! schedule in each repetition; to schedule over a whole run of several epochs, repeat the
+//! parts and mix them once, as the example above does.
 //!
 //! # Cost
 //!
-//! Compilation is linear in the configuration (plus `O(k + s²)` per mix of `k` parts, `s`
-//! of them scheduled). [`Order::get`] walks the path from the root to a source: constant
+//! Compilation is linear in the configuration (plus `O(k + s log s)` per mix of `k` parts,
+//! `s` of them scheduled). [`Order::get`] walks the path from the root to a source: constant
 //! work per node, except that a `Mix` costs a seek of the interleave (`O(k log s)`, which
 //! allocates) and a `Shuffle` a key derivation. [`Order::iter`] seeks once and then walks:
 //! a `Mix` costs `⌈log2 k⌉` comparisons per element plus one key computation, a `Shuffle`
@@ -124,6 +128,10 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, unreachable_pub)]
+// No `mul_add`, however clippy's pedantic group may put it: a fused multiply-add rounds
+// differently from a multiply and an add, and the orders are promised to be the same on
+// every target.
+#![allow(clippy::suboptimal_flops)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod cursor;
@@ -142,6 +150,12 @@ pub use interleave::Sampling;
 pub use order::Order;
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::{Source, salt};
+
+/// The bits of a float with `-0.0` taken as `0.0`: what equality and hashing of schedules
+/// and weights compare.
+pub(crate) fn float_bits(x: f64) -> u64 {
+    (x + 0.0).to_bits()
+}
 
 /// Deepest nesting [`Order::new`] accepts, the root counting as level 1: a chain of
 /// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation recurses

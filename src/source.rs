@@ -36,7 +36,7 @@ pub trait Source {
     /// on its seed, on the order's seed and repetition, and on the salts and lengths of the
     /// sources under it: two sources of one length and salt shuffled with one seed get the
     /// same permutation, different salts give unrelated ones. Derive it from the dataset's
-    /// identity, its path say, with [`salt`](crate::salt). The default is 0.
+    /// identity, its path say, with [`crate::salt`]. The default is 0.
     fn salt(&self) -> u64 {
         0
     }

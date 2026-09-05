@@ -17,8 +17,8 @@ before* is the crate before the round; everything else is the crate as published
 | `mix(100 × shuffled)` | 24.1 ns | 17.0 ns | 2.96 µs | 2.1 µs |
 | `mix(100 × shuffled, 20% scheduled)` | 24.7 ns | 21.7 ns | 5.02 µs | 4.1 µs |
 | `mix(1000 × shuffled, 20% scheduled)` | 30.5 ns | 28.0 ns | 44 µs | 37.1 µs |
-| `mix(100 × shuffled, 20% scheduled).shard(0, 8)` | 129 ns | 117 ns | 4.60 µs | 4.1 µs |
-| `repeat(3, mix(3 nested)).shard(1, 4)` | 71.4 ns | 56.3 ns | 0.26 µs | 192 ns |
+| `mix(100 × shuffled, 20% scheduled).shard(8, 0)` | 129 ns | 117 ns | 4.60 µs | 4.1 µs |
+| `repeat(3, mix(3 nested)).shard(4, 1)` | 71.4 ns | 56.3 ns | 0.26 µs | 192 ns |
 | `shuffle(mix(100 × source))` | 3.5 µs | 2.1 µs | 0.02 µs | 2.1 µs |
 
 ## What the optimization round kept
