@@ -697,6 +697,14 @@ fn edge_cases() {
     assert_eq!(c.position(), 4);
     c.seek(0);
     assert_eq!(ids(c), vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
+    // `count` and `last` answer without walking, `last` by random access.
+    let shuffled = Order::new(src(0, 1000).shuffle(3)).unwrap();
+    assert_eq!(shuffled.iter(10..).count(), 990);
+    assert_eq!(shuffled.iter(10..900).last().map(|(s, i)| (s.id, i)), Some((0, shuffled.get(899).1)));
+    assert_eq!(shuffled.iter(7..7).last(), None);
+    let mut c = shuffled.iter(..);
+    c.nth(4);
+    assert_eq!(c.count(), 995);
     // Range forms of `iter`.
     assert_eq!(ids(order.iter(..)), ids(order.iter(0..5)));
     assert_eq!(ids(order.iter(3..)), vec![(0, 3), (0, 4)]);

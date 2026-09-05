@@ -17,9 +17,10 @@ use std::ops::{Range, RangeBounds};
 
 /// Iterator over a range of an [`Order`], returned by [`Order::iter`]; yields
 /// `(&source, index in the source)`. [`seek`](Cursor::seek) repositions it,
-/// [`set_range`](Cursor::set_range) gives it another range, and [`nth`](Iterator::nth)
-/// skips without visiting.
-#[derive(Debug)]
+/// [`set_range`](Cursor::set_range) gives it another range, [`nth`](Iterator::nth) skips
+/// without visiting, and [`count`](Iterator::count) and [`last`](Iterator::last) answer
+/// from the range without walking it. It walks forward only (there is no
+/// `DoubleEndedIterator`); [`Order::get`] serves random access.
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     order: &'a Order<T>,
@@ -55,8 +56,8 @@ impl<'a, T> Cursor<'a, T> {
     /// Continues at `pos`, anywhere up to the end of the range. Moving forward skips: a mix
     /// steps through its interleave, or re-seeks it for a long hop, and a hop into another
     /// repetition or concat part lands there directly; moving backward seeks afresh. Either
-    /// way the cursor's allocations are reused, so seeking is the way to visit many
-    /// scattered positions.
+    /// way the cursor's allocations are reused (except that a concat builds the cursor of
+    /// a part it enters), so seeking is the way to visit many scattered positions.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -149,6 +150,16 @@ impl<'a, T> Iterator for Cursor<'a, T> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining(), Some(self.remaining()))
+    }
+
+    /// The elements left, without walking them.
+    fn count(self) -> usize {
+        self.remaining()
+    }
+
+    /// The last element of the range, by random access, without walking there.
+    fn last(self) -> Option<(&'a T, usize)> {
+        if self.pos == self.end { None } else { Some(self.order.get(self.end as usize - 1)) }
     }
 }
 

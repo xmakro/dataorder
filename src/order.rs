@@ -196,11 +196,11 @@ impl<T> Order<T> {
     /// `get(a)..get(b)`, and `iter(..)` the whole order (as does `&order` in a `for` loop).
     ///
     /// Building the cursor allocates one cursor per node on the active path (a mix builds
-    /// its parts' cursors as they are first drawn from) and then seeks, which for a mix
-    /// counts the elements before the start in each part. Walking is then a few nanoseconds
-    /// per element, so make cursors for long ranges rather than many short ones, and
-    /// [`seek`](Cursor::seek) or [`set_range`](Cursor::set_range) a cursor rather than
-    /// making a new one.
+    /// its parts' cursors as they are first drawn from, but reserves a slot of about 300
+    /// bytes per part up front) and then seeks, which for a mix counts the elements before
+    /// the start in each part. Walking is then a few nanoseconds per element, so make
+    /// cursors for long ranges rather than many short ones, and [`seek`](Cursor::seek) or
+    /// [`set_range`](Cursor::set_range) a cursor rather than making a new one.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

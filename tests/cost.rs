@@ -96,6 +96,17 @@ fn forward_seeks_land_in_the_target_repetition_and_part() {
     }
 }
 
+/// `count` and `last` do not walk: on a shuffled source far too long to walk in the time
+/// allowed, they answer from the range and by one random access.
+#[test]
+fn count_and_last_do_not_walk() {
+    let order = Order::new(Seq::source(1usize << 30).shuffle(1)).unwrap();
+    let t = Instant::now();
+    assert_eq!(order.iter(5..).count(), order.len() - 5);
+    assert_eq!(order.iter(..).last().map(|(&s, i)| (s, i)), Some(element(&order, order.len() - 1)));
+    assert!(t.elapsed() < Duration::from_secs(1), "count or last walked the order ({:?})", t.elapsed());
+}
+
 /// Walking a shard of a mix of mixes steps the outer interleave and skips the inner mixes'
 /// cursors forward, so it costs a small multiple of the unsharded walk (it steps `count`
 /// times as many interleave positions). Re-seeking an inner mix for every kept element, as
