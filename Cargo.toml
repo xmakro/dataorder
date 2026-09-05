@@ -9,7 +9,7 @@ categories = ["algorithms", "data-structures"]
 readme = "README.md"
 documentation = "https://docs.rs/dataorder"
 license = "MIT OR Apache-2.0"
-exclude = ["/.github", "/scripts"]
+exclude = ["/.github", "/scripts", "/docs"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
