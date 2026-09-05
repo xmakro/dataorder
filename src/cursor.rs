@@ -405,12 +405,6 @@ pub(crate) struct MixCursor<'a> {
     next_j: Vec<u64>,
     cursors: Vec<NodeCursor<'a>>,
     ctx: u64,
-    /// Skips of at least this many elements re-seek the interleave instead of stepping it:
-    /// twice the number of parts, four times when some are scheduled. Measured on mixes of
-    /// 100 parts of a million elements (Ryzen 9 9950X3D): a step costs 10 to 13 ns, a seek
-    /// 1.8 µs uniform and 4.5 µs with a fifth of the parts scheduled (their share functions
-    /// have more segments to search), so the break-even hops are about 1.7 and 3.6 parts.
-    hop: u64,
 }
 
 impl<'a> MixCursor<'a> {
@@ -423,7 +417,6 @@ impl<'a> MixCursor<'a> {
             next_j: vec![UNSEEKED; children.len()],
             cursors: children.iter().map(|_| NodeCursor::Empty).collect(),
             ctx: 0,
-            hop: children.len() as u64 * if il.is_scheduled() { 4 } else { 2 },
         }
     }
 
@@ -465,12 +458,17 @@ impl<'a> MixCursor<'a> {
         self.cursors[s].seek(j, self.ctx);
     }
 
-    /// A long skip re-seeks the interleave instead of stepping through it. Either way the
-    /// parts' cursors stay where they are: each is skipped up to its next index when it is
-    /// next drawn from (see [`seek_child`](MixCursor::seek_child)).
+    /// A long skip re-seeks the interleave instead of stepping through it: from twice the
+    /// number of parts, four times when some are scheduled. Measured on mixes of 100 parts
+    /// of a million elements (Ryzen 9 9950X3D): a step costs 10 to 13 ns, a seek 1.8 µs
+    /// uniform and 4.5 µs with a fifth of the parts scheduled (their share functions have
+    /// more segments to search), so the break-even hops are about 1.7 and 3.6 parts. Either
+    /// way the parts' cursors stay where they are: each is skipped up to its next index when
+    /// it is next drawn from (see [`seek_child`](MixCursor::seek_child)).
     fn skip(&mut self, m: u64) {
         self.pos += m;
-        if m >= self.hop {
+        let hop = self.cursors.len() as u64 * if self.il.is_scheduled() { 4 } else { 2 };
+        if m >= hop {
             self.iter.seek(self.pos..self.il.len());
         } else {
             for _ in 0..m {
