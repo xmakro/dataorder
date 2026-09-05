@@ -98,14 +98,14 @@ fn uniform_cases() -> Vec<Vec<u64>> {
 
 fn scheduled_cases() -> Vec<(Vec<u64>, Vec<Sampling>)> {
     vec![
-        (vec![1000, 300], vec![Uniform, DelayedLinear(0.4, 0.4)]),
-        (vec![2000, 500], vec![Uniform, DelayedLinear(0.2, 0.6)]),
-        (vec![14, 124, 43], vec![DelayedLinear(0.5, 0.5), Uniform, DelayedLinear(0.2, 0.6)]),
-        (vec![500, 500, 500, 500], vec![Uniform, DelayedLinear(0.1, 0.1), DelayedLinear(0.3, 0.3), DelayedLinear(0.0, 0.5)]),
-        (vec![300, 300, 0, 7], vec![DelayedLinear(0.0, 0.0), DelayedLinear(0.0, 0.0), DelayedLinear(0.9, 0.9), Uniform]),
-        (vec![1000, 50, 50], vec![Uniform, DelayedLinear(0.9, 0.9), DelayedLinear(0.8, 0.95)]),
-        (vec![100, 100, 800], vec![DelayedLinear(0.0, 0.5), DelayedLinear(0.5, 1.0), Uniform]),
-        (vec![3, 1000, 1], vec![DelayedLinear(0.7, 0.7), Uniform, DelayedLinear(0.2, 0.9)]),
+        (vec![1000, 300], vec![Uniform, DelayedLinear { start: 0.4, full: 0.4 }]),
+        (vec![2000, 500], vec![Uniform, DelayedLinear { start: 0.2, full: 0.6 }]),
+        (vec![14, 124, 43], vec![DelayedLinear { start: 0.5, full: 0.5 }, Uniform, DelayedLinear { start: 0.2, full: 0.6 }]),
+        (vec![500, 500, 500, 500], vec![Uniform, DelayedLinear { start: 0.1, full: 0.1 }, DelayedLinear { start: 0.3, full: 0.3 }, DelayedLinear { start: 0.0, full: 0.5 }]),
+        (vec![300, 300, 0, 7], vec![DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.9, full: 0.9 }, Uniform]),
+        (vec![1000, 50, 50], vec![Uniform, DelayedLinear { start: 0.9, full: 0.9 }, DelayedLinear { start: 0.8, full: 0.95 }]),
+        (vec![100, 100, 800], vec![DelayedLinear { start: 0.0, full: 0.5 }, DelayedLinear { start: 0.5, full: 1.0 }, Uniform]),
+        (vec![3, 1000, 1], vec![DelayedLinear { start: 0.7, full: 0.7 }, Uniform, DelayedLinear { start: 0.2, full: 0.9 }]),
     ]
 }
 
@@ -214,7 +214,7 @@ fn random_configurations() {
                 let d1 = if rng.below(2) == 0 { d0 } else { d0 + rng.below(1001 - d0) };
                 match rng.below(3) {
                     0 => Uniform,
-                    _ => DelayedLinear(d0 as f64 / 1000.0, d1 as f64 / 1000.0),
+                    _ => DelayedLinear { start: d0 as f64 / 1000.0, full: d1 as f64 / 1000.0 },
                 }
             })
             .collect();
@@ -248,7 +248,7 @@ fn random_configurations() {
             assert_eq!(il.iter(a..b).collect::<Vec<_>>(), &all[a as usize..b as usize], "{lens:?} {sampling:?} seek {a}");
         }
         for (s, samp) in sampling.iter().enumerate() {
-            if let DelayedLinear(d0, _) = samp {
+            if let DelayedLinear { start: d0, full: _ } = samp {
                 if let Some(first) = all.iter().position(|&(x, _)| x == s) {
                     assert!(first as f64 >= d0 * n as f64 - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
                 }
@@ -295,7 +295,7 @@ fn schedules_are_followed() {
         // Nothing from a delayed sequence before its start (up to the k-position warp).
         for (s, samp) in sampling.iter().enumerate() {
             let start = match samp {
-                DelayedLinear(d0, _) => *d0,
+                DelayedLinear { start: d0, full: _ } => *d0,
                 Uniform => continue,
             };
             if lens[s] == 0 {
@@ -311,7 +311,7 @@ fn schedules_are_followed() {
 fn uniform_sequences_absorb_the_slack() {
     // Seq 1 (30% of the elements) is delayed to 0.5: in the first half only seq 0 appears,
     // and seq 0 must be 5/7 consumed by then.
-    let il = Interleave::with_sampling(&[700, 300], &[Uniform, DelayedLinear(0.5, 0.5)]).unwrap();
+    let il = Interleave::with_sampling(&[700, 300], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]).unwrap();
     let all = full(&il);
     let first_half = &all[..500];
     assert!(first_half.iter().all(|&(s, _)| s == 0));
@@ -329,7 +329,7 @@ fn uniform_sequences_absorb_the_slack() {
 fn ramp_rate_rises_linearly() {
     // Seq 1 ramps from 0.2 to 0.6 over a joint sequence of 10 000; rate in successive
     // windows of the ramp must increase roughly linearly.
-    let il = Interleave::with_sampling(&[8000, 2000], &[Uniform, DelayedLinear(0.2, 0.6)]).unwrap();
+    let il = Interleave::with_sampling(&[8000, 2000], &[Uniform, DelayedLinear { start: 0.2, full: 0.6 }]).unwrap();
     let all = full(&il);
     let counts: Vec<usize> = (0..10).map(|w| all[1000 * w..1000 * (w + 1)].iter().filter(|&&(s, _)| s == 1).count()).collect();
     assert_eq!(&counts[..2], &[0, 0], "{counts:?}");
@@ -349,21 +349,21 @@ fn ramp_rate_rises_linearly() {
 #[test]
 fn rejects_bad_configurations() {
     use SamplingError::*;
-    assert!(matches!(Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear(0.5, 0.5)]), Err(Overcommitted { .. })));
-    assert!(matches!(Interleave::with_sampling(&[100, 100], &[DelayedLinear(0.5, 0.5), DelayedLinear(0.5, 0.5)]), Err(Overcommitted { .. })));
-    assert!(matches!(Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear(0.0, 0.9)]), Err(Overcommitted { .. })));
-    for bad in [DelayedLinear(1.0, 1.0), DelayedLinear(-0.1, -0.1), DelayedLinear(f64::NAN, 0.5), DelayedLinear(0.5, 0.4), DelayedLinear(1.0, 1.0), DelayedLinear(0.2, 1.5)] {
+    assert!(matches!(Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]), Err(Overcommitted { .. })));
+    assert!(matches!(Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.5, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.5 }]), Err(Overcommitted { .. })));
+    assert!(matches!(Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.0, full: 0.9 }]), Err(Overcommitted { .. })));
+    for bad in [DelayedLinear { start: 1.0, full: 1.0 }, DelayedLinear { start: -0.1, full: -0.1 }, DelayedLinear { start: f64::NAN, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.4 }, DelayedLinear { start: 1.0, full: 1.0 }, DelayedLinear { start: 0.2, full: 1.5 }] {
         assert!(matches!(Interleave::with_sampling(&[10, 10], &[Uniform, bad]), Err(InvalidParameter { seq: 1, .. })), "{bad:?}");
     }
     assert_eq!(Interleave::with_sampling(&[10, 10], &[Uniform]).err(), Some(LengthMismatch));
     assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
-    assert!(matches!(Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear(0.999, 0.999)]), Err(TooSteep { seq: 1 })));
+    assert!(matches!(Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]), Err(TooSteep { seq: 1 })));
     // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
-    assert!(Interleave::with_sampling(&[10, 0], &[Uniform, DelayedLinear(0.999, 0.999)]).is_ok());
-    let il = Interleave::with_sampling(&[100, 100], &[DelayedLinear(0.0, 0.0), DelayedLinear(0.0, 0.0)]).unwrap();
+    assert!(Interleave::with_sampling(&[10, 0], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]).is_ok());
+    let il = Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }]).unwrap();
     assert_eq!(full(&il).len(), 200);
     // Exactly at capacity is allowed: the delayed 50% fills the whole second half.
-    let il = Interleave::with_sampling(&[500, 500], &[Uniform, DelayedLinear(0.5, 0.5)]).unwrap();
+    let il = Interleave::with_sampling(&[500, 500], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]).unwrap();
     assert!(full(&il)[..500].iter().all(|&(s, _)| s == 0));
 }
 
@@ -384,7 +384,7 @@ fn empty_and_trivial() {
 #[test]
 fn huge_lengths_seek_consistently() {
     let lens = [MAX_TOTAL_LEN / 2, MAX_TOTAL_LEN / 2 - (1 << 41), 7, 1, 1 << 40];
-    let sampling = [Uniform, Uniform, DelayedLinear(0.5, 0.5), Uniform, DelayedLinear(0.3, 0.7)];
+    let sampling = [Uniform, Uniform, DelayedLinear { start: 0.5, full: 0.5 }, Uniform, DelayedLinear { start: 0.3, full: 0.7 }];
     let il = Interleave::with_sampling(&lens, &sampling).unwrap();
     let n = il.len();
     let mut rng = Rng(777);
@@ -432,8 +432,8 @@ fn bench_seek_and_walk() {
         for scheduled in [false, true] {
             let sampling: Vec<Sampling> = (0..k)
                 .map(|i| match (scheduled, i % 10) {
-                    (true, 3) => DelayedLinear(0.1 + 0.05 * (i % 7) as f64, 0.1 + 0.05 * (i % 7) as f64),
-                    (true, 7) => DelayedLinear(0.05 * (i % 5) as f64, 0.3 + 0.05 * (i % 9) as f64),
+                    (true, 3) => DelayedLinear { start: 0.1 + 0.05 * (i % 7) as f64, full: 0.1 + 0.05 * (i % 7) as f64 },
+                    (true, 7) => DelayedLinear { start: 0.05 * (i % 5) as f64, full: 0.3 + 0.05 * (i % 9) as f64 },
                     _ => Uniform,
                 })
                 .collect();

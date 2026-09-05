@@ -44,7 +44,7 @@ fn main() {
     let shuffled = |k: u32, len: usize| (0..k).map(move |i| src(i, len).shuffle(i as u64 + 1));
     let scheduled = |k: u32, len: usize| {
         (0..k).map(move |i| {
-            let s = if i % 5 == 0 { Sampling::DelayedLinear(0.2 + 0.05 * (i % 7) as f64, 0.7) } else { Sampling::Uniform };
+            let s = if i % 5 == 0 { Sampling::DelayedLinear { start: 0.2 + 0.05 * (i % 7) as f64, full: 0.7 } } else { Sampling::Uniform };
             (src(i, len).shuffle(i as u64 + 1), s)
         })
     };
@@ -76,8 +76,8 @@ fn main() {
     measure("↑ .shard(0, 512)", Seq::mix_with(scheduled(100, m)).shard(0, 512), 100_000);
     let nested = Seq::mix_with([
         (Seq::concat([src(0, m).shuffle(1), src(1, m).shuffle(2)]).shuffle(3), Sampling::Uniform),
-        (src(2, m).shuffle(4).take(500_000), Sampling::DelayedLinear(0.5, 0.5)),
-        (src(3, m).shuffle(5).repeat(2), Sampling::DelayedLinear(0.1, 0.4)),
+        (src(2, m).shuffle(4).take(500_000), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
+        (src(3, m).shuffle(5).repeat(2), Sampling::DelayedLinear { start: 0.1, full: 0.4 }),
     ])
     .repeat(3)
     .shard(1, 4);

@@ -17,8 +17,8 @@ impl Dataset for Src {
 fn main() {
     let seq = Seq::mix_with([
         (Seq::source(Src { name: 'A', len: 60 }).shuffle(1), Sampling::Uniform),
-        (Seq::source(Src { name: 'B', len: 20 }).shuffle(2), Sampling::DelayedLinear(0.5, 0.5)), // B: second half only
-        (Seq::source(Src { name: 'C', len: 40 }).shuffle(3), Sampling::DelayedLinear(0.2, 0.6)), // C: ramps up from 20% to 60%
+        (Seq::source(Src { name: 'B', len: 20 }).shuffle(2), Sampling::DelayedLinear { start: 0.5, full: 0.5 }), // B: second half only
+        (Seq::source(Src { name: 'C', len: 40 }).shuffle(3), Sampling::DelayedLinear { start: 0.2, full: 0.6 }), // C: ramps up from 20% to 60%
     ])
     .repeat(2);
     let order = Order::compile(seq.clone()).unwrap();

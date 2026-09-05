@@ -18,7 +18,7 @@
 //!
 //! let seq = Seq::mix_with([
 //!     (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3), Sampling::Uniform),
-//!     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::DelayedLinear(0.5, 0.5)),
+//!     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
 //! ])
 //! .shard(0, 8);
 //! let order = Order::compile(seq)?;

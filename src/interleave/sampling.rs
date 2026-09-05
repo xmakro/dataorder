@@ -9,11 +9,30 @@ pub enum Sampling {
     /// A constant rate relative to the other uniform sequences; uniform sequences absorb
     /// whatever share of the joint sequence the scheduled sequences leave free.
     Uniform,
-    /// Nothing before the joint sequence is a fraction `d0` in, a rate rising linearly
-    /// from zero at `d0` to its final value at `d1`, then constant until the end.
-    /// `DelayedLinear(d, d)` switches the rate on abruptly at `d`.
-    /// Requires `0 ≤ d0 ≤ d1 ≤ 1` and `d0 < 1`.
-    DelayedLinear(f64, f64),
+    /// Nothing before the joint sequence is a fraction `start` in, a rate rising linearly
+    /// from zero at `start` to its final value at `full`, then constant until the end.
+    /// `start == full` switches the rate on abruptly. Requires `0 ≤ start ≤ full ≤ 1` and
+    /// `start < 1`. Build it with [`Sampling::delayed`] or [`Sampling::ramp`].
+    DelayedLinear {
+        /// Progress at which the rate starts rising from zero.
+        start: f64,
+        /// Progress at which it reaches its final value.
+        full: f64,
+    },
+}
+
+impl Sampling {
+    /// Nothing before progress `at`, then a constant rate.
+    #[must_use]
+    pub const fn delayed(at: f64) -> Sampling {
+        Sampling::DelayedLinear { start: at, full: at }
+    }
+
+    /// Nothing before `start`, a rate rising linearly until `full`, then constant.
+    #[must_use]
+    pub const fn ramp(start: f64, full: f64) -> Sampling {
+        Sampling::DelayedLinear { start, full }
+    }
 }
 
 /// Why a sampling configuration was rejected.

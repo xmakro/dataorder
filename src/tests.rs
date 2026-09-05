@@ -112,8 +112,8 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         1 => Seq::mix(parts(rng, depth - 1)),
         2 => Seq::mix_with(parts(rng, depth - 1).into_iter().map(|p| {
             let sampling = match rng.below(4) {
-                0 => Sampling::DelayedLinear(0.3, 0.6),
-                1 => Sampling::DelayedLinear(0.5, 0.5),
+                0 => Sampling::DelayedLinear { start: 0.3, full: 0.6 },
+                1 => Sampling::DelayedLinear { start: 0.5, full: 0.5 },
                 _ => Sampling::Uniform,
             };
             (p, sampling)
@@ -295,11 +295,11 @@ fn errors() {
     assert_eq!(Order::compile(a.clone().stride(0, 0)).unwrap_err(), Error::ZeroStep);
     assert_eq!(Order::compile(a.clone().repeat(usize::MAX)).unwrap_err(), Error::Overflow);
     assert_eq!(Order::compile(Seq::concat([a.clone().repeat(usize::MAX / 10), a.clone()])).unwrap_err(), Error::Overflow);
-    let over = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear(0.5, 0.5)), (src(1, 1), Sampling::Uniform)]);
+    let over = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 0.5, full: 0.5 }), (src(1, 1), Sampling::Uniform)]);
     assert!(matches!(Order::compile(over), Err(Error::Overcommitted { .. })));
     // A mix that folds away is still validated.
-    let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear(2.0, 2.0))]);
-    assert_eq!(Order::compile(over1).unwrap_err(), Error::InvalidSampling { part: 0, sampling: Sampling::DelayedLinear(2.0, 2.0) });
+    let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
+    assert_eq!(Order::compile(over1).unwrap_err(), Error::InvalidSampling { part: 0, sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } });
 }
 
 #[test]
@@ -376,8 +376,8 @@ fn golden_orders() {
             "mix scheduled",
             Seq::mix_with([
                 (src(0, 2000).shuffle(1), Uniform),
-                (src(1, 400).shuffle(2), DelayedLinear(0.5, 0.5)),
-                (src(2, 600), DelayedLinear(0.2, 0.6)),
+                (src(1, 400).shuffle(2), DelayedLinear { start: 0.5, full: 0.5 }),
+                (src(2, 600), DelayedLinear { start: 0.2, full: 0.6 }),
             ]),
             0,
         ),

@@ -17,7 +17,7 @@ impl Dataset for Shard {
 
 let seq = Seq::mix_with([
     (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3), Sampling::Uniform),
-    (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::DelayedLinear(0.5, 0.5)),
+    (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
 ])
 .shard(0, 8);                                              // worker 0 of 8
 let order = Order::compile(seq)?;
@@ -75,7 +75,7 @@ x86 (Linux, Windows) and on 64-bit ARM (macOS), and checks the declared minimum 
 ## Mix
 
 ```text
-  DelayedLinear(d0, d1)              DelayedLinear(d, d)             Uniform
+  ramp(d0, d1)                       delayed(d)                      Uniform
             ________________                 ________________     ________________
            /                                 |
   ________/                         ________|
@@ -83,9 +83,10 @@ x86 (Linux, Windows) and on 64-bit ARM (macOS), and checks the declared minimum 
 ```
 
 Progress `τ` is the position in the mix divided by its length `N`. A scheduled part follows
-a share function `F(τ)`, the fraction of it drawn by progress `τ`: `DelayedLinear(d0, d1)` is
-the integral of a rate that is zero until `d0`, rises linearly until `d1` and stays constant
-afterwards; `DelayedLinear(d, d)` switches the rate on at `d`. Every position holds exactly
+a share function `F(τ)`, the fraction of it drawn by progress `τ`: `Sampling::ramp(d0, d1)`
+(`DelayedLinear { start: d0, full: d1 }`) is the integral of a rate that is zero until `d0`,
+rises linearly until `d1` and stays constant afterwards; `Sampling::delayed(d)` switches the
+rate on at `d`. Every position holds exactly
 one element, so the uniform parts absorb the slack: they keep a constant rate relative to
 each other and take whatever share the scheduled parts leave free. If the scheduled parts
 alone would need more than 100% of the draw rate at some progress, compilation fails with

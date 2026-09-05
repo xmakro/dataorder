@@ -48,7 +48,7 @@ impl Profile {
         Profile { segs }
     }
 
-    /// `DelayedLinear(d0, d1)`: zero until `d0`, rising linearly to the final rate at `d1`,
+    /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the final rate at `d1`,
     /// then constant. The final rate `r = 2/(2 − d0 − d1)` makes the total share one.
     pub(crate) fn delayed_linear(d0: f64, d1: f64) -> Profile {
         let r = 2.0 / (2.0 - d0 - d1);

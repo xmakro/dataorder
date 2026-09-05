@@ -7,7 +7,7 @@
 //! sequence:
 //!
 //! ```text
-//!   DelayedLinear(d0, d1)              DelayedLinear(d, d)             Uniform
+//!   ramp(d0, d1)                       delayed(d)                      Uniform
 //!             ________________                 ________________     ________________
 //!            /                                 |
 //!   ________/                         ________|
@@ -120,7 +120,7 @@ impl Interleave {
             // Profile 0 is the shared uniform one; an empty scheduled sequence uses it too.
             let profile = match s {
                 Sampling::Uniform => 0,
-                Sampling::DelayedLinear(d0, d1) => {
+                Sampling::DelayedLinear { start: d0, full: d1 } => {
                     if !(d0.is_finite() && d1.is_finite() && 0.0 <= d0 && d0 <= d1 && d1 <= 1.0 && d0 < 1.0) {
                         return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
                     }
