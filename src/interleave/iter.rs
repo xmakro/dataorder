@@ -13,18 +13,20 @@ use std::ops::Range;
 pub(crate) struct Iter<'a> {
     il: &'a Interleave,
     tree: TournamentTree<Slot>,
+    /// Scratch for the seek's per-sequence counts, kept so that a seek allocates nothing.
+    counts: Vec<u64>,
     remaining: u64,
 }
 
 impl<'a> Iter<'a> {
     /// Seeks to `range.start` (the range is already validated) and builds the tree of heads.
     pub(crate) fn new(il: &'a Interleave, range: Range<u64>) -> Self {
-        let mut iter = Iter { il, tree: TournamentTree::empty(), remaining: 0 };
+        let mut iter = Iter { il, tree: TournamentTree::empty(), counts: Vec::new(), remaining: 0 };
         iter.seek(range);
         iter
     }
 
-    /// Repositions at `range` (already validated), reusing the tree's allocations: the seek
+    /// Repositions at `range` (already validated), reusing every allocation: the seek
     /// counts, per sequence, the elements before the start, rebuilds the tree over the heads
     /// and steps through the few positions the counts fell short by.
     pub(crate) fn seek(&mut self, range: Range<u64>) {
@@ -34,7 +36,8 @@ impl<'a> Iter<'a> {
             return;
         }
         let il = self.il;
-        let (counts, base) = counts_below(il, a);
+        let base = counts_below(il, a, &mut self.counts);
+        let counts = &self.counts;
         // Leaves in sequence order, so that ties go to the lower sequence index.
         self.tree.rebuild(counts.iter().enumerate().filter(|&(s, &c)| c < il.seqs[s].n).map(|(s, &c)| {
             let mut seg = 0;
@@ -93,18 +96,19 @@ struct Slot {
 
 /// Per sequence, how many of its elements lie among the first `a` of the joint sequence,
 /// except that the counts may fall short by a few elements in total (never overshoot).
-/// Returns the counts and their sum.
+/// Writes the counts into `counts` and returns their sum.
 ///
 /// The elements below progress `a/N` are within about `k` of `a` in number; if they
 /// overshoot, the progress is lowered and the count repeated.
-fn counts_below(il: &Interleave, a: u64) -> (Vec<u64>, u64) {
+fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
     let k = il.seqs.len() as u64;
     let mut t = a as f64 / il.total as f64;
     loop {
-        let counts: Vec<u64> = (0..il.seqs.len()).map(|s| count_below(il, s, t)).collect();
+        counts.clear();
+        counts.extend((0..il.seqs.len()).map(|s| count_below(il, s, t)));
         let base: u64 = counts.iter().sum();
         if base <= a {
-            return (counts, base);
+            return base;
         }
         // Overshot: lower the progress by the excess plus a margin of k and count again.
         t = ((a as f64 - (base - a + k) as f64) / il.total as f64).max(0.0);

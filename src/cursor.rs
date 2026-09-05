@@ -50,10 +50,11 @@ impl<'a, T> Cursor<'a, T> {
         (self.end - self.pos) as usize
     }
 
-    /// Continues at `pos`, anywhere up to the end of the range. Moving forward skips (a mix
-    /// steps through its interleave, or re-seeks it for a long hop); moving backward seeks
-    /// afresh. Either way the cursor's allocations are reused, so seeking is the way to
-    /// visit many scattered positions.
+    /// Continues at `pos`, anywhere up to the end of the range. Moving forward skips: a mix
+    /// steps through its interleave, or re-seeks it for a long hop, and a hop into another
+    /// repetition or concat part lands there directly; moving backward seeks afresh. Either
+    /// way the cursor's allocations are reused, so seeking is the way to visit many
+    /// scattered positions.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -280,45 +281,58 @@ impl<'a> NodeCursor<'a> {
         }
     }
 
-    /// Advances by `m` elements, which must exist.
-    fn skip(&mut self, mut m: u64) {
+    /// Advances by `m` elements, which must exist. Within the current part or repetition the
+    /// child skips; beyond it the cursor lands in the target one directly, or, exactly on a
+    /// boundary, stays there and lets the next [`next`](NodeCursor::next) enter the following
+    /// one, as the walk does.
+    fn skip(&mut self, m: u64) {
+        if m == 0 {
+            return;
+        }
         match self {
             NodeCursor::Empty => unreachable!("dataorder: skip in an empty sequence"),
             NodeCursor::Source { next, .. } => *next += m,
             NodeCursor::Concat { children, offsets, idx, left, ctx, child } => {
-                while m > 0 {
-                    if *left == 0 {
-                        *idx += 1;
-                        *left = offsets[*idx + 1] - offsets[*idx];
-                        **child = NodeCursor::new(&children[*idx]);
-                        child.seek(0, *ctx);
+                if m <= *left {
+                    child.skip(m);
+                    *left -= m;
+                } else {
+                    let pos = offsets[*idx + 1] - *left + m;
+                    // The part containing `pos`, or the one ending there.
+                    let i = offsets.partition_point(|&o| o < pos) - 1;
+                    *idx = i;
+                    if offsets[i + 1] == pos {
+                        *left = 0;
+                        **child = NodeCursor::Empty;
+                    } else {
+                        *left = offsets[i + 1] - pos;
+                        **child = NodeCursor::new(&children[i]);
+                        child.seek(pos - offsets[i], *ctx);
                     }
-                    let t = m.min(*left);
-                    child.skip(t);
-                    *left -= t;
-                    m -= t;
                 }
             }
             NodeCursor::Mix(mix) => mix.skip(m),
             NodeCursor::Shuffle(sh) => sh.pos += m,
             NodeCursor::Repeat { child_len, depth, epoch, left, ctx, child } => {
-                while m > 0 {
-                    if *left == 0 {
-                        *epoch += 1;
-                        *left = *child_len;
-                        child.seek(0, perm::epoch_ctx(*ctx, *epoch, *depth));
+                if m <= *left {
+                    child.skip(m);
+                    *left -= m;
+                } else {
+                    let past = m - *left;
+                    let e = *epoch + 1 + past / *child_len;
+                    let r = past % *child_len;
+                    if r == 0 {
+                        *epoch = e - 1;
+                        *left = 0;
+                    } else {
+                        *epoch = e;
+                        *left = *child_len - r;
+                        child.seek(r, perm::epoch_ctx(*ctx, e, *depth));
                     }
-                    let t = m.min(*left);
-                    child.skip(t);
-                    *left -= t;
-                    m -= t;
                 }
             }
             NodeCursor::Slice { child, .. } => child.skip(m),
             NodeCursor::Stride { step, left, child, .. } => {
-                if m == 0 {
-                    return;
-                }
                 *left -= m;
                 // Land on the next element of the stride, or just past the last skipped one
                 // when the stride is exhausted (the child may not extend a full step further).

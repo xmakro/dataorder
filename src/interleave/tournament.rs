@@ -44,6 +44,8 @@ pub(crate) struct TournamentTree<V> {
     nodes: Vec<Entry>,
     values: Vec<V>,
     live: usize,
+    /// The winners of the last rebuild, kept so that a rebuild allocates nothing.
+    scratch: Vec<Entry>,
 }
 
 /// A leaf's key (in [`sortable`] form) and index, as stored in the nodes.
@@ -76,7 +78,7 @@ impl Entry {
 impl<V> TournamentTree<V> {
     /// A tree without leaves, allocating nothing; [`rebuild`](TournamentTree::rebuild) fills it.
     pub(crate) fn empty() -> Self {
-        Self { nodes: Vec::new(), values: Vec::new(), live: 0 }
+        Self { nodes: Vec::new(), values: Vec::new(), live: 0, scratch: Vec::new() }
     }
 
     /// Builds the tree from the leaves' initial keys and values (leaf `i` = `leaves[i]`).
@@ -87,7 +89,7 @@ impl<V> TournamentTree<V> {
         tree
     }
 
-    /// Replaces the tree by one over new leaves, reusing the node and value allocations.
+    /// Replaces the tree by one over new leaves, reusing every allocation.
     ///
     /// # Panics
     /// If there are `u32::MAX / 2` leaves or more.
@@ -96,7 +98,9 @@ impl<V> TournamentTree<V> {
         // keys, `n+k..2n` are the padding, and the internal nodes are filled bottom-up.
         let leaves = leaves.into_iter();
         let at_most = leaves.size_hint().1.unwrap_or(0);
-        let mut winner: Vec<Entry> = Vec::with_capacity(2 * at_most.next_power_of_two());
+        let winner = &mut self.scratch;
+        winner.clear();
+        winner.reserve(2 * at_most.next_power_of_two());
         self.values.clear();
         self.values.reserve(at_most);
         for (key, value) in leaves {
