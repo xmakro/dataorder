@@ -1,25 +1,44 @@
 //! The configuration: a tree of sequence expressions over sources, built by hand or with
 //! the builder methods on [`Seq`].
 
-use crate::{Source, Error, Order, Sampling};
+use crate::interleave::float_bits;
+use crate::{Error, Order, Sampling, Source};
+use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
-/// A sequence expression over sources of type `T` (anything that is a
-/// [`Source`](crate::Source)). Leaves are [`Source`](Seq::Source)s; every other variant
-/// transforms or combines sequences. Build its order with
-/// [`Order::new`](crate::Order::new). It is plain data: clone it, compare it,
-/// serialize it (with the `serde` feature), or [`map`](Seq::map) its sources to another type.
-#[derive(Clone, Debug, PartialEq)]
+/// Deepest nesting [`Order::new`] accepts; see [`Seq::MAX_DEPTH`].
+pub(crate) const MAX_DEPTH: u32 = 256;
+
+/// A sequence expression over sources of type `T` (anything that is a [`Source`]). Leaves
+/// are [`Source`](Seq::Source)s; every other variant transforms or combines sequences.
+/// Build its order with [`Order::new`]. It is plain data: clone it, compare and hash it,
+/// serialize it (with the `serde` feature), or [`map`](Seq::map) its sources to another
+/// type.
+///
+/// Equality and hashing compare the floating-point weights and schedule parameters bit for
+/// bit (with `-0.0` taken as `0.0`), so `Seq` is `Eq` and `Hash` whenever `T` is; `Order::new`
+/// rejects NaN in either place anyway.
+///
+/// # Errors and panics
+///
+/// A builder panics only when its arguments are wrong on their own, without knowing any
+/// length: a reversed [`slice`](Seq::slice) range, a [`shard`](Seq::shard) index at or beyond
+/// the count. Everything that depends on the sources' lengths (skipping or taking past the
+/// end, a zero stride, overflow, schedules and weights) is reported by [`Order::new`] as an
+/// [`Error`], with the path of the node it was found at. Configurations nesting deeper than
+/// [`MAX_DEPTH`](Seq::MAX_DEPTH) levels are rejected as well.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum Seq<T> {
     /// The elements `0..len()` of a source, in order.
     Source(T),
     /// The parts one after another.
     Concat(Vec<Self>),
     /// The parts interleaved: each part keeps its order and is drawn according to its
-    /// [`Sampling`], balanced over the whole length. The total length of a mix is limited to
-    /// 2⁴⁶.
-    Mix(Vec<(Self, Sampling)>),
+    /// [`Sampling`], balanced over the whole length. Empty parts do not affect the order of
+    /// the others. The total length of a mix is limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
+    Mix(Vec<MixPart<T>>),
     /// The parts mixed in the proportions of their weights, `total` elements in all: part `i`
     /// contributes `round(wᵢ / Σw · total)` elements (the largest remainders take the
     /// rounding up, so the counts sum to `total`), repeated as often as needed (reshuffling
@@ -30,7 +49,7 @@ pub enum Seq<T> {
         /// Length of the order.
         total: usize,
         /// The parts with their weights and schedules.
-        parts: Vec<(Seq<T>, f64, Sampling)>,
+        parts: Vec<WeightedPart<T>>,
     },
     /// `inner` in a pseudorandom order selected by `seed`. Inside a [`Repeat`](Seq::Repeat)
     /// the order also depends on the repetition, so every epoch is shuffled differently.
@@ -41,32 +60,33 @@ pub enum Seq<T> {
         inner: Box<Self>,
     },
     /// `inner`, `times` times over: first as it is, then reshuffled at every shuffle inside
-    /// it for each further repetition. `x.repeat(1)` is `x`.
+    /// it for each further repetition. `x.repeat(1)` is `x`, and `x.repeat(0)` is empty.
     Repeat {
         /// Number of repetitions.
         times: usize,
         /// The sequence to repeat.
         inner: Box<Self>,
     },
-    /// `inner` without its first `n` positions. Skipping more than there are is an error at
-    /// the time the order is built, unlike `Iterator::skip`: configurations are validated, and a silently
-    /// empty sequence hides a mistake.
+    /// `inner` without its first `n` positions. Skipping more than there are is an error
+    /// when the order is built, unlike `Iterator::skip`: configurations are validated, and a
+    /// silently empty sequence hides a mistake.
     Skip {
         /// Positions dropped from the front.
         n: usize,
         /// The sequence to skip into.
         inner: Box<Self>,
     },
-    /// The first `n` positions of `inner`. Taking more than there are is an error at the
-    /// time the order is built, unlike `Iterator::take`.
+    /// The first `n` positions of `inner`. Taking more than there are is an error when the
+    /// order is built, unlike `Iterator::take`.
     Take {
         /// Positions kept.
         n: usize,
         /// The sequence to take from.
         inner: Box<Self>,
     },
-    /// Positions `offset, offset + step, offset + 2·step, …` of `inner`: shard `offset` of
-    /// `step` shards.
+    /// Positions `offset, offset + step, offset + 2·step, …` of `inner`, as many as exist:
+    /// shard `offset` of `step` shards. An offset at or past the end gives an empty
+    /// sequence, not an error, because a shard of a short sequence is legitimately empty.
     Stride {
         /// Distance between kept positions.
         step: usize,
@@ -77,7 +97,77 @@ pub enum Seq<T> {
     },
 }
 
+/// A part of a [`Mix`](Seq::Mix): a sequence and its schedule. `(seq, sampling)` and a bare
+/// `seq` (uniform) convert into it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
+pub struct MixPart<T> {
+    /// The sequence.
+    pub seq: Seq<T>,
+    /// How its elements are spread over the mix.
+    pub sampling: Sampling,
+}
+
+impl<T> From<(Seq<T>, Sampling)> for MixPart<T> {
+    fn from((seq, sampling): (Seq<T>, Sampling)) -> Self {
+        Self { seq, sampling }
+    }
+}
+
+impl<T> From<Seq<T>> for MixPart<T> {
+    fn from(seq: Seq<T>) -> Self {
+        Self { seq, sampling: Sampling::Uniform }
+    }
+}
+
+/// A part of a [`Weighted`](Seq::Weighted) mix: a sequence, its weight and its schedule.
+/// `(seq, weight, sampling)` and `(seq, weight)` (uniform) convert into it. Equality and
+/// hashing compare the weight bit for bit (with `-0.0` taken as `0.0`).
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
+pub struct WeightedPart<T> {
+    /// The sequence.
+    pub seq: Seq<T>,
+    /// Its share of the total, relative to the other weights.
+    pub weight: f64,
+    /// How its elements are spread over the mix.
+    pub sampling: Sampling,
+}
+
+impl<T> From<(Seq<T>, f64, Sampling)> for WeightedPart<T> {
+    fn from((seq, weight, sampling): (Seq<T>, f64, Sampling)) -> Self {
+        Self { seq, weight, sampling }
+    }
+}
+
+impl<T> From<(Seq<T>, f64)> for WeightedPart<T> {
+    fn from((seq, weight): (Seq<T>, f64)) -> Self {
+        Self { seq, weight, sampling: Sampling::Uniform }
+    }
+}
+
+impl<T: PartialEq> PartialEq for WeightedPart<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.seq == other.seq && float_bits(self.weight) == float_bits(other.weight) && self.sampling == other.sampling
+    }
+}
+
+impl<T: Eq> Eq for WeightedPart<T> {}
+
+impl<T: Hash> Hash for WeightedPart<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.seq.hash(state);
+        float_bits(self.weight).hash(state);
+        self.sampling.hash(state);
+    }
+}
+
 impl<T> Seq<T> {
+    /// Deepest nesting [`Order::new`] accepts, the root counting as level 1: a chain of
+    /// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation is
+    /// recursive, and this keeps it well inside the default stack of a thread.
+    pub const MAX_DEPTH: u32 = MAX_DEPTH;
+
     /// The elements of `source`, in order.
     #[must_use]
     pub fn source(source: T) -> Self {
@@ -93,27 +183,46 @@ impl<T> Seq<T> {
     /// The parts interleaved, all [`Sampling::Uniform`].
     #[must_use]
     pub fn mix(parts: impl IntoIterator<Item = Self>) -> Self {
-        Self::Mix(parts.into_iter().map(|p| (p, Sampling::Uniform)).collect())
+        Self::Mix(parts.into_iter().map(MixPart::from).collect())
     }
 
     /// The parts interleaved, each with its own schedule.
+    ///
+    /// ```
+    /// use dataorder::{Order, Sampling, Seq};
+    /// let seq = Seq::mix_with([(Seq::source(700), Sampling::Uniform), (Seq::source(300), Sampling::delayed(0.5))]);
+    /// let order = Order::new(seq)?;
+    /// // Nothing of the delayed source in the first half.
+    /// assert!(order.iter(..500).all(|(&source, _)| source == 700));
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn mix_with(parts: impl IntoIterator<Item = (Self, Sampling)>) -> Self {
-        Self::Mix(parts.into_iter().collect())
+        Self::Mix(parts.into_iter().map(MixPart::from).collect())
     }
 
     /// The parts mixed by weight into `total` elements, all [`Sampling::Uniform`]; see
     /// [`Weighted`](Seq::Weighted).
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// // 60% of a small source (repeated, reshuffled per repetition) and 40% of a large one (cut).
+    /// let seq = Seq::weighted(3000, [(Seq::source(100).shuffle(1), 0.6), (Seq::source(5000).shuffle(2), 0.4)]);
+    /// let order = Order::new(seq)?;
+    /// assert_eq!(order.len(), 3000);
+    /// assert_eq!(order.iter(..).filter(|&(&source, _)| source == 100).count(), 1800);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
-    pub fn weighted(total: usize, parts: impl IntoIterator<Item = (Seq<T>, f64)>) -> Seq<T> {
-        Self::Weighted { total, parts: parts.into_iter().map(|(p, w)| (p, w, Sampling::Uniform)).collect() }
+    pub fn weighted(total: usize, parts: impl IntoIterator<Item = (Self, f64)>) -> Self {
+        Self::Weighted { total, parts: parts.into_iter().map(WeightedPart::from).collect() }
     }
 
     /// The parts mixed by weight into `total` elements, each with its own schedule; see
     /// [`Weighted`](Seq::Weighted).
     #[must_use]
-    pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = (Seq<T>, f64, Sampling)>) -> Seq<T> {
-        Self::Weighted { total, parts: parts.into_iter().collect() }
+    pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = (Self, f64, Sampling)>) -> Self {
+        Self::Weighted { total, parts: parts.into_iter().map(WeightedPart::from).collect() }
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
@@ -123,6 +232,17 @@ impl<T> Seq<T> {
     }
 
     /// This sequence `times` times over: itself, then reshuffled for each further time.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(1000).shuffle(1).repeat(2))?;
+    /// let epoch = |e: usize| order.iter(e * 1000..(e + 1) * 1000).map(|(_, i)| i).collect::<Vec<_>>();
+    /// assert_ne!(epoch(0), epoch(1));
+    /// let mut sorted = epoch(1);
+    /// sorted.sort_unstable();
+    /// assert_eq!(sorted, (0..1000).collect::<Vec<_>>());
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn repeat(self, times: usize) -> Self {
         Self::Repeat { times, inner: Box::new(self) }
@@ -130,6 +250,13 @@ impl<T> Seq<T> {
 
     /// The positions in `range` of this sequence: a [`Skip`](Seq::Skip) of its start and a
     /// [`Take`](Seq::Take) of its length, either omitted when trivial.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(10).slice(3..=5))?;
+    /// assert_eq!(order.iter(..).map(|(_, i)| i).collect::<Vec<_>>(), [3, 4, 5]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     ///
     /// # Panics
     /// If the range's end lies before its start, or a bound is `usize::MAX` where one more
@@ -166,7 +293,8 @@ impl<T> Seq<T> {
         Self::Skip { n, inner: Box::new(self) }
     }
 
-    /// Every `step`-th position starting at `offset`.
+    /// Every `step`-th position starting at `offset`, as many as exist; `offset` may exceed
+    /// `step`. See [`Stride`](Seq::Stride).
     #[must_use]
     pub fn stride(self, step: usize, offset: usize) -> Self {
         Self::Stride { step, offset, inner: Box::new(self) }
@@ -174,19 +302,41 @@ impl<T> Seq<T> {
 
     /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
     /// sequence together cover it exactly once, and shard `i` holds position `i` of every
-    /// consecutive block of `count` positions.
+    /// consecutive block of `count` positions, so a mix's schedule is preserved across
+    /// workers. A shard of a sequence shorter than `count` may be empty.
     ///
     /// Over a mix, a shard still walks every element of the mix and keeps one in `count`,
     /// so `count` workers sharding one mix do `count` times its interleaving work in total.
     /// When that matters, shard the parts and mix the shards: each worker then interleaves
     /// only its own share, with the same schedule.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let seq = Seq::source(10).shuffle(1);
+    /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..).map(|(_, i)| i).collect();
+    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1))?.iter(..).map(|(_, i)| i).collect();
+    /// assert_eq!(shard, [all[1], all[5], all[9]]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    ///
+    /// # Panics
+    /// If `index >= count` (which includes `count == 0`): such a shard would duplicate
+    /// another worker's data.
     #[must_use]
-    pub fn shard(self, index: usize, count: usize) -> Self {
+    pub fn shard(self, count: usize, index: usize) -> Self {
+        assert!(index < count, "dataorder: shard index {index} out of range for {count} shards");
         self.stride(count, index)
     }
 
     /// The same expression over the sources mapped by `f`, in order of appearance: a
     /// configuration over handles becomes one over loaded datasets.
+    ///
+    /// ```
+    /// use dataorder::Seq;
+    /// let paths = Seq::mix([Seq::source("web.bin"), Seq::source("code.bin").shuffle(1)]);
+    /// let lens = paths.map(|path| path.len()); // a Seq<usize>
+    /// assert_eq!(lens, Seq::mix([Seq::source(7), Seq::source(8).shuffle(1)]));
+    /// ```
     #[must_use]
     pub fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Seq<U> {
         self.map_with(&mut f)
@@ -196,8 +346,11 @@ impl<T> Seq<T> {
         match self {
             Self::Source(t) => Seq::Source(f(t)),
             Self::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.map_with(f)).collect()),
-            Self::Mix(parts) => Seq::Mix(parts.into_iter().map(|(p, s)| (p.map_with(f), s)).collect()),
-            Self::Weighted { total, parts } => Seq::Weighted { total, parts: parts.into_iter().map(|(p, w, s)| (p.map_with(f), w, s)).collect() },
+            Self::Mix(parts) => Seq::Mix(parts.into_iter().map(|p| MixPart { seq: p.seq.map_with(f), sampling: p.sampling }).collect()),
+            Self::Weighted { total, parts } => Seq::Weighted {
+                total,
+                parts: parts.into_iter().map(|p| WeightedPart { seq: p.seq.map_with(f), weight: p.weight, sampling: p.sampling }).collect(),
+            },
             Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.map_with(f)) },
             Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.map_with(f)) },
             Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.map_with(f)) },
@@ -211,6 +364,14 @@ impl<T: Source> Seq<T> {
     /// Validates the configuration and returns the length of its order, without consuming
     /// it: the checks of [`Order::new`], over the sources' lengths.
     ///
+    /// ```
+    /// use dataorder::{ErrorKind, Seq};
+    /// assert_eq!(Seq::source(10).skip(3).check(), Ok(7));
+    /// let err = Seq::concat([Seq::source(10), Seq::source(5).take(6)]).check().unwrap_err();
+    /// assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 6, len: 5 });
+    /// assert_eq!(err.path(), [1]); // the second part of the concat
+    /// ```
+    ///
     /// # Errors
     /// Whatever [`Order::new`] would report.
     pub fn check(&self) -> Result<usize, Error> {
@@ -222,8 +383,11 @@ impl<T: Source> Seq<T> {
         match self {
             Self::Source(t) => Seq::Source(t.len()),
             Self::Concat(parts) => Seq::Concat(parts.iter().map(Self::lens).collect()),
-            Self::Mix(parts) => Seq::Mix(parts.iter().map(|(p, s)| (p.lens(), *s)).collect()),
-            Self::Weighted { total, parts } => Seq::Weighted { total: *total, parts: parts.iter().map(|(p, w, s)| (p.lens(), *w, *s)).collect() },
+            Self::Mix(parts) => Seq::Mix(parts.iter().map(|p| MixPart { seq: p.seq.lens(), sampling: p.sampling }).collect()),
+            Self::Weighted { total, parts } => Seq::Weighted {
+                total: *total,
+                parts: parts.iter().map(|p| WeightedPart { seq: p.seq.lens(), weight: p.weight, sampling: p.sampling }).collect(),
+            },
             Self::Shuffle { seed, inner } => Seq::Shuffle { seed: *seed, inner: Box::new(inner.lens()) },
             Self::Repeat { times, inner } => Seq::Repeat { times: *times, inner: Box::new(inner.lens()) },
             Self::Skip { n, inner } => Seq::Skip { n: *n, inner: Box::new(inner.lens()) },

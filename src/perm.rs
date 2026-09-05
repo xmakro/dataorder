@@ -19,13 +19,18 @@
 //! two-multiply round function (multiply, xorshift, multiply) have the same quality and
 //! cost about 0.8 ns more per element; three of those rounds fail the grid test.
 //!
+//! The six round keys are rotations of one 64-bit word derived from the seed and the
+//! context, the six multipliers rotations of another derived from the first, so a
+//! permutation is selected by 64 bits in effect, although a [`Key`] holds 768; that is
+//! plenty for reproducible shuffles, which is all seeds are for.
+//!
 //! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small function
 //! and the permutation is most of it.
 
 /// Shape of the domain: `n` and the widths and masks of the two Feistel halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Shape {
-    pub n: u64,
+    pub(crate) n: u64,
     /// Width of the left half; the right half is `lb` or `lb + 1` bits wide.
     lb: u32,
     rb: u32,
@@ -34,7 +39,7 @@ pub(crate) struct Shape {
 }
 
 impl Shape {
-    pub fn new(n: u64) -> Self {
+    pub(crate) fn new(n: u64) -> Self {
         let bits = 64 - n.saturating_sub(1).leading_zeros();
         let lb = bits / 2;
         let rb = bits - lb;
@@ -51,7 +56,7 @@ pub(crate) struct Key {
 
 impl Key {
     /// Placeholder for cursors that have not been seeked yet.
-    pub const UNSET: Self = Self { rk: [0; 6], mul: [1; 6] };
+    pub(crate) const UNSET: Self = Self { rk: [0; 6], mul: [1; 6] };
 }
 
 /// SplitMix64's finalizer: a fixed 64-bit bijection with good avalanche (maps 0 to 0).
@@ -64,9 +69,18 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 const RC: [u64; 12] = [
-    0x243F_6A88_85A3_08D3, 0x1319_8A2E_0370_7344, 0xA409_3822_299F_31D0, 0x082E_FA98_EC4E_6C89,
-    0x4528_21E6_38D0_1377, 0xBE54_66CF_34E9_0C6C, 0xC0AC_29B7_C97C_50DD, 0x3F84_D5B5_B547_0917,
-    0x9216_D5D9_8979_FB1B, 0xD131_0BA6_98DF_B5AC, 0x2FFD_72DB_D01A_DFB7, 0xB8E1_AFED_6A26_7E96,
+    0x243F_6A88_85A3_08D3,
+    0x1319_8A2E_0370_7344,
+    0xA409_3822_299F_31D0,
+    0x082E_FA98_EC4E_6C89,
+    0x4528_21E6_38D0_1377,
+    0xBE54_66CF_34E9_0C6C,
+    0xC0AC_29B7_C97C_50DD,
+    0x3F84_D5B5_B547_0917,
+    0x9216_D5D9_8979_FB1B,
+    0xD131_0BA6_98DF_B5AC,
+    0x2FFD_72DB_D01A_DFB7,
+    0xB8E1_AFED_6A26_7E96,
 ];
 
 /// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]): the two are
@@ -95,7 +109,7 @@ pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, depth: u32) -> u64 {
     if epoch == 0 {
         return ctx;
     }
-    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add(epoch.wrapping_mul(PHI)) ^ (depth as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add(epoch.wrapping_mul(PHI)) ^ (depth as u64 + 1).wrapping_mul(PHI))
 }
 
 /// One Feistel round: `(l, r)` becomes `(r, l ^ F(r))`, where `l` is `wl` bits wide
@@ -219,7 +233,7 @@ mod tests {
                 assert!(grid < 1023.0 + 5.0 * (2.0 * 1023.0f64).sqrt(), "n={n} seed={seed}: grid chi2 {grid}");
                 let low = chi2(p.iter().enumerate().map(|(i, &v)| (i & 15) * 16 + (v & 15) as usize), 256, n);
                 assert!(low < 255.0 + 5.0 * (2.0 * 255.0f64).sqrt(), "n={n} seed={seed}: low-bit chi2 {low}");
-                let fixed = p.iter().enumerate().filter(|(i, &v)| *i as u64 == v).count();
+                let fixed = p.iter().enumerate().filter(|&(ref i, &v)| *i as u64 == v).count();
                 assert!(fixed < 10, "n={n} seed={seed}: {fixed} fixed points");
                 let bound = 5.0 / (n as f64).sqrt();
                 let f = |v: &u64| *v as f64;

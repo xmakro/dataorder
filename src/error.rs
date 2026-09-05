@@ -1,32 +1,98 @@
 //! The errors of [`Order::new`](crate::Order::new).
 
-use crate::interleave::{SamplingError, MAX_TOTAL_LEN};
 use crate::Sampling;
+use crate::interleave::{MAX_TOTAL_LEN, SamplingError};
 use std::fmt;
 
-/// Why a configuration was rejected by [`Order::new`](crate::Order::new).
+/// Why and where [`Order::new`](crate::Order::new) rejected a configuration: the
+/// [`kind`](Error::kind) of the problem and the [`path`](Error::path) of the node it was
+/// found at.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Error {
-    /// A `Skip` of `n` positions from a sequence of `len < n`.
+pub struct Error {
+    kind: ErrorKind,
+    path: Vec<usize>,
+}
+
+impl Error {
+    pub(crate) fn new(kind: ErrorKind, path: Vec<usize>) -> Self {
+        Self { kind, path }
+    }
+
+    /// What went wrong.
+    #[must_use]
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
+
+    /// Where: the indices of the children followed from the root of the
+    /// [`Seq`](crate::Seq) to the node the problem was found at (the part index under a
+    /// `Concat`, `Mix` or `Weighted`, `0` under a node with one child). Empty for the root.
+    #[must_use]
+    pub fn path(&self) -> &[usize] {
+        &self.path
+    }
+
+    /// The kind, discarding the path.
+    #[must_use]
+    pub fn into_kind(self) -> ErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)?;
+        if self.path.is_empty() {
+            write!(f, " (at the root)")
+        } else {
+            write!(f, " (at node")?;
+            for i in &self.path {
+                write!(f, "/{i}")?;
+            }
+            write!(f, ")")
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// What [`Order::new`](crate::Order::new) found wrong with a configuration.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// A `Skip` of `n` positions from a sequence of `len < n`. The length is that of an
+    /// intermediate node, which may exceed `usize` on a 32-bit target.
     SkipOutOfRange {
         /// Positions to skip.
         n: usize,
         /// Length of the sequence.
-        len: usize,
+        len: u64,
     },
-    /// A `Take` of `n` positions from a sequence of `len < n`.
+    /// A `Take` of `n` positions from a sequence of `len < n`. The length is that of an
+    /// intermediate node, which may exceed `usize` on a 32-bit target.
     TakeOutOfRange {
         /// Positions to take.
         n: usize,
         /// Length of the sequence.
-        len: usize,
+        len: u64,
     },
     /// A stride with `step == 0`.
     ZeroStep,
-    /// The order is longer than `usize::MAX`, an intermediate length does not fit in 64 bits,
-    /// there are more than 2³² sources, or a mix has 2³¹ parts or more.
-    Overflow,
-    /// The total length of a mix exceeds 2⁴⁶.
+    /// The order is longer than `usize::MAX`. An intermediate node may be, the order itself
+    /// may not.
+    OrderTooLong {
+        /// Length of the order.
+        len: u64,
+    },
+    /// A length does not fit in 64 bits.
+    LengthOverflow,
+    /// More than 2³² sources.
+    TooManySources,
+    /// A mix has 2³¹ parts or more.
+    TooManyMixParts,
+    /// The configuration nests deeper than [`Seq::MAX_DEPTH`](crate::Seq::MAX_DEPTH).
+    TooDeep,
+    /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
     /// A schedule parameter of mix part `part` is out of range or not finite.
     InvalidSampling {
@@ -35,8 +101,8 @@ pub enum Error {
         /// Its schedule.
         sampling: Sampling,
     },
-    /// Mix part `part` is too long for the steepness of its schedule
-    /// (`length × final_rate` exceeds 2⁴⁶).
+    /// Mix part `part` is too long for the steepness of its schedule (`length × final_rate`
+    /// exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep {
         /// Index of the part in the mix.
         part: usize,
@@ -54,7 +120,8 @@ pub enum Error {
         /// Its weight.
         weight: f64,
     },
-    /// The weights of a weighted mix sum to zero.
+    /// A weighted mix with a positive total has no weight to distribute it over: no parts,
+    /// or weights that sum to zero.
     ZeroWeights,
     /// A part of a weighted mix has a positive share but no elements.
     EmptyWeightedPart {
@@ -63,27 +130,29 @@ pub enum Error {
     },
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
             Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
             Self::ZeroStep => write!(f, "stride step is zero"),
-            Self::Overflow => write!(f, "order longer than usize::MAX, or a length beyond 64 bits"),
+            Self::OrderTooLong { len } => write!(f, "order of {len} positions is longer than usize::MAX"),
+            Self::LengthOverflow => write!(f, "a length does not fit in 64 bits"),
+            Self::TooManySources => write!(f, "more than 2^32 sources"),
+            Self::TooManyMixParts => write!(f, "mix with 2^31 parts or more"),
+            Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::Seq::<()>::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { part, sampling } => write!(f, "mix part {part}: invalid {sampling:?}"),
             Self::TooSteep { part } => write!(f, "mix part {part}: too long for the steepness of its schedule"),
             Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at the end", demand * 100.0),
             Self::InvalidWeight { part, weight } => write!(f, "weighted mix part {part}: invalid weight {weight}"),
-            Self::ZeroWeights => write!(f, "weighted mix: the weights sum to zero"),
+            Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
             Self::EmptyWeightedPart { part } => write!(f, "weighted mix part {part} has a share but no elements"),
         }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<SamplingError> for Error {
+impl From<SamplingError> for ErrorKind {
     fn from(e: SamplingError) -> Self {
         match e {
             SamplingError::TooLong => Self::MixTooLong,

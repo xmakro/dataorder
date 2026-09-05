@@ -31,9 +31,10 @@
 //! Every rate profile is piecewise linear and is stored as such; share functions are their
 //! integrals.
 //! Element `j` of sequence `i` gets the ideal progress `F_i⁻¹((j + φ_i)/n_i)`, where
-//! `φ_i = (2i+1)/(2k)` staggers the sequences so that equal ones round-robin instead of
-//! bunching, and the joint sequence is the sort of all elements by ideal progress (ties by
-//! sequence index). Every sequence follows its schedule to within about one element at any
+//! `φ_i = (2r+1)/(2k')` staggers the sequences so that equal ones round-robin instead of
+//! bunching (`k'` is the number of non-empty sequences and `r` the rank of `i` among them,
+//! so empty sequences do not affect the order), and the joint sequence is the sort of all
+//! elements by ideal progress (ties by sequence index). Every sequence follows its schedule to within about one element at any
 //! joint position; the joint position of an element is within `k` (typically `√k`) of
 //! `progress·N`, the same warp for all sequences.
 //!
@@ -58,8 +59,9 @@ mod sampling;
 mod tests;
 mod tournament;
 
-pub use iter::Iter;
-pub use sampling::{Sampling, SamplingError};
+pub(crate) use iter::Iter;
+pub use sampling::Sampling;
+pub(crate) use sampling::{SamplingError, float_bits};
 
 use profile::Profile;
 use std::ops::Range;
@@ -68,7 +70,7 @@ use std::ops::Range;
 /// (at least `1/N`) far above floating-point rounding, and keeps every length and count
 /// exact when converted to `f64` (which holds integers up to 2⁵³). A scheduled sequence
 /// must likewise satisfy `length × final_rate ≤ MAX_TOTAL_LEN`.
-pub const MAX_TOTAL_LEN: u64 = 1 << 46;
+pub(crate) const MAX_TOTAL_LEN: u64 = 1 << 46;
 
 /// Slack on the overcommitment check: the final rates are rounded sums, and a mix whose
 /// scheduled parts need exactly the whole draw rate at the end is valid.
@@ -77,19 +79,20 @@ const OVERCOMMIT_TOLERANCE: f64 = 1e-9;
 #[derive(Clone, Copy, Debug)]
 struct Seq {
     n: u64,
-    /// `1/n`: keys multiply by it instead of dividing (monotone in `j` all the same).
+    /// `1/n` (0 for an empty sequence): keys multiply by it instead of dividing (monotone
+    /// in `j` all the same).
     inv_n: f64,
-    /// Stagger offset `(2i+1)/(2k)`.
+    /// Stagger offset `(2r+1)/(2k')` among the `k'` non-empty sequences (0 for an empty one).
     phi: f64,
     /// Index into `Interleave::profiles`; 0 is the shared uniform profile.
     profile: u32,
 }
 
 /// A balanced, order-preserving interleaving of `k` sequences with sampling schedules,
-/// given only their lengths. Build it with [`Interleave::new`] or
-/// [`Interleave::with_sampling`] and walk any merged range with [`Interleave::iter`].
+/// given only their lengths. Build it with [`Interleave::with_sampling`] and walk any
+/// merged range with [`Interleave::iter`].
 #[derive(Clone, Debug)]
-pub struct Interleave {
+pub(crate) struct Interleave {
     seqs: Vec<Seq>,
     /// Rate profiles: `profiles[0]` for the uniform sequences, one more per scheduled one.
     profiles: Vec<Profile>,
@@ -102,23 +105,25 @@ impl Interleave {
     /// # Panics
     /// If the total length exceeds [`MAX_TOTAL_LEN`].
     #[cfg(test)]
-    pub fn new(lens: &[u64]) -> Self {
+    pub(crate) fn new(lens: &[u64]) -> Self {
         Self::with_sampling(lens, &vec![Sampling::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
     }
 
     /// Sequences of the given lengths and schedules (one per sequence). Zero lengths are
-    /// allowed and their schedule is ignored. Cost `O(k + s²)` for `s` scheduled sequences,
-    /// independent of the lengths.
+    /// allowed, their schedule is ignored and they do not affect the order of the others.
+    /// Cost `O(k + s²)` for `s` scheduled sequences, independent of the lengths.
     ///
     /// # Panics
     /// If `lens` and `sampling` differ in length.
-    pub fn with_sampling(lens: &[u64], sampling: &[Sampling]) -> Result<Self, SamplingError> {
+    pub(crate) fn with_sampling(lens: &[u64], sampling: &[Sampling]) -> Result<Self, SamplingError> {
         assert_eq!(lens.len(), sampling.len(), "interleave: one schedule per sequence");
         let k = lens.len();
         let mut total: u64 = 0;
         for &n in lens {
             total = total.checked_add(n).filter(|&t| t <= MAX_TOTAL_LEN).ok_or(SamplingError::TooLong)?;
         }
+        let live = lens.iter().filter(|&&n| n > 0).count();
+        let mut rank = 0usize;
         let mut seqs = Vec::with_capacity(k);
         let mut scheduled: Vec<(f64, Profile)> = Vec::new();
         let mut uniform_len = 0u64;
@@ -145,24 +150,33 @@ impl Interleave {
             if profile == 0 {
                 uniform_len += n;
             }
-            seqs.push(Seq { n, inv_n: 1.0 / n as f64, phi: (2 * i + 1) as f64 / (2 * k) as f64, profile });
+            let (inv_n, phi) = if n > 0 {
+                rank += 1;
+                (1.0 / n as f64, (2 * rank - 1) as f64 / (2 * live) as f64)
+            } else {
+                (0.0, 0.0)
+            };
+            seqs.push(Seq { n, inv_n, phi, profile });
         }
         let demand: f64 = scheduled.iter().map(|(rho, p)| rho * p.final_rate()).sum();
         if demand > 1.0 + OVERCOMMIT_TOLERANCE {
             return Err(SamplingError::Overcommitted { demand });
         }
-        let u = if total == 0 { 1.0 } else { uniform_len as f64 / total as f64 };
-        let mut profiles = vec![Profile::uniform(&scheduled, u.max(f64::MIN_POSITIVE))];
+        // Without uniform elements the shared profile is never read; any valid one will do.
+        let uniform = if uniform_len == 0 {
+            Profile::delayed_linear(0.0, 0.0)
+        } else {
+            Profile::uniform(&scheduled, uniform_len as f64 / total as f64)
+        };
+        let mut profiles = vec![uniform];
         profiles.extend(scheduled.into_iter().map(|(_, p)| p));
         Ok(Self { seqs, profiles, total })
     }
 
     /// Length of the merged sequence (sum of all sequence lengths).
-    pub fn len(&self) -> u64 {
+    pub(crate) fn len(&self) -> u64 {
         self.total
     }
-
-
 
     /// Rate profile of `seq`.
     #[inline(always)]
@@ -181,7 +195,7 @@ impl Interleave {
     ///
     /// # Panics
     /// If `range.end > len()` or `range.start > range.end`.
-    pub fn iter(&self, range: Range<u64>) -> Iter<'_> {
+    pub(crate) fn iter(&self, range: Range<u64>) -> Iter<'_> {
         assert!(range.start <= range.end, "interleave: invalid range");
         assert!(range.end <= self.total, "interleave: range end {} out of range", range.end);
         Iter::new(self, range)

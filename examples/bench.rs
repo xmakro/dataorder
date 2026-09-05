@@ -1,4 +1,4 @@
-//! Cost of typical orders: seek = `order.iter_from(pos)` at a random position (positions a
+//! Cost of typical orders: seek = `order.iter(pos..)` at a random position (positions a
 //! cursor, allocating it), walk = one element of that cursor after the seek, get =
 //! `order.get(pos)` at a random position.
 //! `cargo run --release --example bench`
@@ -12,7 +12,7 @@ fn measure(name: &str, seq: Seq<usize>, count: usize) {
     let seeks = 200;
     let t = Instant::now();
     for i in 0..seeks {
-        let _ = black_box(order.iter_from(n / seeks * i + 1));
+        let _ = black_box(order.iter(n / seeks * i + 1..));
     }
     let seek_us = t.elapsed().as_nanos() as f64 / seeks as f64 / 1000.0;
 
@@ -67,20 +67,24 @@ fn main() {
     measure("shuffle(concat(100 × source 1e6))", Seq::concat((0..100).map(|i| src(i, m))).shuffle(7), 5 * m);
     measure("mix(5 × source 1e6)", Seq::mix((0..5).map(|i| src(i, m))), 5 * m);
     measure("mix(80% source + 4 × 5%)", Seq::mix([src(0, 80 * m), src(1, 5 * m), src(2, 5 * m), src(3, 5 * m), src(4, 5 * m)]), 5 * m);
-    measure("mix(60% shuffled + 9 × 4.4% shuffled)", Seq::mix((0..10).map(|i| src(i, if i == 0 { 60 * m } else { 4_444_444 }).shuffle(i as u64 + 1))), 5 * m);
+    measure(
+        "mix(60% shuffled + 9 × 4.4% shuffled)",
+        Seq::mix((0..10).map(|i| src(i, if i == 0 { 60 * m } else { 4_444_444 }).shuffle(i as u64 + 1))),
+        5 * m,
+    );
     measure("mix(100 × source 1e6)", Seq::mix((0..100).map(|i| src(i, m))), 5 * m);
     measure("mix(100 × shuffled)", Seq::mix(shuffled(100, m)), 5 * m);
     measure("mix(100 × shuffled, 20% scheduled)", Seq::mix_with(scheduled(100, m)), 5 * m);
     measure("mix(1000 × shuffled, 20% scheduled)", Seq::mix_with(scheduled(1000, 100_000)), 5 * m);
-    measure("↑ .shard(0, 8)", Seq::mix_with(scheduled(100, m)).shard(0, 8), m);
-    measure("↑ .shard(0, 512)", Seq::mix_with(scheduled(100, m)).shard(0, 512), 100_000);
+    measure("↑ .shard(8, 0)", Seq::mix_with(scheduled(100, m)).shard(8, 0), m);
+    measure("↑ .shard(512, 0)", Seq::mix_with(scheduled(100, m)).shard(512, 0), 100_000);
     let nested = Seq::mix_with([
         (Seq::concat([src(0, m).shuffle(1), src(1, m).shuffle(2)]).shuffle(3), Sampling::Uniform),
         (src(2, m).shuffle(4).take(500_000), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
         (src(3, m).shuffle(5).repeat(2), Sampling::DelayedLinear { start: 0.1, full: 0.4 }),
     ])
     .repeat(3)
-    .shard(1, 4);
-    measure("repeat(3, mix(3 nested)).shard(1, 4)", nested, m);
+    .shard(4, 1);
+    measure("repeat(3, mix(3 nested)).shard(4, 1)", nested, m);
     measure("shuffle(mix(100 × source 1e6))  [slow path]", Seq::mix((0..100).map(|i| src(i, m))).shuffle(9), 100_000);
 }

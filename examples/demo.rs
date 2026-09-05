@@ -1,6 +1,6 @@
 //! A training-style schedule: three sources, one delayed, one ramped, shuffled per epoch
 //! and sharded over four workers.
-use dataorder::{Source, Order, Sampling, Seq};
+use dataorder::{Order, Sampling, Seq, Source};
 
 #[derive(Clone)]
 struct Src {
@@ -25,7 +25,7 @@ fn main() {
     let sources: Vec<(char, usize)> = order.sources().iter().map(|s| (s.name, s.len)).collect();
     println!("length {} over sources {sources:?}", order.len());
 
-    let line: String = order.iter(0..order.len()).map(|(s, _)| s.name).collect();
+    let line: String = order.iter(..).map(|(s, _)| s.name).collect();
     println!("order (two epochs):\n{line}");
 
     println!("\nepoch 1 in detail, first 20 elements:");
@@ -34,7 +34,7 @@ fn main() {
 
     println!("\nfour shards, first 10 elements each (shard w holds every 4th element, offset w):");
     for w in 0..4 {
-        let shard = Order::new(seq.clone().shard(w, 4)).unwrap();
+        let shard = Order::new(seq.clone().shard(4, w)).unwrap();
         let part: Vec<String> = shard.iter(0..10).map(|(s, i)| format!("{}{i}", s.name)).collect();
         println!("  shard {w}: {}", part.join(" "));
     }

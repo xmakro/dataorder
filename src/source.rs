@@ -8,6 +8,9 @@ use std::sync::Arc;
 /// dataset handle and put the handle into [`Seq::Source`](crate::Seq::Source); the order
 /// yields `(&handle, index)`. A bare `usize` is a source too, handy when only the order
 /// matters.
+///
+/// The order reads the length once, when it is built; a source whose length changes
+/// afterwards yields indices past its new end.
 pub trait Source {
     /// Number of elements.
     fn len(&self) -> usize;
@@ -25,6 +28,12 @@ impl Source for usize {
 }
 
 impl<T: Source + ?Sized> Source for &T {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+}
+
+impl<T: Source + ?Sized> Source for &mut T {
     fn len(&self) -> usize {
         (**self).len()
     }

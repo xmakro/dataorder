@@ -164,7 +164,11 @@ mod tests {
     #[test]
     fn uniform_absorbs_exactly() {
         // u·F_U(τ) + Σ ρ_i·F_i(τ) = τ for every τ.
-        let scheduled = vec![(0.2, Profile::delayed_linear(0.3, 0.3)), (0.25, Profile::delayed_linear(0.1, 0.7)), (0.05, Profile::delayed_linear(0.0, 0.4))];
+        let scheduled = vec![
+            (0.2, Profile::delayed_linear(0.3, 0.3)),
+            (0.25, Profile::delayed_linear(0.1, 0.7)),
+            (0.05, Profile::delayed_linear(0.0, 0.4)),
+        ];
         let u = 0.5;
         let fu = Profile::uniform(&scheduled, u);
         for t in grid() {

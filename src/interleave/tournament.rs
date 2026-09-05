@@ -22,11 +22,7 @@ const REMOVED: f64 = f64::INFINITY;
 /// that matches are integer comparisons.
 fn sortable(key: f64) -> u64 {
     let b = key.to_bits();
-    if b >> 63 == 1 {
-        !b
-    } else {
-        b | 1 << 63
-    }
+    if b >> 63 == 1 { !b } else { b | 1 << 63 }
 }
 
 /// Inverse of [`sortable`].
@@ -36,7 +32,7 @@ fn float(bits: u64) -> f64 {
 
 /// A tournament tree over `k` leaves with `f64` keys and values of type `V`.
 #[derive(Clone, Debug)]
-pub struct TournamentTree<V> {
+pub(crate) struct TournamentTree<V> {
     /// Nodes in heap layout over `n` leaves, `n` the smallest power of two `≥ k` (the
     /// padding leaves hold `+∞` and never win): internal node `m` (`1 ≤ m < n`) has
     /// children `2m` and `2m+1`, leaf `i` is node `n + i`. `nodes[m]` holds the key and
@@ -78,44 +74,74 @@ impl Entry {
 }
 
 impl<V> TournamentTree<V> {
+    /// A tree without leaves, allocating nothing; [`rebuild`](TournamentTree::rebuild) fills it.
+    pub(crate) fn empty() -> Self {
+        Self { nodes: Vec::new(), values: Vec::new(), live: 0 }
+    }
+
     /// Builds the tree from the leaves' initial keys and values (leaf `i` = `leaves[i]`).
-    pub fn new(leaves: impl IntoIterator<Item = (f64, V)>) -> Self {
-        let (keys, values): (Vec<f64>, Vec<V>) = leaves.into_iter().unzip();
-        let k = keys.len();
-        assert!(k < (u32::MAX / 2) as usize, "tournament tree: too many leaves");
-        let n = k.next_power_of_two();
+    #[cfg(test)]
+    pub(crate) fn new(leaves: impl IntoIterator<Item = (f64, V)>) -> Self {
+        let mut tree = Self::empty();
+        tree.rebuild(leaves);
+        tree
+    }
+
+    /// Replaces the tree by one over new leaves, reusing the node and value allocations.
+    ///
+    /// # Panics
+    /// If there are `u32::MAX / 2` leaves or more.
+    pub(crate) fn rebuild(&mut self, leaves: impl IntoIterator<Item = (f64, V)>) {
         // `winner[m]` is the winner of the subtree at node `m`: leaves `n..n+k` hold the
         // keys, `n+k..2n` are the padding, and the internal nodes are filled bottom-up.
-        let mut winner: Vec<Entry> = std::iter::repeat_n(Entry::new(REMOVED, 0), n)
-            .chain(keys.iter().enumerate().map(|(i, &key)| Entry::new(key, i as u32)))
-            .chain((k..n).map(|i| Entry::new(REMOVED, i as u32)))
-            .collect();
-        let mut nodes = vec![Entry::new(REMOVED, 0); n];
+        let leaves = leaves.into_iter();
+        let at_most = leaves.size_hint().1.unwrap_or(0);
+        let mut winner: Vec<Entry> = Vec::with_capacity(2 * at_most.next_power_of_two());
+        self.values.clear();
+        self.values.reserve(at_most);
+        for (key, value) in leaves {
+            winner.push(Entry::new(key, winner.len() as u32));
+            self.values.push(value);
+        }
+        let k = winner.len();
+        assert!(k < (u32::MAX / 2) as usize, "tournament tree: too many leaves");
+        let n = k.next_power_of_two();
+        winner.resize(2 * n, Entry::new(REMOVED, 0));
+        // Move the leaves to their nodes, from the back so that nothing is overwritten
+        // before it is read (`n + i ≥ k > j` for every leaf `j` still to be moved).
+        for i in (0..k).rev() {
+            winner[n + i] = winner[i];
+        }
+        for i in k..n {
+            winner[n + i] = Entry::new(REMOVED, i as u32);
+        }
+        self.nodes.clear();
+        self.nodes.resize(n, Entry::new(REMOVED, 0));
         for m in (1..n).rev() {
             let (a, b) = (winner[2 * m], winner[2 * m + 1]);
             let (w, l) = if b.beats(a) { (b, a) } else { (a, b) };
             winner[m] = w;
-            nodes[m] = l;
+            self.nodes[m] = l;
         }
-        nodes[0] = winner[1];
-        Self { nodes, values, live: k }
+        self.nodes[0] = winner[1];
+        self.live = k;
     }
 
     /// Number of leaves not yet removed.
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.live
     }
 
     /// `true` when every leaf has been removed.
     #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.live == 0
     }
 
     /// Key and value of the leaf with the smallest key.
     #[inline(always)]
-    pub fn min(&self) -> Option<(f64, &V)> {
+    pub(crate) fn min(&self) -> Option<(f64, &V)> {
         if self.live == 0 {
             return None;
         }
@@ -128,7 +154,7 @@ impl<V> TournamentTree<V> {
     /// # Panics
     /// If the tree is empty.
     #[inline(always)]
-    pub fn set_min(&mut self, key: f64, value: V) {
+    pub(crate) fn set_min(&mut self, key: f64, value: V) {
         assert!(self.live > 0, "tournament tree: empty");
         let leaf = self.nodes[0].leaf;
         self.values[leaf as usize] = value;
@@ -140,7 +166,7 @@ impl<V> TournamentTree<V> {
     /// # Panics
     /// If the tree is empty.
     #[inline(always)]
-    pub fn remove_min(&mut self) {
+    pub(crate) fn remove_min(&mut self) {
         assert!(self.live > 0, "tournament tree: empty");
         let leaf = self.nodes[0].leaf;
         self.live -= 1;
@@ -155,15 +181,22 @@ impl<V> TournamentTree<V> {
         let mut m = (n + cand.leaf as usize) / 2;
         while m >= 1 {
             let stored = self.nodes[m];
-            let stored_wins = stored.beats(cand);
-            // The outcome is unpredictable in a merge; ask for conditional moves rather
-            // than a branch (LLVM otherwise turns the selects into a branch here).
-            self.nodes[m] = select_unpredictable(stored_wins, cand, stored);
-            cand = select_unpredictable(stored_wins, stored, cand);
+            let (loser, winner) = trade(stored.beats(cand), cand, stored);
+            self.nodes[m] = loser;
+            cand = winner;
             m /= 2;
         }
         self.nodes[0] = cand;
     }
+}
+
+/// `(loser, winner)` of the match between the candidate and the stored loser: the two trade
+/// places when the stored one wins. The outcome is unpredictable in a merge, so this asks for
+/// conditional moves rather than a branch (LLVM has been seen to turn a plain `if` into one,
+/// and a masked trade lengthens the dependency chain by about 3 ns per element at `k = 100`).
+#[inline(always)]
+fn trade(stored_wins: bool, cand: Entry, stored: Entry) -> (Entry, Entry) {
+    (select_unpredictable(stored_wins, cand, stored), select_unpredictable(stored_wins, stored, cand))
 }
 
 #[cfg(test)]
@@ -196,10 +229,16 @@ mod tests {
     #[test]
     fn matches_binary_heap() {
         let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+        let mut tree = TournamentTree::new(Vec::new());
         for &n in &[1usize, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 100, 1000] {
             for _ in 0..(if n < 20 { 50 } else { 3 }) {
                 let keys: Vec<f64> = (0..n).map(|_| rng.key()).collect();
-                let mut tree = TournamentTree::new(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
+                // Alternately a fresh tree and a rebuilt one.
+                if rng.next().is_multiple_of(2) {
+                    tree = TournamentTree::new(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
+                } else {
+                    tree.rebuild(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
+                }
                 let mut heap: BinaryHeap<Reverse<K>> = keys.iter().enumerate().map(|(i, &key)| Reverse(k(key, i as u32))).collect();
                 let mut steps = 0;
                 while let Some(Reverse(K(bits, leaf))) = heap.pop() {
@@ -234,7 +273,7 @@ mod tests {
     /// increments (the element sinks to a random depth) and tiny ones (it stays on top).
     /// `cargo test --release -- --ignored bench_vs_binary_heap --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "benchmark: run with --ignored --nocapture"]
     fn bench_vs_binary_heap() {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
@@ -262,7 +301,8 @@ mod tests {
             }
             let tree_ns = t0.elapsed().as_nanos() as f64 / ops as f64;
 
-            let mut heap: BinaryHeap<Reverse<(u64, u32)>> = keys.iter().enumerate().map(|(i, &key)| Reverse((key.to_bits(), i as u32))).collect();
+            let mut heap: BinaryHeap<Reverse<(u64, u32)>> =
+                keys.iter().enumerate().map(|(i, &key)| Reverse((key.to_bits(), i as u32))).collect();
             let t0 = Instant::now();
             let mut acc2 = 0u64;
             for i in 0..ops {

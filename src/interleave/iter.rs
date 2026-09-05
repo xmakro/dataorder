@@ -1,15 +1,16 @@
-//! Iteration over a range of the joint sequence. [`Iter::new`] seeks to the range's start;
-//! [`advance`] then takes the next element from a tournament tree over the sequences' heads.
-//! The `#[inline(always)]` attributes are measured: they keep the whole step inside the
-//! cursor's mix step, which is worth about 3 ns per element.
+//! Iteration over a range of the joint sequence. [`Iter::seek`] positions at the range's
+//! start; [`advance`] then takes the next element from a tournament tree over the sequences'
+//! heads. The `#[inline(always)]` attributes are measured: they keep the whole step inside
+//! the cursor's mix step, which is worth about 3 ns per element.
 
-use super::tournament::TournamentTree;
 use super::Interleave;
+use super::tournament::TournamentTree;
 use std::ops::Range;
 
-/// Iterator returned by [`Interleave::iter`]; yields `(sequence, index_in_sequence)`.
+/// Iterator returned by [`Interleave::iter`]; yields `(sequence, index_in_sequence)`. It
+/// can be [seeked](Iter::seek) again and reuses its buffers when it is.
 #[derive(Clone, Debug)]
-pub struct Iter<'a> {
+pub(crate) struct Iter<'a> {
     il: &'a Interleave,
     tree: TournamentTree<Slot>,
     remaining: u64,
@@ -18,25 +19,33 @@ pub struct Iter<'a> {
 impl<'a> Iter<'a> {
     /// Seeks to `range.start` (the range is already validated) and builds the tree of heads.
     pub(crate) fn new(il: &'a Interleave, range: Range<u64>) -> Self {
-        let (a, remaining) = (range.start, range.end - range.start);
-        let mut tree = TournamentTree::new(Vec::new());
-        if remaining > 0 {
-            let (counts, base) = counts_below(il, a);
-            // Leaves in sequence order, so that ties go to the lower sequence index.
-            tree = TournamentTree::new(counts.iter().enumerate().filter(|&(s, &c)| c < il.seqs[s].n).map(|(s, &c)| {
-                let mut seg = 0;
-                let key = il.key(s, c, &mut seg);
-                (key, slot(il, s, c, key, seg))
-            }));
-            for _ in base..a {
-                advance(il, &mut tree);
-            }
-        }
-        Iter { il, tree, remaining }
+        let mut iter = Iter { il, tree: TournamentTree::empty(), remaining: 0 };
+        iter.seek(range);
+        iter
     }
-}
 
-impl Iter<'_> {
+    /// Repositions at `range` (already validated), reusing the tree's allocations: the seek
+    /// counts, per sequence, the elements before the start, rebuilds the tree over the heads
+    /// and steps through the few positions the counts fell short by.
+    pub(crate) fn seek(&mut self, range: Range<u64>) {
+        let (a, remaining) = (range.start, range.end - range.start);
+        self.remaining = remaining;
+        if remaining == 0 {
+            return;
+        }
+        let il = self.il;
+        let (counts, base) = counts_below(il, a);
+        // Leaves in sequence order, so that ties go to the lower sequence index.
+        self.tree.rebuild(counts.iter().enumerate().filter(|&(s, &c)| c < il.seqs[s].n).map(|(s, &c)| {
+            let mut seg = 0;
+            let key = il.key(s, c, &mut seg);
+            (key, slot(il, s, c, key, seg))
+        }));
+        for _ in base..a {
+            advance(il, &mut self.tree);
+        }
+    }
+
     /// The next element of an iterator that is not exhausted (checked in debug builds
     /// only): the walk without the `Option`.
     #[inline(always)]
@@ -60,10 +69,7 @@ impl Iterator for Iter<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match usize::try_from(self.remaining) {
-            Ok(n) => (n, Some(n)),
-            Err(_) => (usize::MAX, None),
-        }
+        usize::try_from(self.remaining).map_or((usize::MAX, None), |n| (n, Some(n)))
     }
 }
 

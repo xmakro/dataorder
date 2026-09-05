@@ -4,17 +4,20 @@
 //! interleave's tournament tree instead of a seek per element); a `Shuffle` reads its child
 //! by random access ([`get`]) because its positions are scattered.
 //!
-//! The mix and shuffle steps live in their own structs. The mix step is inlined into the
-//! per-node dispatcher (a call per element costs more than its code); the shuffle step is
-//! not, since inlined it would make every other node kind pay its prologue at each level.
+//! Children of wide nodes (the parts of a `Mix`, the current part of a `Concat`) are built
+//! when they are first entered, so a cursor costs what it visits. The mix and shuffle steps
+//! live in their own structs. The mix step is inlined into the per-node dispatcher (a call
+//! per element costs more than its code); the shuffle step is not, since inlined it would
+//! make every other node kind pay its prologue at each level.
 
 use crate::interleave::{Interleave, Iter};
-use crate::order::{get, Node, Order};
+use crate::order::{Node, Order, get};
 use crate::perm::{self, Key, Shape};
 use std::ops::Range;
 
 /// Iterator over a range of an [`Order`], returned by [`Order::iter`]; yields
-/// `(&source, index in the source)`.
+/// `(&source, index in the source)`. [`seek`](Cursor::seek) repositions it, and
+/// [`nth`](Iterator::nth) skips without visiting.
 #[derive(Debug)]
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
@@ -47,17 +50,34 @@ impl<'a, T> Cursor<'a, T> {
         (self.end - self.pos) as usize
     }
 
-    /// Continues at `pos`, which may lie anywhere before the end of the range.
+    /// Continues at `pos`, anywhere up to the end of the range. Moving forward skips (a mix
+    /// steps through its interleave, or re-seeks it for a long hop); moving backward seeks
+    /// afresh. Either way the cursor's allocations are reused, so seeking is the way to
+    /// visit many scattered positions.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::mix([Seq::source(100).shuffle(1), Seq::source(50)]))?;
+    /// let mut cursor = order.iter(..);
+    /// cursor.seek(120);
+    /// assert_eq!(cursor.position(), 120);
+    /// assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(order.get(120)).map(|(&s, i)| (s, i)));
+    /// cursor.seek(7);
+    /// assert_eq!(cursor.len(), 150 - 7);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     ///
     /// # Panics
     /// If `pos` is beyond the end of the range.
     pub fn seek(&mut self, pos: usize) {
         let pos = pos as u64;
         assert!(pos <= self.end, "dataorder: seek to {pos} beyond the end {}", self.end);
-        self.pos = pos;
-        if pos < self.end {
+        if pos > self.pos && pos < self.end {
+            self.root.skip(pos - self.pos);
+        } else if pos < self.pos {
             self.root.seek(pos, self.ctx);
         }
+        self.pos = pos;
     }
 }
 
@@ -81,6 +101,20 @@ impl<'a, T> Iterator for Cursor<'a, T> {
         Some((&self.sources[s as usize], i as usize))
     }
 
+    /// Skips `n` elements without visiting them, then yields the next.
+    fn nth(&mut self, n: usize) -> Option<(&'a T, usize)> {
+        let n = n as u64;
+        if n >= self.end - self.pos {
+            self.pos = self.end;
+            return None;
+        }
+        if n > 0 {
+            self.root.skip(n);
+            self.pos += n;
+        }
+        self.next()
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining(), Some(self.remaining()))
     }
@@ -94,18 +128,48 @@ impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 const UNSEEKED: u64 = u64::MAX;
 
 /// An explicit tag: with one hidden in a field's niche, every dispatch would decode it.
+/// `Empty` doubles as "not built yet" for the lazily built children of a `Concat` or `Mix`,
+/// whose real children are never empty (a concat drops them, a mix never draws from them).
 #[derive(Clone, Debug)]
 #[repr(u8)]
 pub(crate) enum NodeCursor<'a> {
     Empty,
-    Source { src: u32, offset: u64, next: u64 },
-    /// Only the current child has a cursor; the others are built on entry.
-    Concat { children: &'a [Node], offsets: &'a [u64], idx: usize, left: u64, ctx: u64, child: Box<Self> },
+    Source {
+        src: u32,
+        offset: u64,
+        next: u64,
+    },
+    /// Only the current child has a cursor, built when the concat is entered or seeked.
+    Concat {
+        children: &'a [Node],
+        offsets: &'a [u64],
+        idx: usize,
+        left: u64,
+        ctx: u64,
+        child: Box<Self>,
+    },
     Mix(MixCursor<'a>),
     Shuffle(ShuffleCursor<'a>),
-    Repeat { child_len: u64, depth: u32, epoch: u64, left: u64, ctx: u64, child: Box<Self> },
-    Slice { start: u64, child: Box<Self> },
-    Stride { step: u64, offset: u64, len: u64, left: u64, child: Box<Self> },
+    /// `depth` counts the repeats above this one; it salts the epoch contexts.
+    Repeat {
+        child_len: u64,
+        depth: u32,
+        epoch: u64,
+        left: u64,
+        ctx: u64,
+        child: Box<Self>,
+    },
+    Slice {
+        start: u64,
+        child: Box<Self>,
+    },
+    Stride {
+        step: u64,
+        offset: u64,
+        len: u64,
+        left: u64,
+        child: Box<Self>,
+    },
 }
 
 impl<'a> NodeCursor<'a> {
@@ -114,16 +178,13 @@ impl<'a> NodeCursor<'a> {
         match node {
             Node::Empty => NodeCursor::Empty,
             Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: 0 },
-            Node::Concat { offsets, children } => NodeCursor::Concat {
-                children,
-                offsets,
-                idx: 0,
-                left: 0,
-                ctx: 0,
-                child: Box::new(NodeCursor::new(&children[0])),
-            },
+            Node::Concat { offsets, children } => {
+                NodeCursor::Concat { children, offsets, idx: 0, left: 0, ctx: 0, child: Box::new(NodeCursor::Empty) }
+            }
             Node::Mix { il, children } => NodeCursor::Mix(MixCursor::new(il, children)),
-            Node::Shuffle { seed, shape, child } => NodeCursor::Shuffle(ShuffleCursor { seed: *seed, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 }),
+            Node::Shuffle { seed, shape, child } => {
+                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 })
+            }
             Node::Repeat { child_len, depth, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
                 depth: *depth,
@@ -133,13 +194,9 @@ impl<'a> NodeCursor<'a> {
                 child: Box::new(NodeCursor::new(child)),
             },
             Node::Slice { start, child, .. } => NodeCursor::Slice { start: *start, child: Box::new(NodeCursor::new(child)) },
-            Node::Stride { step, offset, len, child } => NodeCursor::Stride {
-                step: *step,
-                offset: *offset,
-                len: *len,
-                left: 0,
-                child: Box::new(NodeCursor::new(child)),
-            },
+            Node::Stride { step, offset, len, child } => {
+                NodeCursor::Stride { step: *step, offset: *offset, len: *len, left: 0, child: Box::new(NodeCursor::new(child)) }
+            }
         }
     }
 
@@ -150,7 +207,7 @@ impl<'a> NodeCursor<'a> {
             NodeCursor::Source { offset, next, .. } => *next = *offset + pos,
             NodeCursor::Concat { children, offsets, idx, left, ctx: c, child } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
-                if i != *idx {
+                if i != *idx || matches!(**child, NodeCursor::Empty) {
                     *idx = i;
                     **child = NodeCursor::new(&children[i]);
                 }
@@ -272,12 +329,13 @@ impl<'a> NodeCursor<'a> {
     }
 }
 
-/// The cursor of a `Mix`. Children are seeked lazily: `next_j[s]` is the index the cursor
-/// of part `s` stands at, or [`UNSEEKED`]; skipping leaves them behind and the mismatch
-/// re-seeks them.
+/// The cursor of a `Mix`. Children are built and seeked lazily: `next_j[s]` is the index
+/// the cursor of part `s` stands at, or [`UNSEEKED`]; skipping leaves them behind and the
+/// mismatch re-seeks them.
 #[derive(Clone, Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
+    children: &'a [Node],
     iter: Iter<'a>,
     pos: u64,
     next_j: Vec<u64>,
@@ -289,16 +347,17 @@ impl<'a> MixCursor<'a> {
     fn new(il: &'a Interleave, children: &'a [Node]) -> Self {
         MixCursor {
             il,
+            children,
             iter: il.iter(0..0),
             pos: 0,
             next_j: vec![UNSEEKED; children.len()],
-            cursors: children.iter().map(NodeCursor::new).collect(),
+            cursors: children.iter().map(|_| NodeCursor::Empty).collect(),
             ctx: 0,
         }
     }
 
     fn seek(&mut self, pos: u64, ctx: u64) {
-        self.iter = self.il.iter(pos..self.il.len());
+        self.iter.seek(pos..self.il.len());
         self.pos = pos;
         self.next_j.fill(UNSEEKED);
         self.ctx = ctx;
@@ -310,17 +369,28 @@ impl<'a> MixCursor<'a> {
         let (s, j) = self.iter.step();
         self.pos += 1;
         if self.next_j[s] != j {
-            self.cursors[s].seek(j, self.ctx);
+            self.seek_child(s, j);
         }
         self.next_j[s] = j + 1;
         self.cursors[s].next()
+    }
+
+    /// Builds the cursor of part `s` if it has not been entered yet and seeks it to `j`.
+    /// Out of the walk's hot loop: inlined, it cost 0.3 to 0.6 ns per element on mixes.
+    #[cold]
+    #[inline(never)]
+    fn seek_child(&mut self, s: usize, j: u64) {
+        if matches!(self.cursors[s], NodeCursor::Empty) {
+            self.cursors[s] = NodeCursor::new(&self.children[s]);
+        }
+        self.cursors[s].seek(j, self.ctx);
     }
 
     /// A long skip re-seeks the interleave instead of stepping through it.
     fn skip(&mut self, m: u64) {
         self.pos += m;
         if m >= 4 * self.cursors.len() as u64 {
-            self.iter = self.il.iter(self.pos..self.il.len());
+            self.iter.seek(self.pos..self.il.len());
             self.next_j.fill(UNSEEKED);
         } else {
             for _ in 0..m {

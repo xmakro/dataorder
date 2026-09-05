@@ -66,3 +66,22 @@ Not worth it at all:
 The full-optimization tree (AVX-512 permutations, buffers, `fill`, mix leaves) is archived
 outside the repository and can be revived from these notes if the shuffle path ever matters
 more than the code it costs.
+
+## Review round (2026-09-04)
+
+Changes made for correctness or API reasons, checked against the table above with interleaved
+runs of the old and new binaries (the only way to separate them from the ±1 ns drift between
+sessions):
+
+- Child cursors of a mix (and the current child of a concat) are built when first entered.
+  Cursor creation for the nested realistic order went from 47 µs to 0.1 µs; the walk is
+  unchanged, but only with the child seek marked `#[cold] #[inline(never)]`: inlined into the
+  mix step it cost 0.3 to 0.6 ns per element on every mix row.
+- The interleave's iterator seeks in place and the tournament tree is rebuilt into its
+  existing allocations, so `Cursor::seek` and `Iterator::nth` reuse a cursor; `get` on a mix
+  is 5 to 30 % faster from the same change (fewer, presized allocations).
+- Rejected: a masked trade instead of `select_unpredictable` in the tree's replay (it would
+  have lowered the minimum Rust version) costs about 3 ns per element on mixes, because it
+  lengthens the dependency chain of every level; counting the repeat depth at run time while
+  descending (it would have saved a compile-time pass) costs about 0.5 ns per element on
+  shuffles. The depth stays in the node and weighted parts get a post-pass instead.

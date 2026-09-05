@@ -101,8 +101,24 @@ fn scheduled_cases() -> Vec<(Vec<u64>, Vec<Sampling>)> {
         (vec![1000, 300], vec![Uniform, DelayedLinear { start: 0.4, full: 0.4 }]),
         (vec![2000, 500], vec![Uniform, DelayedLinear { start: 0.2, full: 0.6 }]),
         (vec![14, 124, 43], vec![DelayedLinear { start: 0.5, full: 0.5 }, Uniform, DelayedLinear { start: 0.2, full: 0.6 }]),
-        (vec![500, 500, 500, 500], vec![Uniform, DelayedLinear { start: 0.1, full: 0.1 }, DelayedLinear { start: 0.3, full: 0.3 }, DelayedLinear { start: 0.0, full: 0.5 }]),
-        (vec![300, 300, 0, 7], vec![DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.9, full: 0.9 }, Uniform]),
+        (
+            vec![500, 500, 500, 500],
+            vec![
+                Uniform,
+                DelayedLinear { start: 0.1, full: 0.1 },
+                DelayedLinear { start: 0.3, full: 0.3 },
+                DelayedLinear { start: 0.0, full: 0.5 },
+            ],
+        ),
+        (
+            vec![300, 300, 0, 7],
+            vec![
+                DelayedLinear { start: 0.0, full: 0.0 },
+                DelayedLinear { start: 0.0, full: 0.0 },
+                DelayedLinear { start: 0.9, full: 0.9 },
+                Uniform,
+            ],
+        ),
         (vec![1000, 50, 50], vec![Uniform, DelayedLinear { start: 0.9, full: 0.9 }, DelayedLinear { start: 0.8, full: 0.95 }]),
         (vec![100, 100, 800], vec![DelayedLinear { start: 0.0, full: 0.5 }, DelayedLinear { start: 0.5, full: 1.0 }, Uniform]),
         (vec![3, 1000, 1], vec![DelayedLinear { start: 0.7, full: 0.7 }, Uniform, DelayedLinear { start: 0.2, full: 0.9 }]),
@@ -248,10 +264,10 @@ fn random_configurations() {
             assert_eq!(il.iter(a..b).collect::<Vec<_>>(), &all[a as usize..b as usize], "{lens:?} {sampling:?} seek {a}");
         }
         for (s, samp) in sampling.iter().enumerate() {
-            if let DelayedLinear { start: d0, full: _ } = samp {
-                if let Some(first) = all.iter().position(|&(x, _)| x == s) {
-                    assert!(first as f64 >= d0 * n as f64 - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
-                }
+            if let DelayedLinear { start: d0, full: _ } = samp
+                && let Some(first) = all.iter().position(|&(x, _)| x == s)
+            {
+                assert!(first as f64 >= d0 * n as f64 - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
             }
         }
     }
@@ -337,11 +353,7 @@ fn ramp_rate_rises_linearly() {
     let r = 2.0 / (2.0 - 0.2 - 0.6);
     for w in 2..10 {
         let tau0 = w as f64 / 10.0;
-        let expect: f64 = if w < 6 {
-            2000.0 * ((tau0 + 0.1 - 0.2).powi(2) - (tau0 - 0.2).powi(2)) / (0.4 * 1.2)
-        } else {
-            2000.0 * r * 0.1
-        };
+        let expect: f64 = if w < 6 { 2000.0 * ((tau0 + 0.1 - 0.2).powi(2) - (tau0 - 0.2).powi(2)) / (0.4 * 1.2) } else { 2000.0 * r * 0.1 };
         assert!((counts[w] as f64 - expect).abs() <= 3.0, "window {w}: {} vs {expect:.1} ({counts:?})", counts[w]);
     }
 }
@@ -349,21 +361,88 @@ fn ramp_rate_rises_linearly() {
 #[test]
 fn rejects_bad_configurations() {
     use SamplingError::*;
-    assert!(matches!(Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]), Err(Overcommitted { .. })));
-    assert!(matches!(Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.5, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.5 }]), Err(Overcommitted { .. })));
-    assert!(matches!(Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.0, full: 0.9 }]), Err(Overcommitted { .. })));
-    for bad in [DelayedLinear { start: 1.0, full: 1.0 }, DelayedLinear { start: -0.1, full: -0.1 }, DelayedLinear { start: f64::NAN, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.4 }, DelayedLinear { start: 1.0, full: 1.0 }, DelayedLinear { start: 0.2, full: 1.5 }] {
+    assert!(matches!(
+        Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]),
+        Err(Overcommitted { .. })
+    ));
+    assert!(matches!(
+        Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.5, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.5 }]),
+        Err(Overcommitted { .. })
+    ));
+    assert!(matches!(
+        Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.0, full: 0.9 }]),
+        Err(Overcommitted { .. })
+    ));
+    for bad in [
+        DelayedLinear { start: 1.0, full: 1.0 },
+        DelayedLinear { start: -0.1, full: -0.1 },
+        DelayedLinear { start: f64::NAN, full: 0.5 },
+        DelayedLinear { start: 0.5, full: 0.4 },
+        DelayedLinear { start: 1.0, full: 1.0 },
+        DelayedLinear { start: 0.2, full: 1.5 },
+    ] {
         assert!(matches!(Interleave::with_sampling(&[10, 10], &[Uniform, bad]), Err(InvalidParameter { seq: 1, .. })), "{bad:?}");
     }
     assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
-    assert!(matches!(Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]), Err(TooSteep { seq: 1 })));
+    assert!(matches!(
+        Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]),
+        Err(TooSteep { seq: 1 })
+    ));
     // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
     assert!(Interleave::with_sampling(&[10, 0], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]).is_ok());
-    let il = Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }]).unwrap();
+    let il = Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }])
+        .unwrap();
     assert_eq!(full(&il).len(), 200);
     // Exactly at capacity is allowed: the delayed 50% fills the whole second half.
     let il = Interleave::with_sampling(&[500, 500], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]).unwrap();
     assert!(full(&il)[..500].iter().all(|&(s, _)| s == 0));
+}
+
+/// Empty sequences take no part in the stagger: the order is that of the non-empty ones alone.
+#[test]
+fn empty_sequences_do_not_affect_the_order() {
+    let mut rng = Rng(0xE0E0_1234);
+    for lens in uniform_cases() {
+        let live: Vec<u64> = lens.iter().copied().filter(|&n| n > 0).collect();
+        let mut map = Vec::new(); // index in `lens` -> index in `live`
+        let mut next = 0;
+        for &n in &lens {
+            map.push(next);
+            if n > 0 {
+                next += 1;
+            }
+        }
+        let got: Vec<(usize, u64)> = full(&Interleave::new(&lens)).into_iter().map(|(s, j)| (map[s], j)).collect();
+        assert_eq!(got, full(&Interleave::new(&live)), "{lens:?}");
+    }
+    for (lens, sampling) in scheduled_cases() {
+        let il = Interleave::with_sampling(&lens, &sampling).unwrap();
+        let mut lens2 = lens.clone();
+        let mut sampling2 = sampling.clone();
+        let at = rng.below(lens.len() as u64 + 1) as usize;
+        lens2.insert(at, 0);
+        sampling2.insert(at, DelayedLinear { start: 0.99, full: 0.99 });
+        let il2 = Interleave::with_sampling(&lens2, &sampling2).unwrap();
+        let got: Vec<(usize, u64)> = full(&il2).into_iter().map(|(s, j)| (if s > at { s - 1 } else { s }, j)).collect();
+        assert_eq!(got, full(&il), "{lens:?} {sampling:?} with an empty part at {at}");
+    }
+}
+
+/// A seeked-again iterator is the same as a fresh one.
+#[test]
+fn reseeking_matches_fresh_iterators() {
+    let mut rng = Rng(0x5EEC);
+    for il in all_cases() {
+        let n = il.len();
+        let all = full(&il);
+        let mut it = il.iter(0..0);
+        for _ in 0..20 {
+            let a = rng.below(n + 1);
+            let b = (a + rng.below(30)).min(n);
+            it.seek(a..b);
+            assert_eq!(it.by_ref().collect::<Vec<_>>(), &all[a as usize..b as usize], "reseek {a}..{b}");
+        }
+    }
 }
 
 #[test]
@@ -405,8 +484,8 @@ fn huge_lengths_seek_consistently() {
     }
     // Nothing from the delayed sequences early on.
     assert!(il.iter(0..1000).all(|(s, _)| s != 2 && s != 4));
-    // The singleton (sequence 3 of 5, stagger offset 0.7) sits at F_U⁻¹(0.7)·N, within
-    // the k-position warp.
+    // The singleton (sequence 3 of 5 non-empty ones, stagger offset 0.7) sits at
+    // F_U⁻¹(0.7)·N, within the k-position warp.
     let expect = (il.key(3, 0, &mut 0) * n as f64) as u64;
     let found = il.iter(expect - 100..expect + 100).any(|(s, _)| s == 3);
     assert!(found, "singleton not near {expect}");
@@ -415,7 +494,7 @@ fn huge_lengths_seek_consistently() {
 /// Seek and per-element cost of the interleave alone, uniform and with schedules, by `k`.
 /// `cargo test --release -- --ignored bench_seek_and_walk --nocapture`
 #[test]
-#[ignore]
+#[ignore = "benchmark: run with --ignored --nocapture"]
 fn bench_seek_and_walk() {
     use std::hint::black_box;
     use std::time::Instant;
