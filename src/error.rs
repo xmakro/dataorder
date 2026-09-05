@@ -114,11 +114,15 @@ pub enum ErrorKind {
     TooDeep,
     /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
-    /// A schedule parameter of a mix part is out of range or not finite.
+    /// A schedule parameter is out of range or non-finite, or its derived profile
+    /// coefficients overflow floating-point arithmetic.
     InvalidSampling {
         /// The schedule.
         sampling: Sampling,
     },
+    /// The combined uniform profile's coefficients exceed floating-point range, even
+    /// though the individual schedules can be represented.
+    SamplingOverflow,
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep,
@@ -157,6 +161,7 @@ impl fmt::Display for ErrorKind {
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),
+            Self::SamplingOverflow => write!(f, "combined sampling profile exceeds floating-point range"),
             Self::TooSteep => write!(f, "mix part too long for the steepness of its schedule"),
             Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at their peak", demand * 100.0),
             Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
@@ -173,6 +178,7 @@ impl SamplingError {
         match self {
             Self::TooLong => (ErrorKind::MixTooLong, None),
             Self::InvalidParameter { seq, sampling } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
+            Self::Overflow => (ErrorKind::SamplingOverflow, None),
             Self::TooSteep { seq } => (ErrorKind::TooSteep, Some(seq)),
             Self::Overcommitted { demand } => (ErrorKind::Overcommitted { demand }, None),
         }

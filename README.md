@@ -39,13 +39,15 @@ cut to its share of `total`, epochs reshuffled), and on a `Seq`: `.shuffle(seed)
 `.repeat(times)`, `.cycle(len)` (repeated as often as `len` positions need and cut there;
 `cycle(usize::MAX)` never runs out), `.slice(range)`, `.take(n)`, `.skip(n)`, `.stride(step, offset)`,
 `.shard(count, index)`, `.map(f)` and `.try_map(f)` (the same structure over other sources:
-handles become loaded datasets), `.check()` (validate and get the length without building the
-order). `Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once;
+handles become loaded datasets), `.check()` (validate and get the length without consuming the
+configuration). `Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once;
 a cursor is repositioned with `seek(pos)` and re-ranged with `set_range(range)`. A `Seq` is
 plain data (clone, compare, hash; the `serde` feature derives `Serialize` and `Deserialize`);
 building the order consumes it, and the order owns the sources, yields references to them
 (`order.source_index(&s)` says which one, also when sources compare equal) and gives them back
-with `into_sources`. A bare `usize` is a source too, when only the order matters, as are
+with `into_sources`. JSON consumers should enable `serde_json/float_roundtrip` to preserve
+floating-point weights and schedules exactly; `dataorder/serde` alone does not enable it.
+A bare `usize` is a source too, when only the order matters, as are
 slices, arrays and vectors; `dataorder::salt` and `salt_path` turn a name or a path into a salt.
 
 The precise semantics of every node, what compilation rejects and folds, and the stability
@@ -87,9 +89,11 @@ Every element gets an ideal progress `F⁻¹((j + φ)/n)` and the mix is the sor
 (ties by part index; `φ` staggers the non-empty parts so that equal ones round-robin). Each
 part follows its schedule to within about one element at any position, and the position of an
 element is within `k` (typically `√k`) of `progress·N`, the same warp for all parts. Nothing is
-materialized: a seek counts, per part, the elements below the target progress (`O(k log S)`
-for `k` parts and `S` distinct breakpoints among their schedules; building the mix is
-`O(k + s log s)` for `s` scheduled parts), and the walk takes the minimum of a tournament tree
+materialized: a seek counts the elements below a target progress and replays at most `2k`
+heads, normally `O(k log(S + 1) + k log(k + 1))` for `k` non-empty parts and `S` distinct
+schedule breakpoints. Poor numerical guesses use bounded binary searches (see the crate's
+Cost documentation). Building the mix is `O(k + s log s)` for `s` scheduled parts.
+The walk takes the minimum of a tournament tree
 over the parts' next elements, `⌈log2 k⌉` branch-free comparisons per element. Seeks are exact
 whatever was walked before, because the order is defined as a sort by keys that are monotone
 within a part by construction.
@@ -101,12 +105,16 @@ within a part by construction.
 | 10 000 | 0.44 ms / 0.62 ms / 1.24 ms | 22 ns / 29 ns / 26 ns |
 
 A mix is at most 2⁴⁶ long (`MAX_MIX_LEN`), and a scheduled part must satisfy
-`length × peak rate ≤ 2⁴⁶`. `cargo test --release -- --ignored --nocapture` runs this table
+`length × peak rate ≤ 2⁴⁶`. Extremely narrow transitions whose derived coefficients overflow are
+rejected; use equal adjacent breakpoints for an abrupt change. `cargo test --release -- --ignored --nocapture` runs this table
 and the tournament tree against `BinaryHeap`.
+
+These Ryzen measurements precede the numerical fixes below; the latest comparison is in
+[the numerical review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
 
 ## Shuffle
 
-A seeded permutation of `0..n` in O(1) per element and no state: a seven-round Feistel network
+A seeded permutation of `0..n` in O(1) per element on average and no state: a seven-round Feistel network
 on the `k`-bit numbers (`2^(k−1) < n ≤ 2^k`) with cycle walking to `0..n`. The round function
 adds the round key to half the bits, multiplies by the round's odd multiplier and keeps the top
 bits of the product. It passes joint-distribution (grid and low bits), serial-correlation,
@@ -127,6 +135,10 @@ and positions a cursor and draws its first element, which is what enters the par
 *get*: `order.get(pos)` at a random position. The first row is a realistic training order: two mixes,
 of 1000 and 100 shuffled sources of 0.5–2 million elements, each source repeated 2–4 epochs,
 mixed together.
+
+These are the Ryzen measurements before the numerical review fixes. A comparison on
+Apple Silicon, including the pathological inputs, is recorded in
+[the numerical review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
 
 | order | walk | seek | get |
 |---|---|---|---|
@@ -150,8 +162,9 @@ mixed together.
 | `mix(mix(100 × shuffled), mix(100 × shuffled)).shard(8, 0)` | 106.0 ns | 2.27 µs | 2.0 µs |
 | `shuffle(mix(100 × source))` | 1.9 µs | 1.96 µs | 1.9 µs |
 
-`get` and a seek walk the path from the root to a source: constant work per node, except that
-a `Mix` costs a seek of the interleave (`O(k log s)` for `k` parts, `s` scheduled). A walk keeps a
+`get` and a seek walk the path from the root to a source: a `Concat` searches its offsets
+in `O(log k)`, a `Mix` seeks its interleave as described above, and a `Shuffle` cycle-walks
+its permutation at constant average cost (an individual position can take longer). A walk keeps a
 cursor per node on the active path: a `Mix` costs `⌈log2 k⌉` comparisons per element plus one
 key computation, a `Shuffle` one permutation (about 5.5 ns) plus a `get`-style descent into its
 child (its positions are scattered, so a shuffle *over* a mix pays the interleave seek per
@@ -159,7 +172,10 @@ element: shuffle the parts, not the mix), a `Stride` skips `step − 1` elements
 (a mix steps its interleave, or re-seeks it when that is cheaper, and its parts skip along, a
 nested mix stepping its own interleave, so a shard of a mix of mixes costs about what a shard
 of a flat mix does: the two `.shard(8, 0)` rows). Seeking an existing cursor reuses its
-buffers; `Iterator::nth` skips without visiting. How these numbers came about, and what was
+buffers; `Iterator::nth` skips without visiting. Sharding each part before mixing reduces work
+only when the resulting worker schedules remain feasible: rounding each part
+independently changes proportions and can make a worker overcommitted. Shard the global
+mix when its exact position partition must be preserved. How these numbers came about, and what was
 tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.md).
 
 ## Layout

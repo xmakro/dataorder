@@ -14,12 +14,14 @@ struct Counting;
 thread_local! {
     /// Allocations by this thread, so that the tests can run in parallel.
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // Unavailable only while the thread is being torn down.
         let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
+        let _ = BYTES.try_with(|c| c.set(c.get() + layout.size()));
         unsafe { System.alloc(layout) }
     }
 
@@ -111,7 +113,7 @@ fn count_and_last_do_not_walk() {
     assert!(t.elapsed() < Duration::from_secs(1), "count or last walked the order ({:?})", t.elapsed());
 }
 
-/// A seek of a mix costs `O(k log S)` in the number `S` of distinct breakpoints among the
+/// A seek's counting phase costs `O(k log S)` in the number `S` of distinct breakpoints among the
 /// parts' schedules: from a cold hint the profile's segment is found by a binary search, not
 /// by walking the segments. With 800 distinct starts among 4000 parts, walking made seeks
 /// about 20 times dearer than with one start; searching keeps them within a few times (the
@@ -158,4 +160,23 @@ fn shards_of_nested_mixes_skip_the_inner_cursors() {
     let min = |order: &Order<usize>| (0..5).map(|_| walk(order)).min().unwrap_or(Duration::MAX);
     let (base, shard) = (min(&unsharded), min(&sharded));
     assert!(shard < base * 25, "a shard of a nested mix walked in {shard:?}, the mix itself in {base:?}");
+}
+
+/// Empty parts retain their source handles, but take no cursor slots or seek scratch.
+#[test]
+fn empty_parts_do_not_allocate_runtime_state() {
+    let make = |empty| {
+        Order::new(Seq::mix([Seq::source(1_000_000), Seq::source(1_000_000)].into_iter().chain((0..empty).map(|_| Seq::source(0)))))
+            .unwrap()
+    };
+    let (plain, padded) = (make(0), make(100_000));
+    assert_eq!(padded.sources().len(), 100_002);
+    let bytes = |order: &Order<usize>| {
+        let before = BYTES.get();
+        let mut cursor = order.iter(500_000..);
+        black_box(cursor.next());
+        black_box(order.get(1_000_001));
+        BYTES.get() - before
+    };
+    assert_eq!(bytes(&plain), bytes(&padded));
 }

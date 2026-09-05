@@ -413,9 +413,13 @@ impl<T> Seq<T> {
     /// Over a mix, a shard still steps through every element of the mix's interleave and
     /// keeps one in `count` (the parts' cursors skip past what is dropped; a part that is
     /// itself a mix steps its own interleave), so `count` workers sharding one mix do
-    /// `count` times its interleaving work in total. When that matters, shard the parts and
-    /// mix the shards: each worker then interleaves only its own share, with the same
-    /// schedule.
+    /// up to `count` times its interleaving work in total (long hops re-seek instead).
+    /// Sharding the parts and then mixing their shards can reduce this cost, but rounding
+    /// changes the workers' part proportions and lengths. Check each worker's schedule:
+    /// a globally feasible mix can become overcommitted on a worker. For example, 3 uniform
+    /// elements and 1 delayed until 0.75 are valid globally, but sharding the parts two ways
+    /// gives worker 0 lengths 2 and 1, demanding 4/3 of its draw rate. Shard the global mix
+    /// when its exact position partition and global schedule must be preserved.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

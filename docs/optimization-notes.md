@@ -133,3 +133,41 @@ at ±0.3 ns on most rows and ±1 ns on the realistic order.
   of a concatenation keeps only the parts it touches, and a prefix take of a repeat is the
   repeat cut short (a weighted part is one node less deep); none of these is measurable on
   the table's rows.
+
+## Numerical review (2026-09-05)
+
+Compared the `dab2636` development snapshot with the fixes on an unpinned Apple Silicon Mac,
+using optimized builds of `examples/bench.rs` and small public-API probes. These are local
+checks, not replacements for the pinned Ryzen measurements above. The ordinary benchmark
+was run before and after the changes, then repeated after restoring the zero-start ramp's
+fast inverse. The following ordinary rows are the last fixed/baseline pair:
+
+| operation | before | after |
+|---|---|---|
+| `get` at the midpoint of a trillion uniform elements plus one fading element | 1.08 s | below 1 µs |
+| cursor allocation, two live parts plus 100,000 empty parts | 29,794,880 bytes | 704 bytes |
+| `get`, two live parts plus 100,000 empty parts | 686 µs | below 1 µs |
+| `get`, 100 shuffled parts, 20% scheduled | 6.53 µs | 6.58 µs |
+| `get`, 1000 shuffled parts, 20% scheduled | 62.7 µs | 63.5 µs |
+| walk, 1000 shuffled parts, 20% scheduled | 58.5 ns | 58.1 ns |
+| `get`, nested realistic order | 45.8 µs | 44.8 µs |
+
+The allocation figures count requested bytes during cursor creation, not RSS. With the
+fix, adding empty parts allocates exactly the same runtime state as the two-part order;
+source handles still occupy storage in the compiled order. Ordinary lookup differences
+at this scale are sensitive to scheduling and measurement noise. The first-row seek
+timings varied substantially between runs, so they do not support a speedup claim.
+
+- Rising profiles with a positive starting rate use a stable quotient and canonicalize it
+  against their monotone integral. Zero-start ramps retain their square-root/multiply path:
+  canonicalizing those too added about 14% to scheduled seeks without improving correctness.
+- Slope events remove the previous contribution before adding the new one. An exact
+  floating-point expansion retains even a third, much smaller slope across cancellation;
+  a two-float accumulator alone was insufficient. This extra work occurs during compilation.
+- Seek corrections have bounded local adjustments followed by bisection, and consume a
+  long run of equal keys by counts. The numerical regression tests run in subprocesses
+  with a timeout, so a recurrence of an infinite loop or stack abort fails the test suite.
+- Compilation first moves sources into a vector and builds a tree of source indices.
+  This adds a construction pass and temporary storage, while making recursive frames
+  independent of the source type's size. A maximum-depth tree with 8 KiB array sources
+  is tested on a 2 MiB thread stack in debug and release builds.

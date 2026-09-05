@@ -101,20 +101,53 @@ struct Slot {
 /// except that the counts may fall short by a few elements in total (never overshoot).
 /// Writes the counts into `counts` and returns their sum.
 ///
-/// The elements below progress `a/N` are within about `k` of `a` in number; if they
-/// overshoot, the progress is lowered and the count repeated.
+/// Try the analytic progress and one correction first. If rounding of a profile makes
+/// those guesses poor, bisect progress instead; its nonnegative float bits are ordered,
+/// so at most 63 passes suffice. Never replay more than twice the number of parts.
 fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
     let k = il.seqs.len() as u64;
-    let mut t = a as f64 / il.total as f64;
-    loop {
+    let count = |t, counts: &mut Vec<u64>| {
         counts.clear();
         counts.extend((0..il.seqs.len()).map(|s| count_below(il, s, t)));
-        let base: u64 = counts.iter().sum();
-        if base <= a {
+        counts.iter().sum::<u64>()
+    };
+    let mut t = a as f64 / il.total as f64;
+    let (mut lo, mut hi) = (0.0f64, 1.0f64.next_up());
+    for attempt in 0..2 {
+        let base = count(t, counts);
+        if base <= a && a - base <= 2 * k {
             return base;
         }
-        // Overshot: lower the progress by the excess plus a margin of k and count again.
-        t = ((a as f64 - (base - a + k) as f64) / il.total as f64).max(0.0);
+        if base > a {
+            hi = t
+        } else {
+            lo = t
+        }
+        if attempt == 0 {
+            t = ((a as f64 - (base as f64 - a as f64) - k as f64) / il.total as f64).clamp(lo, hi);
+        }
+    }
+    loop {
+        if hi.to_bits() - lo.to_bits() <= 1 {
+            // The remaining rank lies among equal keys at lo. Consume that tie in part
+            // order, by counts, even if clamping produced a long run of equal keys.
+            let mut left = a - count(lo, counts);
+            for (s, c) in counts.iter_mut().enumerate() {
+                let take = left.min(count_below(il, s, hi) - *c);
+                *c += take;
+                left -= take;
+                if left == 0 {
+                    return a;
+                }
+            }
+            unreachable!("interleave: rank not bracketed");
+        }
+        t = f64::from_bits(lo.to_bits() + (hi.to_bits() - lo.to_bits()) / 2);
+        let base = count(t, counts);
+        if base <= a && a - base <= 2 * k {
+            return base;
+        }
+        if base > a { hi = t } else { lo = t }
     }
 }
 
@@ -125,13 +158,22 @@ fn count_below(il: &Interleave, seq: usize, t: f64) -> u64 {
     let guess = s.n as f64 * il.profile(seq).share(t) - s.phi;
     let mut c = (guess.ceil().max(0.0) as u64).min(s.n);
     let mut seg = 0;
-    while c < s.n && il.key(seq, c, &mut seg) < t {
-        c += 1;
+    for _ in 0..4 {
+        if c < s.n && il.key(seq, c, &mut seg) < t {
+            c += 1;
+        } else if c > 0 && il.key(seq, c - 1, &mut seg) >= t {
+            c -= 1;
+        } else {
+            return c;
+        }
     }
-    while c > 0 && il.key(seq, c - 1, &mut seg) >= t {
-        c -= 1;
+    // A poorly conditioned inverse or accumulated rounding must not cost O(n).
+    let (mut lo, mut hi) = (0, s.n);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if il.key(seq, mid, &mut seg) < t { lo = mid + 1 } else { hi = mid }
     }
-    c
+    lo
 }
 
 /// The slot for element `j` of `seq` (whose key is `key`), with the following element's

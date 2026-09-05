@@ -43,16 +43,17 @@
 //! [`Interleave::iter`] seeks by counting, per sequence, the elements below the progress
 //! `a/N` (inverse formula, then made exact against real keys; `O(log S)` per sequence for a
 //! profile of `S` segments, and the uniform profile has one per distinct breakpoint of the
-//! scheduled ones) and then repeatedly takes the minimum of a
-//! [tournament tree](tournament::TournamentTree) over the next element of every sequence
+//! scheduled ones). A seek then replays up to `2k` heads, adding `O(k log(k + 1))`
+//! work. Poor count guesses use bounded binary searches instead of linear corrections.
+//! The walk repeatedly takes the minimum of a [tournament tree](tournament::TournamentTree) over the next element of every sequence
 //! (`⌈log2 k⌉` comparisons per element).
 //!
 //! `iter(a..b)` yields exactly the elements at positions `a..b` of `iter(0..N)`, whatever
 //! the seek history. The order is defined as the sort by `(key, sequence, index)` and the
 //! tree only ever returns the true minimum of the remaining heads, so its internal state is
 //! irrelevant; the seek reproduces the heads exactly because keys are nondecreasing within
-//! a sequence *by construction* (every step of their evaluation is a correctly rounded
-//! monotone operation), which also means rounding can never duplicate or drop an element.
+//! a sequence by construction (monotone arithmetic, or a canonical inverse of a monotone
+//! polynomial), which also means rounding can never duplicate or drop an element.
 
 mod iter;
 mod profile;
@@ -151,6 +152,9 @@ impl Interleave {
                 // Profile 0 is the shared uniform one; an empty scheduled sequence uses it too.
                 None => 0,
                 Some(p) => {
+                    if n > 0 && !p.is_finite() {
+                        return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
+                    }
                     if n as f64 * p.max_rate() > MAX_TOTAL_LEN as f64 {
                         return Err(SamplingError::TooSteep { seq: i });
                     }
@@ -176,6 +180,9 @@ impl Interleave {
         // Without uniform elements the shared profile is a placeholder that nothing reads.
         let u = if uniform_len == 0 { 0.0 } else { uniform_len as f64 / total as f64 };
         let (uniform, demand) = Profile::uniform(&scheduled, u);
+        if !uniform.is_finite() || !demand.is_finite() {
+            return Err(SamplingError::Overflow);
+        }
         if demand > 1.0 + OVERCOMMIT_TOLERANCE {
             return Err(SamplingError::Overcommitted { demand });
         }
@@ -187,6 +194,13 @@ impl Interleave {
     /// Length of the merged sequence (sum of all sequence lengths).
     pub(crate) fn len(&self) -> u64 {
         self.total
+    }
+
+    /// After validation, compile a mix against only its live children. The stagger and
+    /// profiles already ignored empty parts, so compaction preserves every key and tie.
+    pub(crate) fn remove_empty(&mut self) {
+        self.seqs.retain(|s| s.n > 0);
+        self.seqs.shrink_to_fit();
     }
 
     /// `true` when some non-empty sequence has a schedule.

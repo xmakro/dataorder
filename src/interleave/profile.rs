@@ -12,6 +12,8 @@
 //! to be the same on every target, and `mul_add` rounds differently from a multiply and an
 //! add.
 
+use crate::sum::{Compensated, Expansion};
+
 /// A nonnegative, piecewise-linear draw rate over joint progress, with its running integral.
 #[derive(Clone, Debug)]
 pub(crate) struct Profile {
@@ -31,7 +33,7 @@ pub(crate) struct Profile {
 /// the profile up to `start`, and `c = (r1 − r0) / (2·(end − start))` the coefficient of
 /// `x²` in the share, kept so that keys need no division. A constant rate (`c = 0`) also
 /// keeps `inv_r0 = 1/r0` so that its keys need neither division nor square root; a rising
-/// one keeps `inv_2c = 1/(2c)` and every segment `c4 = 4c`.
+/// one uses a cancellation-free inverse and every segment keeps `c4 = 4c`.
 #[derive(Clone, Copy, Debug)]
 struct Segment {
     start: f64,
@@ -41,6 +43,7 @@ struct Segment {
     share: f64,
     c: f64,
     inv_r0: f64,
+    /// Zero-start ramps have a monotone inverse without any root subtraction.
     inv_2c: f64,
     c4: f64,
 }
@@ -55,7 +58,7 @@ impl Profile {
             if end > start {
                 let inv_r0 = if r1 == r0 && r0 > 0.0 { 1.0 / r0 } else { 0.0 };
                 let c = (r1 - r0) / (2.0 * (end - start));
-                let inv_2c = if c > 0.0 { 1.0 / (2.0 * c) } else { 0.0 };
+                let inv_2c = if c > 0.0 && r0 == 0.0 { 1.0 / (2.0 * c) } else { 0.0 };
                 segs.push(Segment { start, end, r0, r1, share, c, inv_r0, inv_2c, c4: 4.0 * c });
                 share += (r0 + r1) / 2.0 * (end - start);
             }
@@ -74,11 +77,10 @@ impl Profile {
 
     /// `Trapezoid { start: d0, full: d1, fade: d2, off: d3 }`: zero until `d0`, rising
     /// linearly to the full rate at `d1`, constant until `d2`, falling linearly to zero at
-    /// `d3`, zero afterwards. The full rate `r = 2/((d2 + d3) − (d0 + d1))` makes the total
-    /// share one (the same expression as for `delayed_linear` when `d2 = d3 = 1`, evaluated
-    /// in the same order).
+    /// `d3`, zero afterwards. The full rate `r = 2/((d2 − d1) + (d3 − d0))` makes the total
+    /// share one. Subtract endpoints before adding widths to avoid cancellation.
     pub(crate) fn trapezoid(d0: f64, d1: f64, d2: f64, d3: f64) -> Self {
-        let r = 2.0 / (d2 + d3 - d0 - d1);
+        let r = 2.0 / ((d2 - d1) + (d3 - d0));
         Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)])
     }
 
@@ -90,25 +92,27 @@ impl Profile {
     /// A sweep over the segment starts of all scheduled profiles: between two of them every
     /// rate is linear, so the summed rate is too and follows from its value and slope at the
     /// last start. The running slope has every segment's slope added at its start and taken
-    /// away where the next one begins, and the running value is stepped along it; both are
-    /// compensated sums, so the additions and removals leave no residue. That is
+    /// away where the next one begins, and the running value is stepped along it. An
+    /// expansion retains slopes at every magnitude until removal (two floats alone lose
+    /// a third, much smaller slope); the running value uses a compensated sum. That is
     /// `O(s log s)` for `s` scheduled profiles where evaluating every profile at every start
     /// is `O(s²)`, and as accurate as that (about `s` roundings per value either way).
     pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> (Self, f64) {
-        // At a segment's start the summed rate jumps by ρ·(r0 − previous r1) and its slope
-        // changes by ρ·(m − previous m); events in profile order, stably sorted by time.
+        // Remove the old contribution and add the new one separately: forming their
+        // difference first can round away a small new slope before compensation sees it.
         let mut events = Vec::new();
         for (rho, p) in scheduled {
             let (mut prev_r1, mut prev_m) = (0.0, 0.0);
             for seg in &p.segs {
                 let m = (seg.r1 - seg.r0) / (seg.end - seg.start);
-                events.push((seg.start, rho * (seg.r0 - prev_r1), rho * (m - prev_m)));
+                events.push((seg.start, -rho * prev_r1, -rho * prev_m));
+                events.push((seg.start, rho * seg.r0, rho * m));
                 (prev_r1, prev_m) = (seg.r1, m);
             }
         }
         events.sort_by(|a, b| a.0.total_cmp(&b.0));
         let rate = |total: f64| if u > 0.0 { (1.0 - total).max(0.0) / u } else { 0.0 };
-        let (mut total, mut slope) = (Compensated::default(), Compensated::default());
+        let (mut total, mut slope) = (Compensated::default(), Expansion::default());
         let (mut windows, mut peak, mut next, mut t) = (Vec::new(), 0.0f64, 0, 0.0);
         while t < 1.0 {
             while next < events.len() && events[next].0 <= t {
@@ -145,6 +149,11 @@ impl Profile {
         self.segs.iter().fold(0.0, |m, s| m.max(s.r0).max(s.r1))
     }
 
+    /// Finite parameters need not give finite slopes or inverse coefficients.
+    pub(crate) fn is_finite(&self) -> bool {
+        self.segs.iter().all(|s| [s.r0, s.r1, s.share, s.c, s.c4, s.inv_r0, s.inv_2c].iter().all(|x| x.is_finite()))
+    }
+
     /// The share drawn by progress `t`: the integral of the rate up to `t`.
     pub(crate) fn share(&self, t: f64) -> f64 {
         let s = &self.segs[self.starts.partition_point(|&start| start <= t).saturating_sub(1)];
@@ -160,8 +169,9 @@ impl Profile {
     /// has thousands), which makes a seek `O(log S)` per part in the number `S` of segments.
     ///
     /// Nondecreasing in `y` even under rounding: the segment index is monotone because
-    /// shares are, the result is clamped to the segment, and inside a segment every operation
-    /// is a correctly rounded monotone function of the previous one.
+    /// shares are and the result is clamped to its segment. Constant and falling segments
+    /// use monotone operations, as do zero-start ramps; other rising segments canonicalize
+    /// their inverse against a monotone polynomial.
     #[inline(always)]
     pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
         // The last segment whose share is at most `y`.
@@ -191,8 +201,7 @@ impl Profile {
         } else {
             let root = (s.r0 * s.r0 + s.c4 * z).max(0.0).sqrt();
             if s.c > 0.0 {
-                // Monotone in `z`: the root is, and the product with a positive constant is.
-                (root - s.r0) * s.inv_2c
+                if s.r0 == 0.0 { root * s.inv_2c } else { s.rising_inverse(z, root) }
             } else if s.r0 + root > 0.0 {
                 2.0 * z / (s.r0 + root)
             } else {
@@ -203,30 +212,41 @@ impl Profile {
     }
 }
 
-/// A sum kept as two floats, exact enough that terms added and later subtracted leave no
-/// residue (each addition is an error-free transformation, Knuth's two-sum).
-#[derive(Clone, Copy, Debug, Default)]
-struct Compensated {
-    hi: f64,
-    lo: f64,
-}
-
-impl Compensated {
-    fn add(&mut self, x: f64) {
-        let (sum, err) = two_sum(self.hi, x);
-        (self.hi, self.lo) = two_sum(sum, self.lo + err);
+impl Segment {
+    /// Invert the increasing polynomial without subtracting nearly equal roots. The
+    /// quotient alone can round nonmonotonically at adjacent floats, so canonicalize to
+    /// the first representable x whose (monotone) polynomial reaches z. Usually this
+    /// takes one or two neighboring floats; a bitwise bisection bounds even a bad guess.
+    #[inline]
+    fn rising_inverse(&self, z: f64, root: f64) -> f64 {
+        if z == 0.0 {
+            return 0.0;
+        }
+        let polynomial = |x: f64| x * (self.r0 + self.c * x);
+        let (mut lo, mut hi) = (0.0f64, self.end - self.start);
+        let mut x = (2.0 * z / (self.r0 + root)).min(hi);
+        for _ in 0..4 {
+            if polynomial(x) < z {
+                lo = x;
+                if x == hi {
+                    return hi;
+                }
+                x = x.next_up().min(hi);
+            } else {
+                hi = x;
+                let prev = x.next_down().max(0.0);
+                if polynomial(prev) < z {
+                    return x;
+                }
+                x = prev;
+            }
+        }
+        while hi.to_bits() - lo.to_bits() > 1 {
+            let mid = f64::from_bits(lo.to_bits() + (hi.to_bits() - lo.to_bits()) / 2);
+            if polynomial(mid) < z { lo = mid } else { hi = mid }
+        }
+        hi
     }
-
-    fn value(self) -> f64 {
-        self.hi + self.lo
-    }
-}
-
-/// `a + b` rounded, and the rounding error, exactly.
-fn two_sum(a: f64, b: f64) -> (f64, f64) {
-    let sum = a + b;
-    let bb = sum - a;
-    (sum, (a - (sum - bb)) + (b - bb))
 }
 
 #[cfg(test)]
@@ -255,7 +275,7 @@ mod tests {
             assert_eq!(p.share(0.0), 0.0);
             assert_eq!(p.share(d0), 0.0);
             assert!((p.share(1.0) - 1.0).abs() < 1e-12, "F(1) = {}", p.share(1.0));
-            assert!((p.final_rate() - 2.0 / (2.0 - d0 - d1)).abs() < 1e-12);
+            assert!((p.final_rate() - 2.0 / ((1.0 - d0) + (1.0 - d1))).abs() < 1e-12);
             // Nothing before d0, the final rate from d1 on, a jump exactly at a step.
             if d0 > 0.0 {
                 assert_eq!(p.rate_at(d0, true), 0.0);
@@ -394,6 +414,43 @@ mod tests {
             for t in grid() {
                 let total = u * fu.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
                 assert!((total - t).abs() < 1e-11, "s = {s}, τ = {t}: {total}");
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_triangles_preserve_mass_and_adjacent_quantiles() {
+        for d in [1e-8, 1e-12, 1e-16, 1e-20, 1e-300] {
+            let p = Profile::trapezoid(0.0, d, d, 1.0);
+            let (uniform, peak) = Profile::uniform(&[(0.25, p.clone())], 0.75);
+            assert!(p.is_finite() && uniform.is_finite());
+            assert!((peak - 0.5).abs() < 1e-14);
+            for t in grid() {
+                let mass = 0.25 * p.share(t) + 0.75 * uniform.share(t);
+                assert!((mass - t).abs() < 2e-15, "d={d}, t={t}, mass={mass}");
+            }
+        }
+        // Three simultaneous slope scales require more than a two-float accumulator.
+        let profiles =
+            [Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0), Profile::delayed_linear(0.0, 1e-200), Profile::delayed_linear(0.0, 1.0)];
+        let scheduled: Vec<_> = profiles.into_iter().map(|p| (0.1, p)).collect();
+        let (uniform, _) = Profile::uniform(&scheduled, 0.7);
+        for t in grid() {
+            let mass = 0.7 * uniform.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
+            assert!((mass - t).abs() < 2e-15, "t={t}, mass={mass}");
+        }
+        for n in [1e6, 1e9, 1e12, (1u64 << 46) as f64] {
+            let (p, _) = Profile::uniform(&[(1.0 / (n + 1.0), Profile::trapezoid(0.0, 0.0, 0.0, 1.0))], n / (n + 1.0));
+            for center in grid() {
+                let mut y = center;
+                let mut previous = p.quantile(y, &mut 0);
+                for _ in 0..32 {
+                    y = y.next_up().min(1.0);
+                    let t = p.quantile(y, &mut 0);
+                    assert!(t >= previous, "n={n}, y={y}: {t} < {previous}");
+                    assert!((p.share(t) - y).abs() < 8.0 * f64::EPSILON);
+                    previous = t;
+                }
             }
         }
     }

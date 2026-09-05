@@ -97,6 +97,7 @@ impl Error {
             self.kind(),
             ErrorKind::MixTooLong
                 | ErrorKind::InvalidSampling { .. }
+                | ErrorKind::SamplingOverflow
                 | ErrorKind::TooSteep
                 | ErrorKind::Overcommitted { .. }
                 | ErrorKind::ZeroWeights
@@ -743,13 +744,11 @@ fn folds() {
     );
     let cat = || Seq::concat([src(1, 10), src(2, 20), src(3, 30)]);
     assert!(matches!(root(cat().take(10)), Node::Source { src: 0, offset: 0, len: 10 }));
-    assert!(
-        matches!(root(cat().skip(15)), Node::Slice { start: 5, len: 45, ref child } if matches!(&**child, Node::Concat { children, .. } if children.len() == 2))
-    );
+    assert!(matches!(root(cat().skip(15)), Node::Concat { ref offsets, ref children } if offsets == &[0, 15, 45] && children.len() == 2));
     assert!(matches!(root(cat().skip(10).take(20)), Node::Source { src: 1, offset: 0, len: 20 }));
     assert!(matches!(root(cat().skip(10)), Node::Concat { ref children, .. } if children.len() == 2));
     assert!(
-        matches!(root(cat().slice(5..35)), Node::Slice { start: 5, len: 30, ref child } if matches!(&**child, Node::Concat { children, .. } if children.len() == 3))
+        matches!(root(cat().slice(5..35)), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
     );
     assert_eq!(
         ids(Order::new(cat().skip(15).stride(7, 3)).unwrap().iter(..)),
@@ -1081,4 +1080,22 @@ fn weighted_mix() {
     // A part is compiled once: its sources appear once.
     let once = Order::new(Seq::weighted(30, [(Seq::concat([src(0, 4), src(1, 4)]), 1.0), (src(2, 10), 2.0)])).unwrap();
     assert_eq!(once.sources().len(), 3);
+}
+
+#[test]
+fn weight_quotas_survive_small_terms_and_reordering() {
+    use crate::order::weighted_shares;
+    let total = MAX_MIX_LEN;
+    let denominator = (1u128 << 54) + 10_000;
+    for big in [0, 1, 5000, 10_000] {
+        let mut weights = vec![2.0f64.powi(-54); 10_000];
+        weights.insert(big, 1.0);
+        let shares = weighted_shares(total, &weights).unwrap();
+        assert_eq!(shares.iter().sum::<u64>(), total);
+        assert_eq!(shares[big], total - 39);
+        for (i, &share) in shares.iter().enumerate() {
+            let numerator = u128::from(total) * if i == big { 1 << 54 } else { 1 };
+            assert!((u128::from(share) * denominator).abs_diff(numerator) < denominator);
+        }
+    }
 }

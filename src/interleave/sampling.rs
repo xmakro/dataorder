@@ -8,6 +8,9 @@ use std::hash::{Hash, Hasher};
 /// How a sequence's elements are spread over the joint sequence. Equality and hashing
 /// compare the parameters bit for bit (with `-0.0` taken as `0.0`); the default is
 /// [`Uniform`](Sampling::Uniform).
+/// [`Order::new`](crate::Order::new) also rejects a non-empty schedule whose derived
+/// coefficients overflow floating-point range. Extremely narrow transitions can do this
+/// even with finite parameters; use equal adjacent breakpoints for an abrupt transition.
 ///
 /// ```
 /// use dataorder::{Order, Sampling, Seq};
@@ -151,6 +154,8 @@ pub(crate) enum SamplingError {
     TooLong,
     /// A schedule parameter is out of range or not finite.
     InvalidParameter { seq: usize, sampling: Sampling },
+    /// The combined profile cannot be represented by finite coefficients.
+    Overflow,
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize },
     /// The scheduled sequences' rates sum to `demand` (> 1) times the total draw rate at
@@ -163,6 +168,7 @@ impl fmt::Display for SamplingError {
         match self {
             Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
             Self::InvalidParameter { seq, sampling } => write!(f, "sequence {seq}: invalid {sampling:?}"),
+            Self::Overflow => write!(f, "combined sampling profile exceeds floating-point range"),
             Self::TooSteep { seq } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
             Self::Overcommitted { demand } => write!(f, "scheduled sequences need {:.1}% of the draw rate at their peak", demand * 100.0),
         }

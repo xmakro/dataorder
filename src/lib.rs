@@ -60,7 +60,7 @@
 //! | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉`, or 0 | `offset + p·step` of `inner` |
 //!
 //! Shuffles are seeded permutations of `0..n` (a keyed seven-round Feistel network with
-//! cycle walking, see `src/perm.rs`): O(1) per element, no state. A shuffle's permutation depends
+//! cycle walking, see `src/perm.rs`): O(1) per element on average, no state. A shuffle's permutation depends
 //! on its `seed`, on the order's seed, on the *context*, which every `Repeat` of more than
 //! one repetition on the path above derives afresh for each repetition after its first,
 //! and on the sources under it that have elements, their [salts](Source::salt) and lengths
@@ -76,7 +76,7 @@
 //!
 //! Compilation rejects skips and takes past the end, cycles of an empty sequence, zero
 //! strides, orders longer than `usize::MAX` (and intermediate lengths beyond 64 bits),
-//! invalid or overcommitted schedules (the scheduled parts of a mix needing more than the
+//! invalid, numerically unrepresentable or overcommitted schedules (the scheduled parts of a mix needing more than the
 //! whole draw rate somewhere, beyond a tolerance of 10⁻⁹ for rounding), invalid weights,
 //! mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
 //! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node. Two
@@ -94,18 +94,26 @@
 //!
 //! # Cost
 //!
-//! Compilation is linear in the configuration (plus `O(k + s log s)` per mix of `k` parts,
-//! `s` of them scheduled). [`Order::get`] walks the path from the root to a source: constant
-//! work per node, except that a `Mix` costs a seek of the interleave (`O(k log S)` for `S`
-//! distinct breakpoints among the schedules, which allocates) and a `Shuffle` a key
-//! derivation. [`Order::iter`] seeks once and then walks:
-//! a `Mix` costs `⌈log2 k⌉` comparisons per element plus one key computation, a `Shuffle`
-//! one permutation plus a [`Order::get`]-style descent into its child (so a shuffle *over*
+//! Compilation uses storage proportional to the configuration. Flattening concats,
+//! deriving shuffle salts and deepening repeats can revisit subtrees; scheduled mixes
+//! additionally sort their breakpoints, and weighted mixes sort their remainders.
+//! [`Order::get`] walks the path from the root to a source. A `Concat` searches its part
+//! offsets in `O(log k)`; a `Shuffle` derives a key and cycle-walks a permutation (constant
+//! cost on average, not a worst-case bound for one position). A `Mix` seeks its interleave:
+//! normally `O(k log(S + 1) + k log(k + 1))` for `k` non-empty parts and `S` distinct
+//! schedule breakpoints. Counting costs the first term; replaying at most `2k` tournament
+//! steps costs the second. Poor analytic guesses use a bounded fallback: at most 63
+//! bisections of progress, each counting with at most 46 bisections per part. Equal keys
+//! are consumed by counts, so even a long tie does not require a linear walk.
+//! [`Order::iter`] seeks once and then walks: a `Mix` costs `⌈log2 k⌉` comparisons per
+//! element plus one key computation, a `Shuffle` one permutation plus a
+//! [`Order::get`]-style descent into its child (so a shuffle *over*
 //! a mix pays the interleave seek per element; shuffle the parts, not the mix), a `Stride`
 //! skips `step − 1` elements of its child (a mix steps its interleave, or re-seeks it when
 //! that is cheaper, and its parts skip along, a nested mix stepping its own interleave), so
-//! sharding a mix across `count` workers costs `count` times its interleaving in total
-//! (shard the parts instead when that matters). `Concat`, `Repeat`, `Skip` and `Take` add a
+//! sharding a mix across `count` workers costs up to `count` times its interleaving in total
+//! (sharding the parts instead can help, subject to each worker's schedule feasibility;
+//! see [`Seq::shard`]). `Concat`, `Repeat`, `Skip` and `Take` add a
 //! few instructions. Creating a cursor allocates one cursor per node it enters and seeks;
 //! [`Cursor::seek`] and [`Iterator::nth`] reuse the cursor's buffers. The README has
 //! measured numbers.
@@ -119,7 +127,11 @@
 //!   rejected in every variant. It is stable under the same policy as the orders: a change
 //!   to it is a breaking change. Only configurations [`Order::new`] accepts round-trip:
 //!   `serde_json` writes an infinite or NaN weight or schedule parameter as `null`, which
-//!   does not read back. Two more caveats: lengths and counts are `usize`, so a
+//!   does not read back. When using JSON, consumers must enable `serde_json`'s
+//!   `float_roundtrip` feature: `serde_json = { version = "1", features = ["float_roundtrip"] }`.
+//!   Its default parser can change a weight or breakpoint by one ULP, changing equality
+//!   and potentially the order. The `dataorder/serde` feature does not enable a JSON
+//!   parser on the consumer's behalf. Two more caveats: lengths and counts are `usize`, so a
 //!   configuration written on a 64-bit machine need not read back on a 32-bit one; and
 //!   every level of a `Seq` is two levels of nesting in a self-describing format, so
 //!   `serde_json` reads at most 64 levels under its default recursion limit of 128
@@ -154,6 +166,7 @@ mod order;
 mod perm;
 mod seq;
 mod source;
+mod sum;
 #[cfg(test)]
 mod tests;
 

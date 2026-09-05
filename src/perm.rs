@@ -1,9 +1,10 @@
-//! Seeded permutations of `0..n` in O(1) per element, without materializing them.
+//! Seeded permutations of `0..n` in O(1) per element on average, without materializing them.
 //!
 //! A permutation of `0..n` is a keyed bijection on the `k`-bit numbers, `2^(k-1) < n ≤ 2^k`,
 //! restricted to `0..n` by cycle walking: a value that lands at or above `n` is mapped again
 //! until one below `n` comes out. That is a bijection on `0..n` because the underlying map
-//! is one on the superset, and it takes `2^k / n < 2` steps on average.
+//! is one on the superset. Across all inputs its average cost is at most `2^k / n < 2`
+//! steps; a particular input can walk as many as `2^k - n + 1` steps.
 //!
 //! The bijection is a seven-round Feistel network on the two halves of the `k` bits (the
 //! right half one bit wider when `k` is odd; the halves trade widths every round, so after
