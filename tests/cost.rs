@@ -42,12 +42,16 @@ fn element(order: &Order<usize>, pos: usize) -> (usize, usize) {
     (*s, i)
 }
 
+/// A mix builds a part's cursor when the part is first drawn from (nothing to allocate for
+/// a shuffled source, whose cursor sits in the mix's slot for it); after that, seeks reuse
+/// everything. Drawing a thousand elements first enters every part of a balanced mix of a
+/// hundred, so the count below is of seeking alone.
 #[test]
 fn seeking_an_existing_cursor_allocates_nothing() {
     let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(10_000).shuffle(i + 1)))).unwrap();
     let n = order.len();
     let mut cursor = order.iter(n / 2..);
-    cursor.next();
+    cursor.by_ref().take(1000).for_each(drop);
     let count = allocations(|| {
         cursor.seek(n / 4);
         cursor.next();

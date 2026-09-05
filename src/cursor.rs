@@ -59,7 +59,8 @@ impl<'a, T> Cursor<'a, T> {
     /// steps through its interleave, or re-seeks it for a long hop, and a hop into another
     /// repetition or concat part lands there directly; moving backward seeks afresh. Either
     /// way the cursor's allocations are reused (except that a concat builds the cursor of
-    /// a part it enters), so seeking is the way to visit many scattered positions.
+    /// the part it lands in, and a mix that of a part it draws from for the first time), so
+    /// seeking is the way to visit many scattered positions.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -119,7 +120,9 @@ impl<T> fmt::Debug for Cursor<'_, T> {
     }
 }
 
-/// A clone continues from the same position, independently (for a look-ahead, say).
+/// A clone continues from the same position, independently (for a look-ahead, say). It
+/// copies the cursor tree: the cursors of every part entered so far, and the interleave's
+/// tree of every mix, so it costs about what building and seeking the cursor cost.
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
         Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end }
@@ -396,6 +399,9 @@ impl<'a> NodeCursor<'a> {
 /// The cursor of a `Mix`. Children are built and seeked lazily: `next_j[s]` is the index
 /// the cursor of part `s` stands at, or [`UNSEEKED`] after a seek of the mix; skipping
 /// leaves them behind and the mismatch skips them forward when they are drawn from again.
+/// The slots are cursors in place, about 220 bytes per part whether entered or not: boxing
+/// them (16 bytes per part) was measured at 0.5 to 1.5 ns per element more on every mix and
+/// 2.9 ns on a mix of mixes, one dependent load per level, and rejected.
 #[derive(Clone, Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
