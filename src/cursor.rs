@@ -11,31 +11,33 @@
 //! make every other node kind pay its prologue at each level.
 
 use crate::interleave::{Interleave, Iter};
-use crate::order::{Node, Order, get};
+use crate::order::{Node, Order, get, resolve};
 use crate::perm::{self, Key, Shape};
-use std::ops::Range;
+use std::ops::{Range, RangeBounds};
 
 /// Iterator over a range of an [`Order`], returned by [`Order::iter`]; yields
-/// `(&source, index in the source)`. [`seek`](Cursor::seek) repositions it, and
-/// [`nth`](Iterator::nth) skips without visiting.
+/// `(&source, index in the source)`. [`seek`](Cursor::seek) repositions it,
+/// [`set_range`](Cursor::set_range) gives it another range, and [`nth`](Iterator::nth)
+/// skips without visiting.
 #[derive(Debug)]
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
-    sources: &'a [T],
+    order: &'a Order<T>,
+    /// Positioned at `pos` whenever `pos < len` (a range starting at the end leaves it
+    /// untouched until a seek).
     root: NodeCursor<'a>,
     pos: u64,
     end: u64,
-    ctx: u64,
 }
 
 impl<'a, T> Cursor<'a, T> {
     pub(crate) fn new(order: &'a Order<T>, range: Range<usize>) -> Self {
         let (start, end) = (range.start as u64, range.end as u64);
         let mut root = NodeCursor::new(&order.root);
-        if start < end {
+        if start < order.root.len() {
             root.seek(start, order.ctx);
         }
-        Cursor { sources: &order.sources, root, pos: start, end, ctx: order.ctx }
+        Cursor { order, root, pos: start, end }
     }
 
     /// Position of the next element.
@@ -73,19 +75,45 @@ impl<'a, T> Cursor<'a, T> {
     pub fn seek(&mut self, pos: usize) {
         let pos = pos as u64;
         assert!(pos <= self.end, "dataorder: seek to {pos} beyond the end {}", self.end);
-        if pos > self.pos && pos < self.end {
+        if pos > self.pos {
             self.root.skip(pos - self.pos);
         } else if pos < self.pos {
-            self.root.seek(pos, self.ctx);
+            self.root.seek(pos, self.order.ctx);
         }
         self.pos = pos;
+    }
+
+    /// Continues over `range` of the order: seeks to its start, forward or backward as
+    /// [`seek`](Cursor::seek) does, and ends at its end. One cursor thus serves any number
+    /// of ranges with its buffers.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(10).shuffle(1))?;
+    /// let all: Vec<usize> = order.iter(..).map(|(_, i)| i).collect();
+    /// let mut cursor = order.iter(2..4);
+    /// assert_eq!(cursor.by_ref().map(|(_, i)| i).collect::<Vec<_>>(), all[2..4]);
+    /// cursor.set_range(7..);
+    /// assert_eq!(cursor.len(), 3);
+    /// assert_eq!(cursor.by_ref().map(|(_, i)| i).collect::<Vec<_>>(), all[7..]);
+    /// cursor.set_range(..=0);
+    /// assert_eq!(cursor.map(|(_, i)| i).collect::<Vec<_>>(), all[..1]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    ///
+    /// # Panics
+    /// As [`Order::iter`] does for the range.
+    pub fn set_range(&mut self, range: impl RangeBounds<usize>) {
+        let range = resolve(range, self.order.len());
+        self.end = range.end as u64;
+        self.seek(range.start);
     }
 }
 
 /// A clone continues from the same position, independently (for a look-ahead, say).
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
-        Cursor { sources: self.sources, root: self.root.clone(), pos: self.pos, end: self.end, ctx: self.ctx }
+        Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end }
     }
 }
 
@@ -99,13 +127,16 @@ impl<'a, T> Iterator for Cursor<'a, T> {
         }
         self.pos += 1;
         let (s, i) = self.root.next();
-        Some((&self.sources[s as usize], i as usize))
+        Some((&self.order.sources[s as usize], i as usize))
     }
 
     /// Skips `n` elements without visiting them, then yields the next.
     fn nth(&mut self, n: usize) -> Option<(&'a T, usize)> {
         let n = n as u64;
-        if n >= self.end - self.pos {
+        let left = self.end - self.pos;
+        if n >= left {
+            // To the end, so that the root stays where `position` says it is.
+            self.root.skip(left);
             self.pos = self.end;
             return None;
         }

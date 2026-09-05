@@ -6,7 +6,7 @@ use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
 use crate::seq::WeightedPart;
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Range, RangeBounds};
 
 /// A compiled node. Empty subtrees are folded to [`Node::Empty`], so every child of a
 /// `Concat` and every child of a transform has elements. A `Mix` keeps its empty children
@@ -152,6 +152,14 @@ impl<T> Order<T> {
         &self.sources
     }
 
+    /// The sources, mutably. The order read their lengths and salts when it was built and
+    /// does not look again: a source that changes length yields indices past its new end.
+    /// For opening handles in place, say.
+    #[must_use]
+    pub fn sources_mut(&mut self) -> &mut [T] {
+        &mut self.sources
+    }
+
     /// The sources, in order of appearance in the configuration, consuming the order.
     #[must_use]
     pub fn into_sources(self) -> Vec<T> {
@@ -190,7 +198,8 @@ impl<T> Order<T> {
     /// its parts' cursors as they are first drawn from) and then seeks, which for a mix
     /// counts the elements before the start in each part. Walking is then a few nanoseconds
     /// per element, so make cursors for long ranges rather than many short ones, and
-    /// [`seek`](Cursor::seek) a cursor rather than making a new one.
+    /// [`seek`](Cursor::seek) or [`set_range`](Cursor::set_range) a cursor rather than
+    /// making a new one.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -205,20 +214,33 @@ impl<T> Order<T> {
     /// If the range ends after `len()`, ends before it starts, or has a bound at
     /// `usize::MAX` where one more would be needed.
     pub fn iter(&self, range: impl RangeBounds<usize>) -> Cursor<'_, T> {
-        let len = self.len();
-        let start = match range.start_bound() {
-            Bound::Included(&s) => s,
-            Bound::Excluded(&s) => s.checked_add(1).expect("dataorder: range start overflows usize"),
-            Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            Bound::Included(&e) => e.checked_add(1).expect("dataorder: range end overflows usize"),
-            Bound::Excluded(&e) => e,
-            Bound::Unbounded => len,
-        };
-        assert!(start <= end, "dataorder: range {start}..{end} ends before it starts");
-        assert!(end <= len, "dataorder: range end {end} out of range for {len} positions");
-        Cursor::new(self, start..end)
+        Cursor::new(self, resolve(range, self.len()))
+    }
+}
+
+/// `range` as `start..end` within `0..len`, with the panics [`Order::iter`] documents.
+pub(crate) fn resolve(range: impl RangeBounds<usize>, len: usize) -> Range<usize> {
+    let start = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("dataorder: range start overflows usize"),
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&e) => e.checked_add(1).expect("dataorder: range end overflows usize"),
+        Bound::Excluded(&e) => e,
+        Bound::Unbounded => len,
+    };
+    assert!(start <= end, "dataorder: range {start}..{end} ends before it starts");
+    assert!(end <= len, "dataorder: range end {end} out of range for {len} positions");
+    start..end
+}
+
+impl<T: Source> TryFrom<Seq<T>> for Order<T> {
+    type Error = Error;
+
+    /// [`Order::new`].
+    fn try_from(seq: Seq<T>) -> Result<Self, Error> {
+        Self::new(seq)
     }
 }
 

@@ -4,16 +4,19 @@
 
 use dataorder::{Order, Seq};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::cell::Cell;
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Allocations by this thread, so that the tests can run in parallel.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Relaxed);
+        // Unavailable only while the thread is being torn down.
+        let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
         unsafe { System.alloc(layout) }
     }
 
@@ -25,13 +28,10 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-/// The counter is global, so the tests run one at a time.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-
 fn allocations(f: impl FnOnce()) -> usize {
-    let before = ALLOCATIONS.load(Relaxed);
+    let before = ALLOCATIONS.get();
     f();
-    ALLOCATIONS.load(Relaxed) - before
+    ALLOCATIONS.get() - before
 }
 
 fn element(order: &Order<usize>, pos: usize) -> (usize, usize) {
@@ -41,7 +41,6 @@ fn element(order: &Order<usize>, pos: usize) -> (usize, usize) {
 
 #[test]
 fn seeking_an_existing_cursor_allocates_nothing() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap();
     let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(10_000).shuffle(i + 1)))).unwrap();
     let n = order.len();
     let mut cursor = order.iter(n / 2..);
@@ -61,7 +60,6 @@ fn seeking_an_existing_cursor_allocates_nothing() {
 
 #[test]
 fn forward_seeks_land_in_the_target_repetition_and_part() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap();
     // Every repetition entered rebuilds the concat's current part cursor (a mix: two
     // allocations); landing directly enters one repetition.
     let epoch = || {

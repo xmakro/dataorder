@@ -40,11 +40,12 @@ fn hand_built_configuration() {
         ],
     };
     assert_eq!(seq.check(), Ok(100));
-    let order = Order::new(seq).unwrap();
+    let mut order: Order<Shard> = seq.try_into().unwrap();
+    order.sources_mut()[0].name = "A";
     let all = names(order.iter(..));
-    assert_eq!(all.iter().filter(|e| e.0 == "a").count(), 75);
+    assert_eq!(all.iter().filter(|e| e.0 == "A").count(), 75);
     assert_eq!(all.iter().filter(|e| e.0 == "b" || e.0 == "c").count(), 25);
-    assert_eq!(order.sources().iter().map(|s| s.name).collect::<Vec<_>>(), ["a", "b", "c"]);
+    assert_eq!(order.sources().iter().map(|s| s.name).collect::<Vec<_>>(), ["A", "b", "c"]);
     let sources = order.into_sources();
     assert_eq!(sources.len(), 3);
 }
@@ -110,6 +111,9 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(Seq::source(&mut n).check(), Ok(3));
     let lens = Seq::mix([Seq::source(4), Seq::source(6)]).map(|n| n * 2);
     assert_eq!(lens.check(), Ok(20));
+    let opened = lens.clone().try_map(|n| if n < 10 { Ok(shard("x", n).map(|s| s.len)) } else { Err(n) });
+    assert_eq!(opened, Err(12));
+    assert_eq!(lens.try_map(|n| Ok::<_, ()>(n / 2)).unwrap().check(), Ok(10));
     // Salts pass through pointers; slices, arrays and vectors are sources of their elements.
     assert_eq!(Box::new(&*shared).salt(), dataorder::salt("s"));
     assert_eq!((&&shared).salt(), shared.salt());

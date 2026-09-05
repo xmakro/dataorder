@@ -283,6 +283,15 @@ fn random_configurations_match_reference() {
             assert_eq!(cursor.nth(k).map(|(s, i)| (s.id, i)), reference.get(p + k).copied(), "round {round}: nth({k}) at {p} of {seq:?}");
             assert_eq!(cursor.position(), (p + k + 1).min(n));
         }
+        // `set_range` re-ranges the same cursor, forward or backward, from wherever it stands.
+        for _ in 0..4 {
+            let a = rng.below(n + 1);
+            let b = a + rng.below(n - a + 1);
+            cursor.set_range(a..b);
+            assert_eq!(cursor.len(), b - a);
+            assert_eq!(ids(cursor.by_ref()), reference[a..b], "round {round}: set_range {a}..{b} of {seq:?}");
+            assert_eq!(cursor.position(), b);
+        }
         assert_eq!(ids((&order).into_iter()), reference);
         checked += 1;
     }
@@ -640,7 +649,24 @@ fn edge_cases() {
     assert_eq!(order.iter(5..).count(), 0);
     assert_eq!(ids(order.iter((std::ops::Bound::Excluded(3), std::ops::Bound::Unbounded))), vec![(0, 4)]);
     assert_eq!(ids((&order).into_iter()), ids(order.iter(..)));
-    assert_eq!(order.into_sources(), vec![Src { id: 0, len: 5 }]);
+    // A cursor run past its end, or ranged at the end, still moves forward correctly.
+    let mut c = order.iter(1..3);
+    assert_eq!(c.nth(10), None);
+    c.set_range(2..);
+    assert_eq!(ids(c.by_ref()), vec![(0, 2), (0, 3), (0, 4)]);
+    c.set_range(..1);
+    assert_eq!(ids(c.by_ref()), vec![(0, 0)]);
+    c.seek(1);
+    c.set_range(3..4);
+    assert_eq!(ids(c.by_ref()), vec![(0, 3)]);
+    let mut at_end = order.iter(5..);
+    assert_eq!(at_end.next(), None);
+    at_end.set_range(4..);
+    assert_eq!(ids(at_end), vec![(0, 4)]);
+    let mut order = order;
+    order.sources_mut()[0].id = 9;
+    assert_eq!(order.get(0).0.id, 9);
+    assert_eq!(order.into_sources(), vec![Src { id: 9, len: 5 }]);
     // Bare lengths are sources; a source may be shared through a reference.
     let lens = [5usize, 3];
     let shared = Order::new(Seq::concat([Seq::source(&lens[0]), Seq::source(&lens[1]), Seq::source(&lens[0]).shuffle(1)])).unwrap();

@@ -3,6 +3,7 @@
 
 use crate::interleave::float_bits;
 use crate::{Error, MAX_DEPTH, Order, Sampling, Source};
+use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
@@ -343,7 +344,27 @@ impl<T> Seq<T> {
     /// ```
     #[must_use]
     pub fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Seq<U> {
-        self.map_with(&mut f)
+        match self.try_map(|t| Ok::<U, Infallible>(f(t))) {
+            Ok(seq) => seq,
+            Err(never) => match never {},
+        }
+    }
+
+    /// [`map`](Seq::map) with a fallible function: the first error comes back and the
+    /// sources after it are not visited.
+    ///
+    /// ```
+    /// use dataorder::Seq;
+    /// let open = |path: &str| if path.ends_with(".bin") { Ok(path.len()) } else { Err(path.to_string()) };
+    /// let paths = Seq::mix([Seq::source("web.bin"), Seq::source("code.bin").shuffle(1)]);
+    /// assert_eq!(paths.clone().try_map(open), Ok(Seq::mix([Seq::source(7), Seq::source(8).shuffle(1)])));
+    /// assert_eq!(Seq::concat([paths, Seq::source("notes.txt")]).try_map(open), Err("notes.txt".to_string()));
+    /// ```
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn try_map<U, E, F: FnMut(T) -> Result<U, E>>(self, mut f: F) -> Result<Seq<U>, E> {
+        self.try_map_with(&mut f)
     }
 
     /// Takes the tree apart without recursion: what dropping it does, on the heap instead
@@ -365,21 +386,26 @@ impl<T> Seq<T> {
         }
     }
 
-    fn map_with<U, F: FnMut(T) -> U>(self, f: &mut F) -> Seq<U> {
-        match self {
-            Self::Source(t) => Seq::Source(f(t)),
-            Self::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.map_with(f)).collect()),
-            Self::Mix(parts) => Seq::Mix(parts.into_iter().map(|p| MixPart { seq: p.seq.map_with(f), sampling: p.sampling }).collect()),
+    fn try_map_with<U, E, F: FnMut(T) -> Result<U, E>>(self, f: &mut F) -> Result<Seq<U>, E> {
+        Ok(match self {
+            Self::Source(t) => Seq::Source(f(t)?),
+            Self::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.try_map_with(f)).collect::<Result<_, E>>()?),
+            Self::Mix(parts) => Seq::Mix(
+                parts.into_iter().map(|p| Ok(MixPart { seq: p.seq.try_map_with(f)?, sampling: p.sampling })).collect::<Result<_, E>>()?,
+            ),
             Self::Weighted { total, parts } => Seq::Weighted {
                 total,
-                parts: parts.into_iter().map(|p| WeightedPart { seq: p.seq.map_with(f), weight: p.weight, sampling: p.sampling }).collect(),
+                parts: parts
+                    .into_iter()
+                    .map(|p| Ok(WeightedPart { seq: p.seq.try_map_with(f)?, weight: p.weight, sampling: p.sampling }))
+                    .collect::<Result<_, E>>()?,
             },
-            Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.map_with(f)) },
-            Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.map_with(f)) },
-            Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.map_with(f)) },
-            Self::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.map_with(f)) },
-            Self::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.map_with(f)) },
-        }
+            Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.try_map_with(f)?) },
+            Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.try_map_with(f)?) },
+            Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.try_map_with(f)?) },
+            Self::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.try_map_with(f)?) },
+            Self::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.try_map_with(f)?) },
+        })
     }
 }
 
