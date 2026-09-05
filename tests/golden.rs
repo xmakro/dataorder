@@ -64,6 +64,12 @@ fn golden_orders() {
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
         ("weighted", Seq::weighted(3000, [(src(0, 100).shuffle(1), 0.6), (src(1, 5000).shuffle(2), 0.4)]), 0),
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
+        ("cycle of a shuffled repeat", src(0, 300).shuffle(5).repeat(2).cycle(1000), 0),
+        (
+            "weighted with a concat part",
+            Seq::weighted(500, [(Seq::concat([src(0, 200), src(1, 300)]), 1.0), (src(2, 50).shuffle(1), 1.0)]).shuffle(2),
+            0,
+        ),
         (
             "mix fading",
             Seq::mix_with([
@@ -74,20 +80,22 @@ fn golden_orders() {
             0,
         ),
     ];
-    const EXPECTED: [u64; 13] = [
-        17918724613688720885,
-        6314560897953129369,
-        9731401842934529132,
-        12336213182018184021,
-        2374714768531222327,
-        4402697673826370048,
-        12329307292984495973,
-        17048615245698700107,
-        5704173740700921882,
-        8789581730375861797,
-        9381521998954631041,
-        8555868547297370277,
-        9216860164093178041,
+    const EXPECTED: [u64; 15] = [
+        9476750321503116817,
+        3802312810472554945,
+        2814580347210730272,
+        15433798136956187369,
+        690855147851393981,
+        5722012605816943760,
+        14380507312460122493,
+        10653168844818408168,
+        9595942154208374878,
+        10043771473524833253,
+        6532104605628653644,
+        9662099335159339301,
+        4277006377877170397,
+        991967725648243685,
+        11336253557503442625,
     ];
     let actual: Vec<u64> = cases
         .iter()
@@ -100,7 +108,7 @@ fn golden_orders() {
     assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle(7)).unwrap();
-    const FIRST: [usize; 6] = [73, 53, 757, 255, 974, 351];
+    const FIRST: [usize; 6] = [289, 680, 702, 764, 472, 996];
     assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
 }

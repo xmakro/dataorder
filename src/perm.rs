@@ -5,24 +5,32 @@
 //! until one below `n` comes out. That is a bijection on `0..n` because the underlying map
 //! is one on the superset, and it takes `2^k / n < 2` steps on average.
 //!
-//! The bijection is a six-round Feistel network on the two halves of the `k` bits (the
-//! right half one bit wider when `k` is odd; the halves trade widths every round). The round
-//! function adds the round key to one half, multiplies by the round's odd multiplier and
-//! takes the top bits of the product, which every input bit influences. Six such rounds
-//! pass the statistics in this module's tests (joint distribution of position and image on
-//! a grid and in the low bits, serial correlation, fixed points) at every size tried, from 2
-//! to 10⁶ and beyond; there is no security claim.
+//! The bijection is a seven-round Feistel network on the two halves of the `k` bits (the
+//! right half one bit wider when `k` is odd; the halves trade widths every round, so after
+//! the odd number of rounds they are reassembled the other way round). The round function
+//! adds the round key to one half, multiplies by the round's odd multiplier and takes the
+//! top bits of the product, which every input bit influences. Six such rounds pass the
+//! statistics in this module's tests (joint distribution of position and image on a grid
+//! and in the low bits, serial correlation, fixed points) at every size tried, from 2 to
+//! 10⁶ and beyond, but at a domain of exactly `2^k` elements, where no cycle walking
+//! scrambles the network's output, about one key in a hundred leaves a visible structure in
+//! the differences of consecutive images (a 64-bin chi-square at 7 to 17σ); the seventh
+//! round removes that (no key of 300 above 3σ at 2¹⁶, 2¹⁷ and 2¹⁸) for about half a
+//! nanosecond per element. There is no security claim.
 //!
 //! Alternatives measured and rejected: a masked multiply–xorshift mixer (`MurmurHash3`'s
 //! finalizer cut to `k` bits) is twice as fast but maps consecutive inputs to outputs with
 //! a nearly constant difference (serial correlation over 100σ); four rounds with a
-//! two-multiply round function (multiply, xorshift, multiply) have the same quality and
-//! cost about 0.8 ns more per element; three of those rounds fail the grid test.
+//! two-multiply round function (multiply, xorshift, multiply) have the quality of six
+//! one-multiply rounds and cost about 0.8 ns more per element; three of those rounds fail
+//! the grid test.
 //!
-//! The six round keys are rotations of one 64-bit word derived from the seed, the context
-//! and the salt of the shuffled sources, the six multipliers rotations of another derived
-//! from the first, so a permutation is selected by 64 bits in effect, although a [`Key`]
-//! holds 768; that is plenty for reproducible shuffles, which is all seeds are for.
+//! The first six round keys are rotations of one 64-bit word derived from the seed, the
+//! context and the salt of the shuffled sources, the first six multipliers rotations of
+//! another derived from the first, and the seventh round's key and multiplier are hashes
+//! of those two words (a seventh rotation would sit two bits from the first), so a
+//! permutation is selected by 64 bits in effect, although a [`Key`] holds 896; that is
+//! plenty for reproducible shuffles, which is all seeds are for.
 //!
 //! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small function
 //! and the permutation is most of it.
@@ -50,13 +58,13 @@ impl Shape {
 /// Round keys and multipliers (odd) of one keyed bijection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Key {
-    rk: [u64; 6],
-    mul: [u64; 6],
+    rk: [u64; 7],
+    mul: [u64; 7],
 }
 
 impl Key {
     /// Placeholder for cursors that have not been seeked yet.
-    pub(crate) const UNSET: Self = Self { rk: [0; 6], mul: [1; 6] };
+    pub(crate) const UNSET: Self = Self { rk: [0; 7], mul: [1; 7] };
 }
 
 /// `SplitMix64`'s finalizer: a fixed 64-bit bijection with good avalanche (maps 0 to 0).
@@ -68,7 +76,7 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 }
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
-const RC: [u64; 12] = [
+const RC: [u64; 14] = [
     0x243F_6A88_85A3_08D3,
     0x1319_8A2E_0370_7344,
     0xA409_3822_299F_31D0,
@@ -81,6 +89,8 @@ const RC: [u64; 12] = [
     0xD131_0BA6_98DF_B5AC,
     0x2FFD_72DB_D01A_DFB7,
     0xB8E1_AFED_6A26_7E96,
+    0xBA7C_9045_F12C_7F99,
+    0x24A1_9947_B391_6CF7,
 ];
 
 /// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]) over sources
@@ -97,6 +107,8 @@ pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
         k.rk[i] = a.rotate_left(i as u32 * 11 + 5) ^ RC[i];
         k.mul[i] = (b.rotate_left(i as u32 * 11 + 9) ^ RC[i + 6]) | 1;
     }
+    k.rk[6] = mix64(a ^ RC[12]);
+    k.mul[6] = mix64(b ^ RC[13]) | 1;
     k
 }
 
@@ -143,7 +155,9 @@ fn mix(s: Shape, k: Key, x: u64) -> u64 {
     let (l, r) = round(l, r, s.rb, s.rmask, k.rk[3], k.mul[3]);
     let (l, r) = round(l, r, s.lb, s.lmask, k.rk[4], k.mul[4]);
     let (l, r) = round(l, r, s.rb, s.rmask, k.rk[5], k.mul[5]);
-    (l << s.rb) | r
+    let (l, r) = round(l, r, s.lb, s.lmask, k.rk[6], k.mul[6]);
+    // After an odd number of rounds the halves have traded widths: `l` is `rb` bits wide.
+    (l << s.lb) | r
 }
 
 /// Image of `i` (`i < shape.n`) under the permutation of `0..n` selected by `key`.
@@ -240,18 +254,25 @@ mod tests {
         sxy / (sxx * syy).sqrt()
     }
 
+    /// `5σ` above the expectation of a chi-square with `dof` degrees of freedom.
+    fn chi2_bound(dof: usize) -> f64 {
+        dof as f64 + 5.0 * (2.0 * dof as f64).sqrt()
+    }
+
     /// Statistical plausibility on large domains: joint distribution of `(i, p(i))` on a
     /// 32×32 grid and of their low 4 bits, serial and positional correlation, fixed points.
-    /// Thresholds are 5σ (chi-square) or 5/√n (correlations) and hold for every seed tried.
+    /// Thresholds are 5σ (chi-square; a permutation fixes both marginals of a joint table,
+    /// so a `b × b` table has `(b − 1)²` degrees of freedom) or 5/√n (correlations) and hold
+    /// for every seed tried.
     #[test]
     fn statistics() {
         for n in [100_000u64, 1 << 17, (1 << 17) + 1, 1_000_003] {
             for seed in 0..8u64 {
                 let p = perm(n, seed);
                 let grid = chi2(p.iter().enumerate().map(|(i, &v)| (i as u64 * 32 / n) as usize * 32 + (v * 32 / n) as usize), 1024, n);
-                assert!(grid < 1023.0 + 5.0 * (2.0 * 1023.0f64).sqrt(), "n={n} seed={seed}: grid chi2 {grid}");
+                assert!(grid < chi2_bound(31 * 31), "n={n} seed={seed}: grid chi2 {grid}");
                 let low = chi2(p.iter().enumerate().map(|(i, &v)| (i & 15) * 16 + (v & 15) as usize), 256, n);
-                assert!(low < 255.0 + 5.0 * (2.0 * 255.0f64).sqrt(), "n={n} seed={seed}: low-bit chi2 {low}");
+                assert!(low < chi2_bound(15 * 15), "n={n} seed={seed}: low-bit chi2 {low}");
                 let fixed = p.iter().enumerate().filter(|&(ref i, &v)| *i as u64 == v).count();
                 assert!(fixed < 10, "n={n} seed={seed}: {fixed} fixed points");
                 let bound = 5.0 / (n as f64).sqrt();
@@ -262,6 +283,32 @@ mod tests {
                 assert!(serial.abs() < bound, "n={n} seed={seed}: serial correlation {serial}");
                 let lag7 = pearson(p[..p.len() - 7].iter().map(f), p[7..].iter().map(f));
                 assert!(lag7.abs() < bound, "n={n} seed={seed}: lag-7 correlation {lag7}");
+            }
+        }
+    }
+
+    /// Domains of exactly `2^k` elements, where the network's output is the permutation
+    /// without any cycle walking, over many keys: the differences of consecutive images,
+    /// `p(i) − p(i − 1) mod n`, are spread over 64 bins within 4.5σ of a chi-square with 63
+    /// degrees of freedom for every key (six rounds left about one key in a hundred at 7 to
+    /// 17σ). Off powers of two the cycle walk hides such structure, so the sizes here are
+    /// the strict ones. Runs in release builds; in debug builds the 60 million permutations
+    /// would take seconds.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "runs in release builds (cargo test --release)")]
+    fn consecutive_differences_at_powers_of_two() {
+        for (n, seeds) in [(1u64 << 16, 300u64), (1 << 17, 100), (1 << 18, 100)] {
+            for seed in 0..seeds {
+                let (shape, key) = (Shape::new(n), key(seed, 0, 0));
+                let mut bins = [0u64; 64];
+                let mut prev = permute(shape, key, 0);
+                for i in 1..n {
+                    let v = permute(shape, key, i);
+                    bins[((v + n - prev) % n * 64 / n) as usize] += 1;
+                    prev = v;
+                }
+                let x = chi2(bins.iter().enumerate().flat_map(|(b, &c)| std::iter::repeat_n(b, c as usize)), 64, n - 1);
+                assert!(x < 63.0 + 4.5 * (2.0 * 63.0f64).sqrt(), "n={n} seed={seed}: difference chi2 {x}");
             }
         }
     }

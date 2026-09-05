@@ -59,8 +59,8 @@
 //! | `Take { n, inner }` | `n` | `p` of `inner` |
 //! | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉`, or 0 | `offset + p·step` of `inner` |
 //!
-//! Shuffles are seeded permutations of `0..n` (a keyed six-round Feistel network with cycle
-//! walking, see `src/perm.rs`): O(1) per element, no state. A shuffle's permutation depends
+//! Shuffles are seeded permutations of `0..n` (a keyed seven-round Feistel network with
+//! cycle walking, see `src/perm.rs`): O(1) per element, no state. A shuffle's permutation depends
 //! on its `seed`, on the order's seed, on the *context*, which every `Repeat` of more than
 //! one repetition on the path above derives afresh for each repetition after its first,
 //! and on the sources under it that have elements, their [salts](Source::salt) and lengths

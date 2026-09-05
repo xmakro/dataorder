@@ -105,14 +105,16 @@ and the tournament tree against `BinaryHeap`.
 
 ## Shuffle
 
-A seeded permutation of `0..n` in O(1) per element and no state: a six-round Feistel network
+A seeded permutation of `0..n` in O(1) per element and no state: a seven-round Feistel network
 on the `k`-bit numbers (`2^(k−1) < n ≤ 2^k`) with cycle walking to `0..n`. The round function
 adds the round key to half the bits, multiplies by the round's odd multiplier and keeps the top
-bits of the product. It passes joint-distribution (grid and low bits), serial-correlation and
-fixed-point checks at every size tested, from 2 to 10⁶ (`src/perm.rs` tests); there is no security
-claim. A masked multiply–xorshift mixer (MurmurHash3's finalizer cut to `k` bits) is twice as
-fast but fails badly as a permutation: consecutive inputs map to outputs with a nearly constant
-difference.
+bits of the product. It passes joint-distribution (grid and low bits), serial-correlation,
+consecutive-difference and fixed-point checks at every size tested, from 2 to 10⁶, over hundreds
+of keys at exact powers of two, where nothing but the network shapes the permutation
+(`src/perm.rs` tests; six rounds left about one key in a hundred there with a visible structure
+in consecutive differences). There is no security claim. A masked multiply–xorshift mixer
+(MurmurHash3's finalizer cut to `k` bits) is twice as fast but fails badly as a permutation:
+consecutive inputs map to outputs with a nearly constant difference.
 
 ## Cost
 
