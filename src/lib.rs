@@ -154,8 +154,8 @@
 //! operations (Rust never contracts them), so it agrees on every target whose `f64` is
 //! hardware or software binary64; the x87-only `i586` targets, which compute in extended
 //! precision, are excluded. A release that changes any order, or the serialized form of a
-//! configuration, is a breaking change (a new minor version while the crate is 0.x) and is
-//! listed in `CHANGELOG.md`. Golden tests in `tests/golden.rs` pin fingerprints of a dozen
+//! configuration, is a breaking change (a new minor version while the crate is 0.x).
+//! Golden tests in `tests/golden.rs` pin fingerprints of a dozen
 //! orders through the public API, and CI runs them on 64-bit and 32-bit x86 and on 64-bit
 //! ARM.
 

@@ -60,7 +60,7 @@ shards
 partition a sequence position by position, so a mix's schedule is preserved across workers;
 `iter(a..b)` yields exactly `get(a)..get(b)`; and an order is a pure function of the
 configuration and the seed on every platform. A release that changes any order is a breaking
-change and is listed in [CHANGELOG.md](CHANGELOG.md).
+change.
 
 Repeat contexts also depend on nesting depth. Adding an outer repeat changes the later
 epochs of inner repeats, even during the outer repeat's first epoch; the same applies when
@@ -118,8 +118,7 @@ A mix is at most 2⁴⁶ long (`MAX_MIX_LEN`), and a scheduled part must satisfy
 rejected; use equal adjacent breakpoints for an abrupt change. `cargo test --release -- --ignored --nocapture` runs this table
 and the tournament tree against `BinaryHeap`.
 
-These Ryzen measurements precede the later numerical and shuffle fixes; local comparisons
-are in [the review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
+These Ryzen measurements precede the later numerical and shuffle fixes.
 
 ## Shuffle
 
@@ -133,24 +132,20 @@ lengths, including `source(56_444).shuffle(1)`.
 Tests check bijectivity, joint distribution, serial correlation, consecutive differences,
 fixed points and small-domain coverage across seeds. They include the reported weak public
 configurations and independently chosen seeds and lengths. These checks provide evidence
-of statistical quality, not a guarantee for every configuration or a security claim. The
-[shuffle review notes](docs/optimization-notes.md#shuffle-and-api-review-2026-09-05) record
-the measured cost of the stronger round function.
+of statistical quality, not a guarantee for every configuration or a security claim.
 
 ## Cost
 
 Per element and per operation, measured 2026-09 on one core of a Ryzen 9 9950X3D
 (`cargo run --release --example bench`; the benchmark harness in the repository,
-`scripts/bench_campaign.py`, pins the core and keeps the minimum of repeated runs). *walk*: one
+`examples/bench_campaign.rs`, pins the core and keeps the minimum of repeated runs). *walk*: one
 element by `next` after a seek. *seek*: `order.iter(pos..).next()` at a random position (builds
 and positions a cursor and draws its first element, which is what enters the parts of a mix).
 *get*: `order.get(pos)` at a random position. The first row is a realistic training order: two mixes,
 of 1000 and 100 shuffled sources of 0.5–2 million elements, each source repeated 2–4 epochs,
 mixed together.
 
-These are the Ryzen measurements before the numerical and shuffle review fixes. Comparisons
-on Apple Silicon, including the pathological inputs, are recorded in
-[the review notes](docs/optimization-notes.md#numerical-review-2026-09-05).
+These are the Ryzen measurements before the numerical and shuffle review fixes.
 
 | order | walk | seek | get |
 |---|---|---|---|
@@ -189,8 +184,7 @@ built on the first draw, so empty ranges and `count` allocate nothing. A mix wit
 remaining part stops replaying the tournament. Sharding each part before mixing reduces work
 only when the resulting worker schedules remain feasible: rounding each part
 independently changes proportions and can make a worker overcommitted. Shard the global
-mix when its exact position partition must be preserved. How these numbers came about, and what was
-tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.md).
+mix when its exact position partition must be preserved.
 
 ## Layout
 
@@ -207,7 +201,7 @@ tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.m
 | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles and their integrals, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` merge against brute force, exact seeks, balance and schedule bounds |
 | `src/tests.rs` | random configurations against a materializing reference evaluator |
 | `tests/golden.rs`, `tests/api.rs`, `tests/cost.rs` | pinned orders, the public surface as a downstream crate sees it, and the cost model (allocation counts of seeks, `count` and `last`, shards of nested mixes) |
-| `scripts/bench_campaign.py` | pinned, repeated benchmark runs tabulated across labelled steps (repository only) |
+| `examples/bench_campaign.rs` | pinned, repeated benchmark runs tabulated across labelled steps |
 
 Run `cargo run --release --example demo` for a small schedule, `--example bench` for the table, and
 `cargo test --release -- --ignored --nocapture` for the interleave, tournament tree and permutation
@@ -217,4 +211,15 @@ For schedule-phase and continuous-tail measurements, run
 `cargo run --release --example bench -- --phases`; `-- --lifecycle` adds compilation,
 reused-cursor seeking and requested allocation bytes. `-- --all` runs every group. The
 campaign harness accepts the corresponding `phases`, `lifecycle` or `all` mode after its
-directory argument; set `BENCH_CORE=none` on systems without `taskset`.
+directory argument:
+
+```sh
+cargo run --release --example bench_campaign -- run baseline . all
+cargo run --release --example bench_campaign -- table 1
+```
+
+Each campaign runs twice and saves per-column minima in `target/bench-campaign.json`.
+`BENCH_MODE` sets the default mode; `BENCH_CORE` selects a core (default `2`), or `none`
+on systems without `taskset`. Table columns are `0` seek, `1` walk (default), `2` get,
+`3` build, `4` reused seek and `5` cursor requested bytes. Existing campaign JSON files
+can be moved to `target/bench-campaign.json`.

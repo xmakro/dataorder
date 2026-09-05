@@ -1,6 +1,6 @@
 //! The orders themselves, pinned through the public API. A mismatch means the crate's orders
 //! changed: that is a breaking change (see the crate docs on stability), to be made
-//! deliberately, with a version bump, a changelog entry and new values here.
+//! deliberately, with a version bump and new values here.
 
 use Sampling::*;
 use dataorder::{Order, Sampling, Seq, Source};

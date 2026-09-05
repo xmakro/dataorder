@@ -8,7 +8,7 @@ keywords = ["shuffle", "dataset", "data-loading", "interleave", "permutation"]
 categories = ["algorithms", "data-structures"]
 repository = "https://github.com/xmakro/dataorder"
 license = "MIT OR Apache-2.0"
-exclude = ["/.github", "/scripts"]
+exclude = ["/.github"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
