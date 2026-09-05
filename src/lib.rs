@@ -54,9 +54,10 @@
 //! Shuffles are seeded permutations of `0..n` (a keyed six-round Feistel network with cycle
 //! walking, see `src/perm.rs`): O(1) per element, no state. A shuffle's permutation depends on its
 //! `seed`, on the order's seed and on the *context*, which every `Repeat` on the path above
-//! derives afresh for each of its repetitions, so `x.shuffle(s).repeat(3)` shuffles `x`
-//! three different ways while `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one
-//! order. Everything is deterministic in the configuration and the order's seed.
+//! derives afresh for each repetition after its first, so `x.shuffle(s).repeat(3)` is
+//! `x.shuffle(s)` followed by two other orders of `x`, while
+//! `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one order. Everything is
+//! deterministic in the configuration and the order's seed.
 //!
 //! # Cost
 //!

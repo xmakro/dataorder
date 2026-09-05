@@ -51,9 +51,9 @@ Every node maps its positions to positions of its children:
 | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉` | `offset + p·step` of `inner` |
 
 A shuffle's permutation depends on its `seed`, the order's seed and the *context*, which every
-`Repeat` on the path above derives afresh for each repetition: `x.shuffle(s).repeat(3)`
-shuffles `x` three different ways, `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one
-order. Shards of one sequence partition it: shard `i` of `count` holds position `i` of every
+`Repeat` on the path above derives afresh for each repetition after its first:
+`x.shuffle(s).repeat(3)` is `x.shuffle(s)` followed by two other orders of `x`, and
+`Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one order. Shards of one sequence partition it: shard `i` of `count` holds position `i` of every
 block of `count` consecutive positions, so a mix's schedule is preserved across workers.
 Everything is deterministic in the configuration and the order's seed, and `iter(a..b)` yields
 exactly `get(a)..get(b)` whatever was iterated before.

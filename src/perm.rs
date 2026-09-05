@@ -79,11 +79,18 @@ pub(crate) fn key(seed: u64, ctx: u64) -> Key {
     k
 }
 
-/// Context of repetition `epoch` inside `ctx`: every repetition gets its own, so that
-/// shuffles inside reshuffle each time; nested repetitions chain.
+/// Context of repetition `epoch` of a repeat nested `depth` repeats deep, inside `ctx`. The
+/// first repetition keeps its context, so a sequence repeated once is itself and a repeat
+/// starts with the unrepeated sequence; every other repetition gets its own, so that the
+/// shuffles inside reshuffle. The depth keeps the contexts of nested repeats apart (the
+/// second repetition of an inner repeat inside the first of the outer, against the first of
+/// the inner inside the second of the outer).
 #[inline]
-pub(crate) fn epoch_ctx(ctx: u64, epoch: u64) -> u64 {
-    mix64(ctx ^ epoch.wrapping_add(1).wrapping_mul(PHI))
+pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, depth: u32) -> u64 {
+    if epoch == 0 {
+        return ctx;
+    }
+    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add(epoch.wrapping_mul(PHI)) ^ (depth as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
 /// One Feistel round: `(l, r)` becomes `(r, l ^ F(r))`, where `l` is `wl` bits wide
@@ -164,12 +171,13 @@ mod tests {
         let a = perm(n, 1);
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
-        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1)));
+        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 0)));
         let c: Vec<u64> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
-        // Contexts of nested repetitions do not collide.
-        assert_ne!(epoch_ctx(epoch_ctx(0, 0), 1), epoch_ctx(epoch_ctx(0, 1), 0));
-        assert_ne!(epoch_ctx(0, 0), 0);
+        // The first repetition keeps its context; contexts of nested repetitions do not collide.
+        assert_eq!(epoch_ctx(5, 0, 0), 5);
+        assert_ne!(epoch_ctx(0, 1, 0), 0);
+        assert_ne!(epoch_ctx(epoch_ctx(0, 0, 0), 1, 1), epoch_ctx(epoch_ctx(0, 1, 0), 0, 1));
     }
 
     /// Chi-square of `values` against a uniform expectation over `cells` cells.

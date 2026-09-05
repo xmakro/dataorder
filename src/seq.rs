@@ -27,8 +27,8 @@ pub enum Seq<T> {
         /// The sequence to permute.
         inner: Box<Seq<T>>,
     },
-    /// `inner`, `times` times over. Each repetition reshuffles every shuffle inside it
-    /// (including the first: `x.repeat(n)` starts differently from `x`).
+    /// `inner`, `times` times over: first as it is, then reshuffled at every shuffle inside
+    /// it for each further repetition. `x.repeat(1)` is `x`.
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -82,7 +82,7 @@ impl<T> Seq<T> {
         Seq::Shuffle { seed, inner: Box::new(self) }
     }
 
-    /// This sequence `times` times over, reshuffled each time.
+    /// This sequence `times` times over: itself, then reshuffled for each further time.
     pub fn repeat(self, times: usize) -> Seq<T> {
         Seq::Repeat { times, inner: Box::new(self) }
     }

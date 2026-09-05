@@ -49,38 +49,43 @@ impl Rng {
 
 /// Materializes `seq` in context `ctx` by the definitions in the crate docs.
 fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
+    eval_at(seq, ctx, 0)
+}
+
+/// `depth` repeats enclose `seq`.
+fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Error> {
     Ok(match seq {
         Seq::Source(s) => (0..s.len).map(|i| (s.id, i)).collect(),
         Seq::Concat(parts) => {
             let mut out = Vec::new();
             for p in parts {
-                out.extend(eval(p, ctx)?);
+                out.extend(eval_at(p, ctx, depth)?);
             }
             out
         }
         Seq::Mix(parts) => {
-            let evs = parts.iter().map(|(p, _)| eval(p, ctx)).collect::<Result<Vec<_>, _>>()?;
+            let evs = parts.iter().map(|(p, _)| eval_at(p, ctx, depth)).collect::<Result<Vec<_>, _>>()?;
             let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|(_, s)| *s).collect();
             let il = Interleave::with_sampling(&lens, &sampling)?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
         }
         Seq::Shuffle { seed, inner } => {
-            let v = eval(inner, ctx)?;
+            let v = eval_at(inner, ctx, depth)?;
             let (shape, key) = (Shape::new(v.len() as u64), perm::key(*seed, ctx));
             (0..v.len() as u64).map(|i| v[perm::permute(shape, key, i) as usize]).collect()
         }
         Seq::Repeat { times, inner } => {
             // Validated even when repeated zero times, like the compiler does.
-            let mut out = eval(inner, ctx)?;
+            let mut out = eval_at(inner, ctx, depth + 1)?;
             out.clear();
             for e in 0..*times {
-                out.extend(eval(inner, perm::epoch_ctx(ctx, e as u64))?);
+                out.extend(eval_at(inner, perm::epoch_ctx(ctx, e as u64, depth), depth + 1)?);
             }
             out
         }
         Seq::Slice { start, end, inner } => {
-            let v = eval(inner, ctx)?;
+            let v = eval_at(inner, ctx, depth)?;
             let end = end.unwrap_or(v.len());
             if *start > end || end > v.len() {
                 return Err(Error::SliceOutOfRange { start: *start, end, len: v.len() });
@@ -91,7 +96,7 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
             if *step == 0 {
                 return Err(Error::ZeroStep);
             }
-            eval(inner, ctx)?.into_iter().skip(*offset).step_by(*step).collect()
+            eval_at(inner, ctx, depth)?.into_iter().skip(*offset).step_by(*step).collect()
         }
     })
 }
@@ -233,6 +238,16 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     }
     assert_ne!(epochs[0], epochs[1]);
     assert_ne!(epochs[1], epochs[2]);
+    assert_ne!(epochs[0], epochs[2]);
+    // The first repetition is the sequence itself, and repeating once changes nothing.
+    let once = Order::compile(src(7, 1000).shuffle(3)).unwrap();
+    assert_eq!(once.iter(0..1000).map(|(_, i)| i).collect::<Vec<_>>(), epochs[0]);
+    assert_eq!(ids(Order::compile(src(7, 1000).shuffle(3).repeat(1)).unwrap().iter(0..1000)), ids(once.iter(0..1000)));
+    // Nested repeats: (outer 0, inner 1) and (outer 1, inner 0) are different orders.
+    let nested = Order::compile(src(7, 100).shuffle(3).repeat(2).repeat(2)).unwrap();
+    let block = |b: usize| ids(nested.iter(b * 100..(b + 1) * 100));
+    assert_ne!(block(1), block(2));
+    assert_eq!(block(0), ids(Order::compile(src(7, 100).shuffle(3)).unwrap().iter(0..100)));
     // Same seed twice under a concat: the same order twice.
     let twice = Order::compile(Seq::concat([src(7, 1000).shuffle(3), src(7, 1000).shuffle(3)])).unwrap();
     let v = ids(twice.iter(0..2000));
@@ -381,14 +396,14 @@ fn golden_orders() {
     const EXPECTED: [u64; 10] = [
         2858856362520336285,
         8678721152593299605,
-        18167279318118302096,
+        9098117545377468812,
         2253643174293614737,
         994532566028467186,
         17815674728835076284,
         7189627902135896981,
-        3838825843871225066,
+        100476818119445447,
         18408440380577682910,
-        9825597195269644453,
+        2436343062908294565,
     ];
     let actual: Vec<u64> = cases
         .iter()

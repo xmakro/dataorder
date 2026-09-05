@@ -93,7 +93,7 @@ pub(crate) enum NodeCursor<'a> {
     Concat { children: &'a [Node], offsets: &'a [u64], idx: usize, left: u64, ctx: u64, child: Box<NodeCursor<'a>> },
     Mix(MixCursor<'a>),
     Shuffle(ShuffleCursor<'a>),
-    Repeat { child_len: u64, epoch: u64, left: u64, ctx: u64, child: Box<NodeCursor<'a>> },
+    Repeat { child_len: u64, depth: u32, epoch: u64, left: u64, ctx: u64, child: Box<NodeCursor<'a>> },
     Slice { start: u64, child: Box<NodeCursor<'a>> },
     Stride { step: u64, offset: u64, len: u64, left: u64, child: Box<NodeCursor<'a>> },
 }
@@ -114,8 +114,9 @@ impl<'a> NodeCursor<'a> {
             },
             Node::Mix { il, children } => NodeCursor::Mix(MixCursor::new(il, children)),
             Node::Shuffle { seed, shape, child } => NodeCursor::Shuffle(ShuffleCursor { seed: *seed, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 }),
-            Node::Repeat { child_len, child, .. } => NodeCursor::Repeat {
+            Node::Repeat { child_len, depth, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
+                depth: *depth,
                 epoch: 0,
                 left: 0,
                 ctx: 0,
@@ -153,13 +154,13 @@ impl<'a> NodeCursor<'a> {
                 sh.pos = pos;
                 sh.ctx = ctx;
             }
-            NodeCursor::Repeat { child_len, epoch, left, ctx: c, child } => {
+            NodeCursor::Repeat { child_len, depth, epoch, left, ctx: c, child } => {
                 let e = pos / *child_len;
                 let r = pos - e * *child_len;
                 *epoch = e;
                 *left = *child_len - r;
                 *c = ctx;
-                child.seek(r, perm::epoch_ctx(ctx, e));
+                child.seek(r, perm::epoch_ctx(ctx, e, *depth));
             }
             NodeCursor::Slice { start, child } => child.seek(*start + pos, ctx),
             NodeCursor::Stride { step, offset, len, left, child } => {
@@ -191,11 +192,11 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.next(),
             NodeCursor::Shuffle(sh) => sh.next(),
-            NodeCursor::Repeat { child_len, epoch, left, ctx, child } => {
+            NodeCursor::Repeat { child_len, depth, epoch, left, ctx, child } => {
                 if *left == 0 {
                     *epoch += 1;
                     *left = *child_len;
-                    child.seek(0, perm::epoch_ctx(*ctx, *epoch));
+                    child.seek(0, perm::epoch_ctx(*ctx, *epoch, *depth));
                 }
                 *left -= 1;
                 child.next()
@@ -233,12 +234,12 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.skip(m),
             NodeCursor::Shuffle(sh) => sh.pos += m,
-            NodeCursor::Repeat { child_len, epoch, left, ctx, child } => {
+            NodeCursor::Repeat { child_len, depth, epoch, left, ctx, child } => {
                 while m > 0 {
                     if *left == 0 {
                         *epoch += 1;
                         *left = *child_len;
-                        child.seek(0, perm::epoch_ctx(*ctx, *epoch));
+                        child.seek(0, perm::epoch_ctx(*ctx, *epoch, *depth));
                     }
                     let t = m.min(*left);
                     child.skip(t);

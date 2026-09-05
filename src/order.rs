@@ -19,7 +19,8 @@ pub(crate) enum Node {
     Concat { offsets: Vec<u64>, children: Vec<Node> },
     Mix { il: Interleave, children: Vec<Node> },
     Shuffle { seed: u64, shape: Shape, child: Box<Node> },
-    Repeat { times: u64, child_len: u64, child: Box<Node> },
+    /// `depth` counts the repeats above this one; it salts the epoch contexts.
+    Repeat { times: u64, child_len: u64, depth: u32, child: Box<Node> },
     Slice { start: u64, len: u64, child: Box<Node> },
     Stride { step: u64, offset: u64, len: u64, child: Box<Node> },
 }
@@ -61,7 +62,7 @@ impl<T: Dataset> Order<T> {
     /// keep their relative distinctness from their own seeds.
     pub fn compile_seeded(seq: Seq<T>, seed: u64) -> Result<Order<T>, Error> {
         let mut c = Compiler { sources: Vec::new() };
-        let root = c.compile(seq)?;
+        let root = c.compile(seq, 0)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::Overflow);
         }
@@ -134,10 +135,10 @@ pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
                 pos = perm::permute(*shape, perm::key(*seed, ctx), pos);
                 node = child;
             }
-            Node::Repeat { child_len, child, .. } => {
+            Node::Repeat { child_len, depth, child, .. } => {
                 let epoch = pos / child_len;
                 pos -= epoch * child_len;
-                ctx = perm::epoch_ctx(ctx, epoch);
+                ctx = perm::epoch_ctx(ctx, epoch, *depth);
                 node = child;
             }
             Node::Slice { start, child, .. } => {
@@ -157,7 +158,8 @@ struct Compiler<T> {
 }
 
 impl<T: Dataset> Compiler<T> {
-    fn compile(&mut self, seq: Seq<T>) -> Result<Node, Error> {
+    /// `depth` is the number of repeats above `seq`.
+    fn compile(&mut self, seq: Seq<T>, depth: u32) -> Result<Node, Error> {
         Ok(match seq {
             Seq::Source(source) => {
                 let len = source.len() as u64;
@@ -174,7 +176,7 @@ impl<T: Dataset> Compiler<T> {
                 // and the context of every element.
                 let mut children = Vec::new();
                 for part in parts {
-                    match self.compile(part)? {
+                    match self.compile(part, depth)? {
                         Node::Empty => {}
                         Node::Concat { children: inner, .. } => children.extend(inner),
                         node => children.push(node),
@@ -197,7 +199,7 @@ impl<T: Dataset> Compiler<T> {
             }
             Seq::Mix(parts) => {
                 let sampling: Vec<Sampling> = parts.iter().map(|(_, s)| *s).collect();
-                let children = parts.into_iter().map(|(p, _)| self.compile(p)).collect::<Result<Vec<_>, _>>()?;
+                let children = parts.into_iter().map(|(p, _)| self.compile(p, depth)).collect::<Result<Vec<_>, _>>()?;
                 let lens: Vec<u64> = children.iter().map(Node::len).collect();
                 // Validates the schedules even when the mix folds away.
                 let il = Interleave::with_sampling(&lens, &sampling)?;
@@ -210,7 +212,7 @@ impl<T: Dataset> Compiler<T> {
                 }
             }
             Seq::Shuffle { seed, inner } => {
-                let child = self.compile(*inner)?;
+                let child = self.compile(*inner, depth)?;
                 if child.len() <= 1 {
                     child
                 } else {
@@ -218,17 +220,20 @@ impl<T: Dataset> Compiler<T> {
                 }
             }
             Seq::Repeat { times, inner } => {
-                let child = self.compile(*inner)?;
+                let child = self.compile(*inner, depth + 1)?;
                 let child_len = child.len();
                 let times = times as u64;
                 if times.checked_mul(child_len).ok_or(Error::Overflow)? == 0 {
                     Node::Empty
+                } else if times == 1 {
+                    // The first repetition keeps its context: a single one is the sequence.
+                    child
                 } else {
-                    Node::Repeat { times, child_len, child: Box::new(child) }
+                    Node::Repeat { times, child_len, depth, child: Box::new(child) }
                 }
             }
             Seq::Slice { start, end, inner } => {
-                let child = self.compile(*inner)?;
+                let child = self.compile(*inner, depth)?;
                 let len = child.len();
                 let (start, end) = (start as u64, end.map_or(len, |e| e as u64));
                 if start > end || end > len {
@@ -241,7 +246,7 @@ impl<T: Dataset> Compiler<T> {
                 if step == 0 {
                     return Err(Error::ZeroStep);
                 }
-                let child = self.compile(*inner)?;
+                let child = self.compile(*inner, depth)?;
                 let (step, offset) = (step as u64, offset as u64);
                 let n = child.len();
                 let len = if offset >= n { 0 } else { (n - offset - 1) / step + 1 };
