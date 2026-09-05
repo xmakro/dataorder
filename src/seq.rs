@@ -61,9 +61,10 @@ pub enum Seq<T> {
         parts: Vec<WeightedPart<T>>,
     },
     /// `inner` in a pseudorandom order selected by `seed`, by the order's seed and by the
-    /// sources under it (their [salts](Source::salt) and lengths). Inside a
-    /// [`Repeat`](Seq::Repeat) the order also depends on the repetition, so every epoch is
-    /// shuffled differently.
+    /// sources under it that have elements (their [salts](Source::salt) and lengths, in
+    /// order of appearance; an empty source, or a part that is empty as a whole, does not
+    /// count). Inside a [`Repeat`](Seq::Repeat) the order also depends on the repetition,
+    /// so every epoch is shuffled differently.
     Shuffle {
         /// Selects the permutation.
         seed: u64,

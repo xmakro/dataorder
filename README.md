@@ -49,8 +49,9 @@ matters, as are slices and vectors.
 The precise semantics of every node, what compilation rejects and folds, and the stability
 policy are in the [crate documentation](https://docs.rs/dataorder). In short: every node maps its
 positions to positions of its children; a shuffle depends on its seed, the order's seed, the
-repetition it is in and the sources under it (their salts and lengths), so `x.shuffle(s).repeat(3)`
-is three different orders of `x` and sources with different salts never shuffle alike; shards
+repetition it is in and the non-empty sources under it (their salts and lengths), so
+`x.shuffle(s).repeat(3)` is three different orders of `x`, sources with different salts never
+shuffle alike and an empty shard in a listing changes nothing; shards
 partition a sequence position by position, so a mix's schedule is preserved across workers;
 `iter(a..b)` yields exactly `get(a)..get(b)`; and an order is a pure function of the
 configuration and the seed on every platform. A release that changes any order is a breaking

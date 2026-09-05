@@ -30,7 +30,8 @@ pub(crate) enum Node {
         il: Interleave,
         children: Vec<Self>,
     },
-    /// `salt` folds the salts and lengths of the sources under it (see [`perm::shuffle_salt`]).
+    /// `salt` folds the salts and lengths of the sources under it that have elements (see
+    /// [`perm::shuffle_salt`] and [`sources`]).
     Shuffle {
         seed: u64,
         salt: u64,
@@ -294,7 +295,7 @@ pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
 
 struct Compiler<T> {
     sources: Vec<T>,
-    /// Salt and length of every source, in order, for the salts of the shuffles above them.
+    /// Salt and length of every source, by index, for the salts of the shuffles above them.
     salts: Vec<(u64, u64)>,
     /// Child indices from the root to the node being compiled, for error reports.
     path: Vec<usize>,
@@ -388,12 +389,13 @@ impl<T: Source> Compiler<T> {
             }
             Seq::Weighted { total, parts } => self.weighted(total, parts, repeats, level)?,
             Seq::Shuffle { seed, inner } => {
-                let first = self.salts.len();
                 let child = self.child(0, *inner, repeats, level)?;
                 if child.len() <= 1 {
                     child
                 } else {
-                    let salt = perm::shuffle_salt(self.salts[first..].iter().copied());
+                    let mut under = Vec::new();
+                    sources(&child, &mut under);
+                    let salt = perm::shuffle_salt(under.into_iter().map(|src| self.salts[src as usize]));
                     Node::Shuffle { seed, salt, shape: Shape::new(child.len()), child: Box::new(child) }
                 }
             }
@@ -577,6 +579,20 @@ pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, (
     }
     debug_assert_eq!(given, total);
     Ok(shares)
+}
+
+/// The sources of `node` that can contribute elements, in order of appearance: every
+/// `Source` of the compiled tree, since a subtree without elements folds to `Empty` and a
+/// source with elements stays wherever a node keeps it. What a shuffle above is salted with.
+fn sources(node: &Node, out: &mut Vec<u32>) {
+    match node {
+        Node::Empty => {}
+        Node::Source { src, .. } => out.push(*src),
+        Node::Concat { children, .. } | Node::Mix { children, .. } => children.iter().for_each(|c| sources(c, out)),
+        Node::Shuffle { child, .. } | Node::Repeat { child, .. } | Node::Slice { child, .. } | Node::Stride { child, .. } => {
+            sources(child, out)
+        }
+    }
 }
 
 /// Moves every repeat in `node` one repeat deeper: what compiling it under one more repeat

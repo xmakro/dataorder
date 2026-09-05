@@ -61,8 +61,9 @@
 //! walking, see `src/perm.rs`): O(1) per element, no state. A shuffle's permutation depends
 //! on its `seed`, on the order's seed, on the *context*, which every `Repeat` of more than
 //! one repetition on the path above derives afresh for each repetition after its first,
-//! and on the sources under it, their [salts](Source::salt) and lengths in order of
-//! appearance. So `x.shuffle(s).repeat(3)` is `x.shuffle(s)` followed by two other orders
+//! and on the sources under it that have elements, their [salts](Source::salt) and lengths
+//! in order of appearance (an empty source, or a part that is empty as a whole, does not
+//! count). So `x.shuffle(s).repeat(3)` is `x.shuffle(s)` followed by two other orders
 //! of `x`, `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one order, `x.repeat(1)` is
 //! `x`, and `Seq::mix([a.shuffle(s), b.shuffle(s)])` orders `a` and `b` alike only when
 //! they have the same length and salt: give sources a salt, or shuffles their own seeds.
@@ -75,7 +76,8 @@
 //! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node. Two
 //! builders panic instead, on mistakes no configuration can express (see [`Seq`]).
 //! Compilation folds what is exact: nested concats flatten, empty parts vanish (an empty
-//! part of a mix does not affect the order of the others), skips and takes merge into
+//! part of a mix does not affect the order of the others, nor does an empty source or part
+//! the shuffles above it), skips and takes merge into
 //! sources, slices and strides, a mix or shuffle with a single non-empty part is that part,
 //! and a single repetition is the sequence.
 //!

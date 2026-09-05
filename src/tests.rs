@@ -29,13 +29,22 @@ impl Source for Src {
     }
 }
 
-/// Salts and lengths of the sources under `seq`, in order of appearance.
+/// Salts and lengths of the sources under `seq` that can contribute elements, in order of
+/// appearance: a subtree without elements counts for nothing, whatever is under it, and
+/// neither does a weighted part without a share. `seq` is valid.
 fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, u64)>) {
+    if eval(seq, 0).unwrap().is_empty() {
+        return;
+    }
     match seq {
         Seq::Source(s) => out.push((s.salt(), s.len as u64)),
         Seq::Concat(parts) => parts.iter().for_each(|p| salts(p, out)),
         Seq::Mix(parts) => parts.iter().for_each(|p| salts(&p.seq, out)),
-        Seq::Weighted { parts, .. } => parts.iter().for_each(|p| salts(&p.seq, out)),
+        Seq::Weighted { total, parts } => {
+            let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
+            let shares = crate::order::weighted_shares(*total as u64, &weights).unwrap();
+            parts.iter().zip(shares).filter(|(_, share)| *share > 0).for_each(|(p, _)| salts(&p.seq, out));
+        }
         Seq::Shuffle { inner, .. }
         | Seq::Repeat { inner, .. }
         | Seq::Skip { inner, .. }
@@ -578,6 +587,27 @@ fn seek_past_the_end_panics() {
 #[should_panic(expected = "slice bound overflows usize")]
 fn slice_bound_overflow_panics() {
     let _ = src(0, 5).slice(..=usize::MAX);
+}
+
+/// An empty source, or a part that folds away as empty, does not change the shuffle above
+/// it: only sources that contribute elements salt it.
+#[test]
+fn empty_parts_do_not_affect_shuffles_above() {
+    let x = || src(0, 100);
+    let base = ids(Order::new(x().shuffle(1)).unwrap().iter(..));
+    let same = |seq: Seq<Src>| assert_eq!(ids(Order::new(seq).unwrap().iter(..)), base);
+    same(Seq::concat([x(), src(1, 0)]).shuffle(1));
+    same(Seq::concat([src(0, 0), x()]).shuffle(1));
+    same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).stride(1, 2)]).shuffle(1));
+    same(Seq::mix([x(), src(1, 0), Seq::concat([src(2, 5).skip(5), src(3, 0)])]).shuffle(1));
+    same(Seq::weighted(100, [(x(), 1.0), (src(1, 50), 0.0)]).shuffle(1));
+    same(Seq::mix([x()]).shuffle(1));
+    same(x().stride(1, 0).shuffle(1));
+    same(Seq::concat([x(), Seq::weighted(0, [(src(1, 5), 1.0)])]).shuffle(1));
+    // A source with elements counts, wherever the elements end up.
+    let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(100).shuffle(1)).unwrap().iter(..));
+    assert_ne!(with(src(1, 1)), base);
+    assert_ne!(with(src(0, 1)), base);
 }
 
 /// A mix's order does not depend on empty parts, wherever they sit, nor a weighted mix's on
