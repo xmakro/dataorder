@@ -117,25 +117,30 @@ Per element and per operation, measured 2026-09 on one core of a Ryzen 9 9950X3D
 (`cargo run --release --example bench`; the benchmark harness in the repository,
 `scripts/bench_campaign.py`, pins the core and keeps the minimum of repeated runs). *walk*: one
 element by `next` after a seek. *seek*: `order.iter(pos..)` at a random position (builds and
-positions a cursor). *get*: `order.get(pos)` at a random position. The first row is a
-realistic training order: two mixes, of 1000 and 100 shuffled sources of 0.5–2 million
-elements, each source repeated 2–4 epochs, mixed together.
+positions a cursor; the parts of a mix are entered on its first element). *get*:
+`order.get(pos)` at a random position. The first row is a realistic training order: two mixes,
+of 1000 and 100 shuffled sources of 0.5–2 million elements, each source repeated 2–4 epochs,
+mixed together.
 
 | order | walk | seek | get |
 |---|---|---|---|
-| `mix(mix(1000 × shuffled, 2–4 epochs), mix(100 × same))` | 36.6 ns | 47 µs | 27.7 µs |
-| `shuffle(source)` | 7.8 ns | 0.02 µs | 12.2 ns |
-| `shuffle(source 10⁶).repeat(1000)` | 7.7 ns | 0.04 µs | 17.4 ns |
-| `shuffle(concat(100 × source))` | 18.3 ns | 0.02 µs | 24.3 ns |
-| `mix(5 × source)` | 7.1 ns | 0.27 µs | 206 ns |
-| `mix(60% shuffled + 9 × 4.4% shuffled)` | 20.4 ns | 0.50 µs | 376 ns |
-| `mix(100 × source)` | 10.8 ns | 2.81 µs | 2.1 µs |
-| `mix(100 × shuffled)` | 17.0 ns | 2.96 µs | 2.1 µs |
-| `mix(100 × shuffled, 20% scheduled)` | 21.7 ns | 5.02 µs | 4.1 µs |
-| `mix(1000 × shuffled, 20% scheduled)` | 28.0 ns | 44 µs | 37.1 µs |
-| `mix(100 × shuffled, 20% scheduled).shard(8, 0)` | 117 ns | 4.60 µs | 4.1 µs |
-| `repeat(3, mix(3 nested)).shard(4, 1)` | 56.3 ns | 0.26 µs | 192 ns |
-| `shuffle(mix(100 × source))` | 2.1 µs | 0.02 µs | 2.1 µs |
+| `mix(mix(1000 × shuffled, 2–4 epochs), mix(100 × same))` | 37.0 ns | 0.11 µs | 28.7 µs |
+| `source` | 1.4 ns | 0.02 µs | 3.1 ns |
+| `shuffle(source)` | 8.1 ns | 0.02 µs | 14.4 ns |
+| `shuffle(source 10⁶).repeat(1000)` | 8.4 ns | 0.04 µs | 17.8 ns |
+| `concat(100 × shuffle(source))` | 8.4 ns | 0.05 µs | 28.5 ns |
+| `shuffle(concat(100 × source))` | 18.5 ns | 0.02 µs | 26.4 ns |
+| `mix(5 × source)` | 7.4 ns | 0.18 µs | 153.3 ns |
+| `mix(80% source + 4 × 5% source)` | 7.4 ns | 0.18 µs | 165.7 ns |
+| `mix(60% shuffled + 9 × 4.4% shuffled)` | 21.0 ns | 0.31 µs | 291.5 ns |
+| `mix(100 × source)` | 10.9 ns | 2.07 µs | 1.9 µs |
+| `mix(100 × shuffled)` | 17.9 ns | 2.08 µs | 1.9 µs |
+| `mix(100 × shuffled, 20% scheduled)` | 23.3 ns | 4.17 µs | 4.0 µs |
+| `mix(1000 × shuffled, 20% scheduled)` | 28.9 ns | 38 µs | 37.7 µs |
+| `mix(100 × shuffled, 20% scheduled).shard(8, 0)` | 121.6 ns | 3.73 µs | 4.0 µs |
+| `mix(100 × shuffled, 20% scheduled).shard(512, 0)` | 4.5 µs | 4.06 µs | 4.0 µs |
+| `repeat(3, mix(3 nested)).shard(4, 1)` | 60.7 ns | 0.17 µs | 174.7 ns |
+| `shuffle(mix(100 × source))` | 1.9 µs | 0.02 µs | 1.9 µs |
 
 `get` and a seek walk the path from the root to a source: constant work per node, except that
 a `Mix` costs a seek of the interleave (`O(k log s)` for `k` parts, `s` scheduled). A walk keeps a
