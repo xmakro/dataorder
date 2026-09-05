@@ -15,6 +15,10 @@ impl Source for Src {
     fn len(&self) -> usize {
         self.len
     }
+
+    fn salt(&self) -> u64 {
+        self.id as u64
+    }
 }
 
 fn src(id: u32, len: usize) -> Seq<Src> {
@@ -62,18 +66,18 @@ fn golden_orders() {
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
     ];
     const EXPECTED: [u64; 12] = [
-        8944480274337887517,
-        4625008917299269681,
-        10153334795136506768,
-        2873731158959093005,
-        11124861484752690026,
-        11279912391434559340,
-        10444670851558434453,
-        9703835265997803807,
-        10527708798688175491,
-        15930632077147421093,
-        102363814477202295,
-        12092713108142259365,
+        17918724613688720885,
+        6314560897953129369,
+        9731401842934529132,
+        12336213182018184021,
+        2374714768531222327,
+        4402697673826370048,
+        12329307292984495973,
+        17048615245698700107,
+        5704173740700921882,
+        8789581730375861797,
+        9381521998954631041,
+        8555868547297370277,
     ];
     let actual: Vec<u64> = cases
         .iter()
@@ -86,7 +90,7 @@ fn golden_orders() {
     assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle(7)).unwrap();
-    const FIRST: [usize; 6] = [658, 809, 435, 971, 671, 326];
+    const FIRST: [usize; 6] = [73, 53, 757, 255, 974, 351];
     assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
 }

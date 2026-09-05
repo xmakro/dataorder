@@ -30,8 +30,10 @@ pub(crate) enum Node {
         il: Interleave,
         children: Vec<Self>,
     },
+    /// `salt` folds the salts and lengths of the sources under it (see [`perm::shuffle_salt`]).
     Shuffle {
         seed: u64,
+        salt: u64,
         shape: Shape,
         child: Box<Self>,
     },
@@ -98,7 +100,7 @@ impl<T: Source> Order<T> {
     /// # Errors
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
-        let mut c = Compiler { sources: Vec::new(), path: Vec::new() };
+        let mut c = Compiler { sources: Vec::new(), salts: Vec::new(), path: Vec::new() };
         let root = c.compile(seq, 0, 1)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::new(ErrorKind::OrderTooLong { len: root.len() }, Vec::new()));
@@ -228,8 +230,8 @@ pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
                 pos = j;
                 node = &children[s];
             }
-            Node::Shuffle { seed, shape, child } => {
-                pos = perm::permute(*shape, perm::key(*seed, ctx), pos);
+            Node::Shuffle { seed, salt, shape, child } => {
+                pos = perm::permute(*shape, perm::key(*seed, ctx, *salt), pos);
                 node = child;
             }
             Node::Repeat { child_len, depth, child, .. } => {
@@ -252,6 +254,8 @@ pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
 
 struct Compiler<T> {
     sources: Vec<T>,
+    /// Salt and length of every source, in order, for the salts of the shuffles above them.
+    salts: Vec<(u64, u64)>,
     /// Child indices from the root to the node being compiled, for error reports.
     path: Vec<usize>,
 }
@@ -300,6 +304,7 @@ impl<T: Source> Compiler<T> {
             Seq::Source(source) => {
                 let len = source.len() as u64;
                 let src = u32::try_from(self.sources.len()).map_err(|_| self.err(ErrorKind::TooManySources))?;
+                self.salts.push((source.salt(), len));
                 self.sources.push(source);
                 if len == 0 { Node::Empty } else { Node::Source { src, offset: 0, len } }
             }
@@ -336,8 +341,14 @@ impl<T: Source> Compiler<T> {
             }
             Seq::Weighted { total, parts } => self.weighted(total, parts, repeats, level)?,
             Seq::Shuffle { seed, inner } => {
+                let first = self.salts.len();
                 let child = self.child(0, *inner, repeats, level)?;
-                if child.len() <= 1 { child } else { Node::Shuffle { seed, shape: Shape::new(child.len()), child: Box::new(child) } }
+                if child.len() <= 1 {
+                    child
+                } else {
+                    let salt = perm::shuffle_salt(self.salts[first..].iter().copied());
+                    Node::Shuffle { seed, salt, shape: Shape::new(child.len()), child: Box::new(child) }
+                }
             }
             Seq::Repeat { times, inner } => {
                 // A single repetition is the sequence itself, so it does not count as a repeat

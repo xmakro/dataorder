@@ -12,6 +12,10 @@ impl Source for Src {
     fn len(&self) -> usize {
         self.len
     }
+
+    fn salt(&self) -> u64 {
+        self.name as u64
+    }
 }
 
 fn main() {

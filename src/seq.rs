@@ -57,8 +57,10 @@ pub enum Seq<T> {
         /// The parts with their weights and schedules.
         parts: Vec<WeightedPart<T>>,
     },
-    /// `inner` in a pseudorandom order selected by `seed`. Inside a [`Repeat`](Seq::Repeat)
-    /// the order also depends on the repetition, so every epoch is shuffled differently.
+    /// `inner` in a pseudorandom order selected by `seed`, by the order's seed and by the
+    /// sources under it (their [salts](Source::salt) and lengths). Inside a
+    /// [`Repeat`](Seq::Repeat) the order also depends on the repetition, so every epoch is
+    /// shuffled differently.
     Shuffle {
         /// Selects the permutation.
         seed: u64,
@@ -330,7 +332,8 @@ impl<T> Seq<T> {
     }
 
     /// The same expression over the sources mapped by `f`, in order of appearance: a
-    /// configuration over handles becomes one over loaded datasets.
+    /// configuration over handles becomes one over loaded datasets. Its order is the same
+    /// when the mapped sources keep their lengths and salts.
     ///
     /// ```
     /// use dataorder::Seq;

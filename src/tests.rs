@@ -12,7 +12,7 @@ use crate::interleave::Interleave;
 use crate::perm::{self, Shape};
 use crate::*;
 
-/// A test source: an id to compare orders by, and a length.
+/// A test source: an id to compare orders by (and to salt shuffles with), and a length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Src {
     id: u32,
@@ -22,6 +22,27 @@ struct Src {
 impl Source for Src {
     fn len(&self) -> usize {
         self.len
+    }
+
+    fn salt(&self) -> u64 {
+        self.id as u64
+    }
+}
+
+/// Salts and lengths of the sources under `seq`, in order of appearance.
+fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, u64)>) {
+    match seq {
+        Seq::Source(s) => out.push((s.salt(), s.len as u64)),
+        Seq::Concat(parts) => parts.iter().for_each(|p| salts(p, out)),
+        Seq::Mix(parts) => parts.iter().for_each(|p| salts(&p.seq, out)),
+        Seq::Weighted { parts, .. } => parts.iter().for_each(|p| salts(&p.seq, out)),
+        Seq::Shuffle { inner, .. }
+        | Seq::Repeat { inner, .. }
+        | Seq::Skip { inner, .. }
+        | Seq::Take { inner, .. }
+        | Seq::Stride { inner, .. } => {
+            salts(inner, out);
+        }
     }
 }
 
@@ -107,7 +128,9 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
         }
         Seq::Shuffle { seed, inner } => {
             let v = eval_at(inner, ctx, depth)?;
-            let (shape, key) = (Shape::new(v.len() as u64), perm::key(*seed, ctx));
+            let mut under = Vec::new();
+            salts(inner, &mut under);
+            let (shape, key) = (Shape::new(v.len() as u64), perm::key(*seed, ctx, perm::shuffle_salt(under)));
             (0..v.len() as u64).map(|i| v[perm::permute(shape, key, i) as usize]).collect()
         }
         Seq::Repeat { times, inner } => {
@@ -339,6 +362,13 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     let twice = Order::new(Seq::concat([src(7, 1000).shuffle(3), src(7, 1000).shuffle(3)])).unwrap();
     let v = ids(twice.iter(0..2000));
     assert_eq!(v[..1000], v[1000..]);
+    // Another salt or another length with the same seed: unrelated orders.
+    let salted = Order::new(Seq::concat([src(7, 1000).shuffle(3), src(8, 1000).shuffle(3), src(7, 999).shuffle(3)])).unwrap();
+    let w = ids(salted.iter(..));
+    let alike = |a: &[(u32, usize)], b: &[(u32, usize)]| a.iter().zip(b).filter(|(x, y)| x.1 == y.1).count();
+    assert!(alike(&w[..1000], &w[1000..2000]) < 10);
+    assert!(alike(&w[..999], &w[2000..]) < 10);
+    assert!(alike(&w[1000..1999], &w[2000..]) < 10);
     // The order's seed changes every shuffle.
     let reseeded = Order::with_seed(seq, 99).unwrap();
     assert_ne!(ids(reseeded.iter(0..1000)), ids(order.iter(0..1000)));
@@ -361,16 +391,35 @@ fn shards_partition_the_sequence() {
     assert_eq!(from_shards.len(), all.len());
 }
 
-/// `map` keeps the structure: the same indices come out over the mapped sources.
+/// `map` keeps the structure: over sources of the same lengths and salts the same indices
+/// come out; over bare lengths (salt 0) only the shuffles differ.
 #[test]
 fn map_keeps_the_order() {
+    struct Loaded {
+        salt: u64,
+        len: usize,
+    }
+    impl Source for Loaded {
+        fn len(&self) -> usize {
+            self.len
+        }
+        fn salt(&self) -> u64 {
+            self.salt
+        }
+    }
     let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).shard(3, 1);
     let order = Order::new(seq.clone()).unwrap();
-    let mapped = Order::new(seq.map(|s| s.len)).unwrap();
-    assert_eq!(mapped.sources(), &[700, 50, 120]);
-    let a: Vec<(usize, usize)> = order.iter(0..order.len()).map(|(s, i)| (s.len, i)).collect();
-    let b: Vec<(usize, usize)> = mapped.iter(0..mapped.len()).map(|(&l, i)| (l, i)).collect();
+    let loaded = Order::new(seq.clone().map(|s| Loaded { salt: s.salt(), len: s.len })).unwrap();
+    assert_eq!(loaded.sources().iter().map(|l| l.len).collect::<Vec<_>>(), [700, 50, 120]);
+    let a: Vec<(usize, usize)> = order.iter(..).map(|(s, i)| (s.len, i)).collect();
+    let b: Vec<(usize, usize)> = loaded.iter(..).map(|(l, i)| (l.len, i)).collect();
     assert_eq!(a, b);
+    let lens = Order::new(seq.map(|s| s.len)).unwrap();
+    assert_eq!(lens.sources(), &[700, 50, 120]);
+    let c: Vec<(usize, usize)> = lens.iter(..).map(|(&l, i)| (l, i)).collect();
+    assert_ne!(a, c);
+    let unshuffled = |v: &[(usize, usize)]| v.iter().enumerate().filter(|(_, e)| e.0 == 50).map(|(p, e)| (p, e.1)).collect::<Vec<_>>();
+    assert_eq!(unshuffled(&a), unshuffled(&c));
 }
 
 #[test]

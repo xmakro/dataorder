@@ -19,10 +19,10 @@
 //! two-multiply round function (multiply, xorshift, multiply) have the same quality and
 //! cost about 0.8 ns more per element; three of those rounds fail the grid test.
 //!
-//! The six round keys are rotations of one 64-bit word derived from the seed and the
-//! context, the six multipliers rotations of another derived from the first, so a
-//! permutation is selected by 64 bits in effect, although a [`Key`] holds 768; that is
-//! plenty for reproducible shuffles, which is all seeds are for.
+//! The six round keys are rotations of one 64-bit word derived from the seed, the context
+//! and the salt of the shuffled sources, the six multipliers rotations of another derived
+//! from the first, so a permutation is selected by 64 bits in effect, although a [`Key`]
+//! holds 768; that is plenty for reproducible shuffles, which is all seeds are for.
 //!
 //! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small function
 //! and the permutation is most of it.
@@ -83,12 +83,14 @@ const RC: [u64; 12] = [
     0xB8E1_AFED_6A26_7E96,
 ];
 
-/// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]): the two are
-/// hashed together, not merely xored, so no simple relation between a seed and a context
-/// reproduces another pair's key. Not a security boundary: seeds are for reproducibility.
+/// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]) over sources
+/// with the given `salt` (see [`shuffle_salt`]): the three are hashed together, not merely
+/// xored, so no simple relation between them reproduces another triple's key. Not a
+/// security boundary: seeds are for reproducibility.
 #[inline]
-pub(crate) fn key(seed: u64, ctx: u64) -> Key {
-    let a = mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)) ^ 0x1F83_D9AB_FB41_BD6B);
+pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
+    let a =
+        mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
     let b = mix64(a ^ PHI);
     let mut k = Key::UNSET;
     for i in 0..6 {
@@ -96,6 +98,13 @@ pub(crate) fn key(seed: u64, ctx: u64) -> Key {
         k.mul[i] = (b.rotate_left(i as u32 * 11 + 9) ^ RC[i + 6]) | 1;
     }
     k
+}
+
+/// The salt of a shuffle: a fold over the sources under it, in order of appearance, of
+/// their salts and lengths. Two shuffles over sources of the same salts and lengths, in the
+/// same order, permute alike; any other difference in what is shuffled decorrelates them.
+pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64 {
+    sources.into_iter().fold(0, |h, (salt, len)| mix64(h ^ mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ len.wrapping_mul(PHI)))
 }
 
 /// Context of repetition `epoch` of a repeat nested `depth` repeats deep, inside `ctx`. The
@@ -155,7 +164,7 @@ mod tests {
     use super::*;
 
     fn perm(n: u64, seed: u64) -> Vec<u64> {
-        let (shape, key) = (Shape::new(n), key(seed, 0));
+        let (shape, key) = (Shape::new(n), key(seed, 0, 0));
         (0..n).map(|i| permute(shape, key, i)).collect()
     }
 
@@ -177,7 +186,7 @@ mod tests {
     fn huge_domain_is_a_bijection_locally() {
         // n near 2^64: the forward map must still be invertible; check distinct images of a
         // window and that the walk terminates.
-        let (shape, key) = (Shape::new(u64::MAX - 5), key(9, 0));
+        let (shape, key) = (Shape::new(u64::MAX - 5), key(9, 0, 0));
         let mut images: Vec<u64> = (0..10_000).map(|i| permute(shape, key, i)).collect();
         images.sort_unstable();
         images.dedup();
@@ -190,9 +199,16 @@ mod tests {
         let a = perm(n, 1);
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
-        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 0)));
+        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 0), 0));
         let c: Vec<u64> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
+        // Different salts, and sources of different lengths or in another order, decorrelate.
+        let k = key(1, 0, shuffle_salt([(7, n)]));
+        let d: Vec<u64> = (0..n).map(|i| permute(shape, k, i)).collect();
+        assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
+        assert_ne!(shuffle_salt([(0, 1000)]), shuffle_salt([(0, 999)]));
+        assert_ne!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt([(2, 10), (1, 10)]));
+        assert_eq!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt(vec![(1, 10), (2, 10)]));
         // The first repetition keeps its context; contexts of nested repetitions do not collide.
         assert_eq!(epoch_ctx(5, 0, 0), 5);
         assert_ne!(epoch_ctx(0, 1, 0), 0);

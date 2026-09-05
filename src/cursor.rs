@@ -183,8 +183,8 @@ impl<'a> NodeCursor<'a> {
                 NodeCursor::Concat { children, offsets, idx: 0, left: 0, ctx: 0, child: Box::new(NodeCursor::Empty) }
             }
             Node::Mix { il, children } => NodeCursor::Mix(MixCursor::new(il, children)),
-            Node::Shuffle { seed, shape, child } => {
-                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 })
+            Node::Shuffle { seed, salt, shape, child } => {
+                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, salt: *salt, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 })
             }
             Node::Repeat { child_len, depth, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
@@ -218,7 +218,7 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.seek(pos, ctx),
             NodeCursor::Shuffle(sh) => {
-                sh.key = perm::key(sh.seed, ctx);
+                sh.key = perm::key(sh.seed, ctx, sh.salt);
                 sh.pos = pos;
                 sh.ctx = ctx;
             }
@@ -418,6 +418,7 @@ impl<'a> MixCursor<'a> {
 #[derive(Clone, Debug)]
 pub(crate) struct ShuffleCursor<'a> {
     seed: u64,
+    salt: u64,
     shape: Shape,
     child: &'a Node,
     key: Key,

@@ -14,6 +14,7 @@ use dataorder::{Order, Sampling, Seq, Source};
 struct Shard { path: &'static str, len: usize }
 impl Source for Shard {
     fn len(&self) -> usize { self.len }
+    fn salt(&self) -> u64 { dataorder::salt(self.path) }
 }
 
 fn main() -> Result<(), dataorder::Error> {
@@ -41,12 +42,14 @@ datasets), `.check()` (validate and get the length without building the order).
 `Order::with_seed(seq, seed)` reseeds every shuffle at once. A `Seq` is plain data (clone,
 compare, hash; the `serde` feature derives `Serialize` and `Deserialize`); building the order
 consumes it, and the order owns the sources, yields references to them and gives them back with
-`into_sources`. A bare `usize` is a source too, when only the order matters.
+`into_sources`. A bare `usize` is a source too, when only the order matters, as are slices and
+vectors.
 
 The precise semantics of every node, what compilation rejects and folds, and the stability
 policy are in the [crate documentation](https://docs.rs/dataorder). In short: every node maps its
-positions to positions of its children; a shuffle depends on its seed, the order's seed and the
-repetition it is in, so `x.shuffle(s).repeat(3)` is three different orders of `x`; shards
+positions to positions of its children; a shuffle depends on its seed, the order's seed, the
+repetition it is in and the sources under it (their salts and lengths), so `x.shuffle(s).repeat(3)`
+is three different orders of `x` and sources with different salts never shuffle alike; shards
 partition a sequence position by position, so a mix's schedule is preserved across workers;
 `iter(a..b)` yields exactly `get(a)..get(b)`; and an order is a pure function of the
 configuration and the seed on every platform. A release that changes any order is a breaking

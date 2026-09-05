@@ -16,6 +16,7 @@
 //! struct Shard { path: &'static str, len: usize }
 //! impl Source for Shard {
 //!     fn len(&self) -> usize { self.len }
+//!     fn salt(&self) -> u64 { dataorder::salt(self.path) }
 //! }
 //!
 //! let seq = Seq::mix_with([
@@ -58,10 +59,13 @@
 //!
 //! Shuffles are seeded permutations of `0..n` (a keyed six-round Feistel network with cycle
 //! walking, see `src/perm.rs`): O(1) per element, no state. A shuffle's permutation depends
-//! on its `seed`, on the order's seed and on the *context*, which every `Repeat` of more
-//! than one repetition on the path above derives afresh for each repetition after its
-//! first, so `x.shuffle(s).repeat(3)` is `x.shuffle(s)` followed by two other orders of `x`,
-//! `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one order, and `x.repeat(1)` is `x`.
+//! on its `seed`, on the order's seed, on the *context*, which every `Repeat` of more than
+//! one repetition on the path above derives afresh for each repetition after its first,
+//! and on the sources under it, their [salts](Source::salt) and lengths in order of
+//! appearance. So `x.shuffle(s).repeat(3)` is `x.shuffle(s)` followed by two other orders
+//! of `x`, `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one order, `x.repeat(1)` is
+//! `x`, and `Seq::mix([a.shuffle(s), b.shuffle(s)])` orders `a` and `b` alike only when
+//! they have the same length and salt: give sources a salt, or shuffles their own seeds.
 //! Everything is deterministic in the configuration and the order's seed, and `iter(a..b)`
 //! yields exactly `get(a)..get(b)` whatever was iterated before.
 //!
@@ -137,7 +141,7 @@ pub use error::{Error, ErrorKind};
 pub use interleave::Sampling;
 pub use order::Order;
 pub use seq::{MixPart, Seq, WeightedPart};
-pub use source::Source;
+pub use source::{Source, salt};
 
 /// Deepest nesting [`Order::new`] accepts, the root counting as level 1: a chain of
 /// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation recurses
