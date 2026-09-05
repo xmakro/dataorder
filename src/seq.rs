@@ -1,11 +1,11 @@
 //! The configuration: a tree of sequence expressions over sources, built by hand or with
 //! the builder methods on [`Seq`].
 
-use crate::{Dataset, Error, Order, Sampling};
+use crate::{Source, Error, Order, Sampling};
 use std::ops::{Bound, RangeBounds};
 
 /// A sequence expression over sources of type `T` (anything that is a
-/// [`Dataset`](crate::Dataset)). Leaves are [`Source`](Seq::Source)s; every other variant
+/// [`Source`](crate::Source)). Leaves are [`Source`](Seq::Source)s; every other variant
 /// transforms or combines sequences. Compile it with
 /// [`Order::compile`](crate::Order::compile). It is plain data: clone it, compare it,
 /// serialize it (with the `serde` feature), or [`map`](Seq::map) its sources to another type.
@@ -175,7 +175,7 @@ impl<T> Seq<T> {
     }
 }
 
-impl<T: Dataset> Seq<T> {
+impl<T: Source> Seq<T> {
     /// Validates the configuration and returns the length of its order, without consuming
     /// it: the checks of [`Order::compile`], over the sources' lengths.
     ///

@@ -12,7 +12,7 @@ struct Src {
     len: usize,
 }
 
-impl Dataset for Src {
+impl Source for Src {
     fn len(&self) -> usize {
         self.len
     }

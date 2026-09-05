@@ -4,7 +4,7 @@
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, Sampling};
 use crate::perm::{self, Shape};
-use crate::{Dataset, Error, Seq};
+use crate::{Source, Error, Seq};
 use std::ops::Range;
 
 /// A compiled node. Empty subtrees are folded to [`Node::Empty`], so every child of a
@@ -52,7 +52,7 @@ pub struct Order<T> {
     pub(crate) sources: Vec<T>,
 }
 
-impl<T: Dataset> Order<T> {
+impl<T: Source> Order<T> {
     /// Compiles `seq` with seed 0. Consumes it; clone it first to keep it.
     pub fn compile(seq: Seq<T>) -> Result<Order<T>, Error> {
         Self::compile_seeded(seq, 0)
@@ -163,7 +163,7 @@ struct Compiler<T> {
     sources: Vec<T>,
 }
 
-impl<T: Dataset> Compiler<T> {
+impl<T: Source> Compiler<T> {
     /// `depth` is the number of repeats above `seq`.
     fn compile(&mut self, seq: Seq<T>, depth: u32) -> Result<Node, Error> {
         Ok(match seq {

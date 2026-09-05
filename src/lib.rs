@@ -1,6 +1,6 @@
 //! Deterministic, seekable data order for training, without materializing anything.
 //!
-//! A [`Seq`] is a tree: [`Source`](Seq::Source) leaves (anything that is a [`Dataset`]: a
+//! A [`Seq`] is a tree: [`Source`](Seq::Source) leaves (anything that is a [`Source`]: a
 //! length) combined by [`Concat`](Seq::Concat) and [`Mix`](Seq::Mix) (balanced,
 //! order-preserving interleaving with per-part sampling schedules, see [`Sampling`]) and
 //! transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat), [`Skip`](Seq::Skip),
@@ -9,10 +9,10 @@
 //! [`Order::get`] computes any position and [`Order::iter`] walks any range.
 //!
 //! ```
-//! use dataorder::{Dataset, Order, Sampling, Seq};
+//! use dataorder::{Source, Order, Sampling, Seq};
 //!
 //! struct Shard { path: &'static str, len: usize }
-//! impl Dataset for Shard {
+//! impl Source for Shard {
 //!     fn len(&self) -> usize { self.len }
 //! }
 //!
@@ -80,7 +80,7 @@
 //! | file | contents |
 //! |---|---|
 //! | `src/seq.rs` | [`Seq`] and its builder methods |
-//! | `src/dataset.rs` | [`Dataset`] |
+//! | `src/source.rs` | [`Source`] |
 //! | `src/error.rs` | [`Error`] |
 //! | `src/order.rs` | [`Order`]: compilation with folds, the node tree, random access |
 //! | `src/cursor.rs` | [`Cursor`]: per-node cursors with seek, next and skip |
@@ -101,7 +101,7 @@
 #![warn(missing_docs)]
 
 mod cursor;
-mod dataset;
+mod source;
 mod error;
 mod interleave;
 mod perm;
@@ -111,7 +111,7 @@ mod seq;
 mod tests;
 
 pub use cursor::Cursor;
-pub use dataset::Dataset;
+pub use source::Source;
 pub use error::Error;
 pub use interleave::Sampling;
 pub use order::Order;

@@ -1,17 +1,17 @@
 # dataorder
 
 Deterministic, seekable data order for training, without materializing anything. A `Seq<T>` is
-a tree of sequence expressions over `Source` leaves (any `T` that is a `Dataset`: something with
+a tree of sequence expressions over `Source` leaves (any `T` that is a `Source`: something with
 a length): `Concat`, `Mix` (balanced, order-preserving interleaving with per-part sampling
 schedules), `Shuffle`, `Repeat`, `Skip`, `Take` and `Stride`. `Order::compile` validates it and
 precomputes what iteration needs; elements, `(&source, index in the source)`, are never
 materialized: `get` computes any position, `iter` walks any range.
 
 ```rust
-use dataorder::{Dataset, Order, Sampling, Seq};
+use dataorder::{Source, Order, Sampling, Seq};
 
 struct Shard { path: &'static str, len: usize }
-impl Dataset for Shard {
+impl Source for Shard {
     fn len(&self) -> usize { self.len }
 }
 
@@ -212,7 +212,7 @@ Not worth it at all:
 | `src/lib.rs` | crate docs |
 | `src/error.rs` | `Error` |
 | `src/seq.rs` | `Seq` and its builder methods |
-| `src/dataset.rs` | `Dataset` |
+| `src/source.rs` | `Source` |
 | `src/order.rs` | `Order`: compilation with folds, the node tree, random access |
 | `src/cursor.rs` | `Cursor`: per-node cursors with seek, next and skip |
 | `src/perm.rs` | seeded permutations of `0..n` and context derivation |

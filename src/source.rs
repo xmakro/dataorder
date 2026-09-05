@@ -8,7 +8,7 @@ use std::sync::Arc;
 /// dataset handle and put the handle into [`Seq::Source`](crate::Seq::Source); the order
 /// yields `(&handle, index)`. A bare `usize` is a source too, handy when only the order
 /// matters.
-pub trait Dataset {
+pub trait Source {
     /// Number of elements.
     fn len(&self) -> usize;
 
@@ -18,31 +18,31 @@ pub trait Dataset {
     }
 }
 
-impl Dataset for usize {
+impl Source for usize {
     fn len(&self) -> usize {
         *self
     }
 }
 
-impl<T: Dataset + ?Sized> Dataset for &T {
+impl<T: Source + ?Sized> Source for &T {
     fn len(&self) -> usize {
         (**self).len()
     }
 }
 
-impl<T: Dataset + ?Sized> Dataset for Box<T> {
+impl<T: Source + ?Sized> Source for Box<T> {
     fn len(&self) -> usize {
         (**self).len()
     }
 }
 
-impl<T: Dataset + ?Sized> Dataset for Rc<T> {
+impl<T: Source + ?Sized> Source for Rc<T> {
     fn len(&self) -> usize {
         (**self).len()
     }
 }
 
-impl<T: Dataset + ?Sized> Dataset for Arc<T> {
+impl<T: Source + ?Sized> Source for Arc<T> {
     fn len(&self) -> usize {
         (**self).len()
     }

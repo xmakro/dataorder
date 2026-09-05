@@ -1,6 +1,6 @@
 //! A training-style schedule: three sources, one delayed, one ramped, shuffled per epoch
 //! and sharded over four workers.
-use dataorder::{Dataset, Order, Sampling, Seq};
+use dataorder::{Source, Order, Sampling, Seq};
 
 #[derive(Clone)]
 struct Src {
@@ -8,7 +8,7 @@ struct Src {
     len: usize,
 }
 
-impl Dataset for Src {
+impl Source for Src {
     fn len(&self) -> usize {
         self.len
     }
