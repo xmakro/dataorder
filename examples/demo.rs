@@ -1,4 +1,4 @@
-//! A training-style schedule over two epochs: three sources, one delayed, one ramped, each
+//! A schedule over two epochs: three sources, one delayed, one ramped, each
 //! shuffled afresh per epoch, and the whole order sharded over four workers. The parts are
 //! repeated, not the mix, so that the schedules span the run rather than each epoch.
 use dataorder::{Order, Sampling, Seq, Source};

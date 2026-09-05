@@ -185,7 +185,7 @@ fn typical() {
         })
     };
     let m = 1_000_000usize;
-    // A realistic training order: two mixes of shuffled sources, 2–4 epochs each, mixed.
+    // Two nested mixes of shuffled sources, with each source repeated for 2–4 epochs.
     let epochs = |k: u32, first_id: u32| {
         Seq::mix((0..k).map(move |i| {
             let h = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);

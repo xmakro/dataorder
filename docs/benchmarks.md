@@ -19,7 +19,7 @@ of the way into each order and averages up to five million items, including the
 initial seek. The shorter shard and slow-path cases use fewer items; see
 [`examples/bench.rs`](../examples/bench.rs) for the exact configurations.
 
-The nested training order combines mixes of 1,000 and 100 shuffled sources. Source
+The nested order combines mixes of 1,000 and 100 shuffled sources. Source
 lengths range from 0.5 to 2 million, repeated for 2–4 epochs, giving 4,098,465,102
 output positions. A fresh seek into it takes about 34 µs; walking from that point
 averages 62.4 ns per item. The order is computed without storing those four billion
