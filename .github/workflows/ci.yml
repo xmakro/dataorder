@@ -11,9 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --release
-      - run: cargo test
-      - run: cargo test --release --features serde
+      - run: cargo test --release --all-features
+      - run: cargo test --all-features
   test-32bit:
     runs-on: ubuntu-latest
     steps:
@@ -22,16 +21,17 @@ jobs:
         with:
           targets: i686-unknown-linux-gnu
       - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
-      - run: cargo test --release --target i686-unknown-linux-gnu
+      - run: cargo test --release --all-features --target i686-unknown-linux-gnu
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+      - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo doc --no-deps --all-features
+      - run: cargo doc --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
   msrv:
@@ -39,4 +39,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88
-      - run: cargo check --all-targets
+      - run: cargo check --all-targets --all-features
