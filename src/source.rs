@@ -112,3 +112,31 @@ macro_rules! forward {
 }
 
 forward!(&T, &mut T, Box<T>, Rc<T>, Arc<T>);
+
+#[cfg(test)]
+mod tests {
+    use super::{salt, salt_path};
+
+    #[test]
+    fn stable_salt_vectors() {
+        // Fixed FNV-1a answers, including bytes that string-only tests would miss.
+        for (bytes, expected) in [
+            (b"".as_slice(), 0xcbf2_9ce4_8422_2325),
+            (b"a".as_slice(), 0xaf63_dc4c_8601_ec8c),
+            (b"foobar".as_slice(), 0x8594_4171_f739_67e8),
+            (b"a\0b".as_slice(), 0xe5d2_9919_0426_66b2),
+            ("web/训练.bin".as_bytes(), 0xc2ed_ac2d_2053_c259),
+        ] {
+            assert_eq!(salt(bytes), expected, "bytes: {bytes:?}");
+        }
+    }
+
+    #[test]
+    fn stable_path_salt_vectors() {
+        // Unicode paths use the same UTF-8 bytes on every supported platform.
+        for (path, expected) in [("", 0xcbf2_9ce4_8422_2325), ("web.bin", 0x3e74_c77b_571a_dd96), ("web/训练.bin", 0xc2ed_ac2d_2053_c259)]
+        {
+            assert_eq!(salt_path(path), expected, "path: {path:?}");
+        }
+    }
+}

@@ -247,10 +247,10 @@ impl<T> Order<T> {
     /// Iterates the positions in `range` in order; `iter(a..b)` yields exactly the elements
     /// `get(a)..get(b)`, and `iter(..)` the whole order (as does `&order` in a `for` loop).
     ///
-    /// Building the cursor allocates one cursor per node on the active path (a mix builds
-    /// its parts' cursors as they are first drawn from, but reserves a slot of about 300
-    /// bytes per part up front) and then seeks, which for a mix counts the elements before
-    /// the start in each part. Walking is then a few nanoseconds per element, so make
+    /// The first draw builds and seeks the cursor tree. Each entered mix reserves a slot
+    /// of about 300 bytes per part, and builds each part's cursor when it first draws from
+    /// it. Empty ranges and `count` do not build that tree. Walking is then a few
+    /// nanoseconds per element, so make
     /// cursors for long ranges rather than many short ones, and [`seek`](Cursor::seek) or
     /// [`set_range`](Cursor::set_range) a cursor rather than making a new one.
     ///
@@ -675,13 +675,7 @@ fn cycle(mut child: Node, len: u64, repeats: u32) -> Node {
     Node::Repeat { child_len, len, depth: repeats, child: Box::new(child) }
 }
 
-/// The parts' element counts for the given weights, summing to `total`: the floors of the
-/// exact shares `wᵢ / Σw · total`, the remainder going one each to the parts with the largest
-/// fractional shares (lowest index first on ties). Rounding could make the floors sum to
-/// one more than `total` in contrived cases; then the parts with the smallest fractions
-/// give one back. A total beyond [`MAX_TOTAL_LEN`] is rejected first, so that `total` and
-/// every share are exact in `f64` and the fix-ups above suffice. An error names the part
-/// it concerns, if one.
+/// Exact largest-remainder shares, with the lowest index first on equal remainders.
 pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, (ErrorKind, Option<usize>)> {
     for (i, &w) in weights.iter().enumerate() {
         if !(w.is_finite() && w >= 0.0) {
@@ -694,54 +688,10 @@ pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, (
     if total == 0 {
         return Ok(vec![0; weights.len()]);
     }
-    // Finite weights can still sum to infinity. Then they are scaled by a power of two first,
-    // which is exact for every weight large enough to get a share and leaves every quotient
-    // as it would be without overflow.
-    let sum_at_scale = |scale| {
-        let mut sum = crate::sum::Compensated::default();
-        for &w in weights {
-            sum.add(w * scale);
-        }
-        sum.value()
-    };
-    let sum = sum_at_scale(1.0);
-    let scale = if sum.is_finite() { 1.0 } else { f64::from_bits((1023 - 600) << 52) };
-    let sum = if scale == 1.0 { sum } else { sum_at_scale(scale) };
-    // The scaled weights are finite and nonnegative, so the sum is too (no NaN).
-    if sum <= 0.0 {
+    if !weights.iter().any(|&w| w > 0.0) {
         return Err((ErrorKind::ZeroWeights, None));
     }
-    let mut shares = Vec::with_capacity(weights.len());
-    let mut fractions = Vec::with_capacity(weights.len());
-    let mut given = 0u64;
-    for (i, &w) in weights.iter().enumerate() {
-        let exact = w * scale / sum * total as f64;
-        let floor = exact.floor();
-        let share = (floor as u64).min(total);
-        shares.push(share);
-        given += share;
-        fractions.push((exact - floor, i));
-    }
-    // Descending fraction, ascending index; `partial_cmp` is total here (no NaN).
-    fractions.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(&b.1)));
-    for &(_, i) in &fractions {
-        if given >= total {
-            break;
-        }
-        shares[i] += 1;
-        given += 1;
-    }
-    for &(_, i) in fractions.iter().rev() {
-        if given <= total {
-            break;
-        }
-        if shares[i] > 0 {
-            shares[i] -= 1;
-            given -= 1;
-        }
-    }
-    debug_assert_eq!(given, total);
-    Ok(shares)
+    Ok(crate::weight::shares(total, weights))
 }
 
 /// The sources of `node` that can contribute elements, in order of appearance: every

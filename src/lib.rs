@@ -111,8 +111,9 @@
 //! steps costs the second. Poor analytic guesses use a bounded fallback: at most 63
 //! bisections of progress, each counting with at most 46 bisections per part. Equal keys
 //! are consumed by counts, so even a long tie does not require a linear walk.
-//! [`Order::iter`] seeks once and then walks: a `Mix` costs `⌈log2 k⌉` comparisons per
-//! element plus one key computation, a `Shuffle` one permutation plus a
+//! [`Order::iter`] builds and seeks its cursor on the first draw and then walks: a `Mix`
+//! costs `⌈log2 k⌉` comparisons per element plus one key computation, dropping to zero
+//! comparisons once only one part remains. A `Shuffle` costs one permutation plus a
 //! [`Order::get`]-style descent into its child (so a shuffle *over*
 //! a mix pays the interleave seek per element; shuffle the parts, not the mix), a `Stride`
 //! skips `step − 1` elements of its child (a mix steps its interleave, or re-seeks it when
@@ -120,9 +121,9 @@
 //! sharding a mix across `count` workers costs up to `count` times its interleaving in total
 //! (sharding the parts instead can help, subject to each worker's schedule feasibility;
 //! see [`Seq::shard`]). `Concat`, `Repeat`, `Skip` and `Take` add a
-//! few instructions. Creating a cursor allocates one cursor per node it enters and seeks;
-//! [`Cursor::seek`] and [`Iterator::nth`] reuse the cursor's buffers. The README has
-//! measured numbers.
+//! few instructions. Entering the cursor tree allocates state for the visited nodes;
+//! empty ranges and `count` allocate nothing. [`Cursor::seek`] and [`Iterator::nth`] reuse
+//! those buffers, including after cloning. The README has measured numbers.
 //!
 //! # Feature flags
 //!
@@ -139,10 +140,11 @@
 //!   and potentially the order. The `dataorder/serde` feature does not enable a JSON
 //!   parser on the consumer's behalf. Two more caveats: lengths and counts are `usize`, so a
 //!   configuration written on a 64-bit machine need not read back on a 32-bit one; and
-//!   every level of a `Seq` is two levels of nesting in a self-describing format, so
-//!   `serde_json` reads at most 64 levels under its default recursion limit of 128
-//!   (`Deserializer::disable_recursion_limit`, behind its `unbounded_depth` feature, lifts
-//!   it).
+//!   `serde_json`'s default recursion limit of 128 counts JSON objects and arrays, so the
+//!   supported `Seq` depth depends on its variants. Chains over a source first exceed it
+//!   at depth 65 for `Take`, 44 for `Mix`, and 33 for `Weighted`, all below [`MAX_DEPTH`].
+//!   `Deserializer::disable_recursion_limit`, behind its `unbounded_depth` feature, lifts
+//!   that limit; deserialization still uses the stack (see [`Seq`]'s depth caveats).
 //!
 //! # Stability
 //!
@@ -175,6 +177,7 @@ mod source;
 mod sum;
 #[cfg(test)]
 mod tests;
+mod weight;
 
 pub use cursor::Cursor;
 pub use error::{Error, ErrorKind};

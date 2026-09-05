@@ -8,6 +8,20 @@ the crate is 0.x) and says so here. Golden tests in `tests/golden.rs` pin the or
 
 Pre-release review fixes (order changes relative to earlier development snapshots):
 
+- Weighted shares now compare exact binary64 quotas and remainders, including terms below
+  floating-point summation precision. Ordinary integer weights such as `[1, 1, 7]` over
+  three positions now give `[1, 0, 2]`, respecting the lowest-index tie rule. This changes
+  affected weighted orders. Common weights use `u128`; extreme ranges use bounded exact
+  arithmetic without a dependency.
+- Cursor state is built on the first draw, avoiding allocation for empty ranges and
+  `count`. Clones preserve reserved seek capacity, and a tournament with one remaining
+  part stops comparing against exhausted parts. Seeking a mix to position zero skips
+  numerical rank estimation.
+- Independent name/path salt vectors and golden orders protect the stable identity hash.
+  JSON depth guidance now covers the extra nesting of mixed and weighted parts. Benchmark
+  modes cover schedule phases, continuous exhausted tails, compilation, reused seeks and
+  requested cursor-allocation bytes.
+
 - Shuffles now use six Feistel rounds with the full `SplitMix64` finalizer and independently
   derived round keys. The previous seven multiply-only rounds retained strong adjacency
   patterns for some ordinary seeds and lengths. This changes seeded shuffle orders;

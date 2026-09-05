@@ -112,3 +112,36 @@ fn golden_orders() {
     assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
 }
+
+#[test]
+fn golden_name_and_path_salted_orders() {
+    struct Named {
+        name: &'static str,
+        as_path: bool,
+    }
+
+    impl Source for Named {
+        fn len(&self) -> usize {
+            1000
+        }
+
+        fn salt(&self) -> u64 {
+            if self.as_path { dataorder::salt_path(self.name) } else { dataorder::salt(self.name) }
+        }
+    }
+
+    // Pin the public identity helpers as well as their effect on the whole permutation.
+    // Both the prefix and fingerprint were independently calculated from the specified
+    // FNV-1a and Feistel arithmetic, rather than obtained by blessing this test's output.
+    const FIRST: [usize; 12] = [445, 928, 15, 77, 0, 293, 540, 797, 190, 407, 709, 652];
+    const EXPECTED: u64 = 15_852_656_108_745_184_545;
+    for as_path in [false, true] {
+        let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin", as_path }).shuffle(7), 42).unwrap();
+        assert_eq!(order.iter(..12).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
+        let actual = order
+            .iter(..)
+            .flat_map(|(_, i)| (i as u64).to_le_bytes())
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+        assert_eq!(actual, EXPECTED, "as_path={as_path}");
+    }
+}

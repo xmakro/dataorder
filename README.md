@@ -93,8 +93,11 @@ to schedule over a run of several epochs.
 
 Every element gets an ideal progress `F⁻¹((j + φ)/n)` and the mix is the sort by that value
 (ties by part index; `φ` staggers the non-empty parts so that equal ones round-robin). Each
-part follows its schedule to within about one element at any position, and the position of an
-element is within `k` (typically `√k`) of `progress·N`, the same warp for all parts. Nothing is
+part follows its schedule with discrete rounding error; for a feasible profile with exact
+arithmetic, the position of an element is within `k` of `progress·N`, the same warp for all
+parts. The feasibility check accepts excess demand up to `10⁻⁹` for numerical rounding.
+For a mix near the length limit, that tolerance can add thousands of positions of drift,
+so the `k` bound is not a guarantee for every accepted configuration. Nothing is
 materialized: a seek counts the elements below a target progress and replays at most `2k`
 heads, normally `O(k log(S + 1) + k log(k + 1))` for `k` non-empty parts and `S` distinct
 schedule breakpoints. Poor numerical guesses use bounded binary searches (see the crate's
@@ -181,7 +184,9 @@ element: shuffle the parts, not the mix), a `Stride` skips `step − 1` elements
 (a mix steps its interleave, or re-seeks it when that is cheaper, and its parts skip along, a
 nested mix stepping its own interleave, so a shard of a mix of mixes costs about what a shard
 of a flat mix does: the two `.shard(8, 0)` rows). Seeking an existing cursor reuses its
-buffers; `Iterator::nth` skips without visiting. Sharding each part before mixing reduces work
+buffers, including after cloning; `Iterator::nth` skips without visiting. Cursor state is
+built on the first draw, so empty ranges and `count` allocate nothing. A mix with just one
+remaining part stops replaying the tournament. Sharding each part before mixing reduces work
 only when the resulting worker schedules remain feasible: rounding each part
 independently changes proportions and can make a worker overcommitted. Shard the global
 mix when its exact position partition must be preserved. How these numbers came about, and what was
@@ -198,6 +203,7 @@ tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.m
 | `src/order.rs` | `Order`: construction with folds, the node tree, random access |
 | `src/cursor.rs` | `Cursor`: per-node cursors with seek, next and skip |
 | `src/perm.rs` | seeded permutations of `0..n` and context derivation |
+| `src/weight.rs` | exact largest-remainder allocation of binary64 weights |
 | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles and their integrals, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` merge against brute force, exact seeks, balance and schedule bounds |
 | `src/tests.rs` | random configurations against a materializing reference evaluator |
 | `tests/golden.rs`, `tests/api.rs`, `tests/cost.rs` | pinned orders, the public surface as a downstream crate sees it, and the cost model (allocation counts of seeks, `count` and `last`, shards of nested mixes) |
@@ -206,3 +212,9 @@ tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.m
 Run `cargo run --release --example demo` for a small schedule, `--example bench` for the table, and
 `cargo test --release -- --ignored --nocapture` for the interleave, tournament tree and permutation
 micro-benchmarks.
+
+For schedule-phase and continuous-tail measurements, run
+`cargo run --release --example bench -- --phases`; `-- --lifecycle` adds compilation,
+reused-cursor seeking and requested allocation bytes. `-- --all` runs every group. The
+campaign harness accepts the corresponding `phases`, `lifecycle` or `all` mode after its
+directory argument; set `BENCH_CORE=none` on systems without `taskset`.

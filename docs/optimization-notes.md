@@ -213,3 +213,44 @@ allocation or dependency, but the stronger round costs about 3 ns per walked ele
   directory, rejects runs with no recognized rows and replaces a reused label's results
   completely. The seek benchmark now uses deterministic random positions rather than
   regularly spaced positions that can align with epoch and concat boundaries.
+
+## Exact quotas and cursor lifecycle review (2026-09-05)
+
+Weighted apportionment now treats the supplied binary64 values as exact numbers. For
+`total = 3` and weights `[1, 1, 7]`, the old floating remainders broke a mathematical tie
+in favor of the last part, producing `[0, 0, 3]`; the correct index tie-break gives
+`[1, 0, 2]`. Integer significands at a common binary exponent give exact quotas. The
+usual case uses `u128`; extreme exponent ranges use a fixed 35-word accumulator and
+exact remainder comparisons without storing a wide integer per part or adding a dependency.
+Tiny positive terms remain significant when they break a remainder tie.
+
+The public regression suite compares 10,240 small integer cases to a separate integer
+oracle, plus subnormal, near-maximum and tiny-term fixtures. Additional development
+probes compared 12,000 arbitrary-exponent cases with Python integer arithmetic and
+10,000 cases with a separate `u128` oracle, including totals at the mix limit. Existing
+golden orders are unchanged; affected weighted orders change as recorded in the changelog.
+Exact quota work occurs only during construction. In one local comparison, building
+1,000 ordinary weighted parts took 63 → 65 µs, and 10,000 took 661 → 678 µs. Alternating
+weights of `1e300` and `1e-300` use the wider arithmetic: 10,000 parts took about 2.1 ms,
+versus 0.5–1.2 ms before. These unpinned timings vary with machine load.
+
+Cursor comparisons used alternating optimized binaries on the same Apple Silicon Mac:
+
+| operation | before | after |
+|---|---|---|
+| empty/count-only cursor, 100,000-part mix, requested allocation bytes | 31,891,456 | 0 |
+| cloned initialized cursor, backward seek reviving parts, requested bytes | 8,691,456 | 0 |
+| continuous one-part tail after 10,000 parts finish | 40.7–41.5 ns/element | 7.38–7.48 ns/element |
+| continuous one-part tail after 100,000 parts finish | 78.2–78.5 ns/element | 8.84–8.86 ns/element |
+
+When the penultimate leaf is removed, the tree collapses once. Ordinary replacements
+keep their original comparison path; common, nested and sharded walks stayed within
+about 1% in the local comparisons. Composite cursor initialization is deferred until
+the first draw, while source and shuffle roots are prepared directly without allocating.
+The deferred initialization adds about 6–8 ns to the first draw of simple concat/repeat
+cursors. Seeking to zero now clears counts directly. Cloning retains the capacities
+needed to revive exhausted parts, including the tournament's rebuild scratch storage.
+
+The benchmark's `--phases` mode covers ramping, fading and continuous exhausted tails;
+`--lifecycle` reports construction, reused seeks and requested cursor-allocation bytes.
+The campaign parser supports these modes and its historical three-column results.

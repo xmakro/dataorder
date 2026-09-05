@@ -31,7 +31,7 @@ fn float(bits: u64) -> f64 {
 }
 
 /// A tournament tree over `k` leaves with `f64` keys and values of type `V`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct TournamentTree<V> {
     /// Nodes in heap layout over `n` leaves, `n` the smallest power of two `≥ k` (the
     /// padding leaves hold `+∞` and never win): internal node `m` (`1 ≤ m < n`) has
@@ -46,6 +46,18 @@ pub(crate) struct TournamentTree<V> {
     live: usize,
     /// The winners of the last rebuild, kept so that a rebuild allocates nothing.
     scratch: Vec<Entry>,
+}
+
+impl<V: Clone> Clone for TournamentTree<V> {
+    fn clone(&self) -> Self {
+        // A tree positioned near the end still reserves for every part a backward seek
+        // can revive. Vec::clone keeps only the length, losing that allocation guarantee.
+        let mut nodes = Vec::with_capacity(self.nodes.capacity());
+        nodes.extend_from_slice(&self.nodes);
+        let mut values = Vec::with_capacity(self.values.capacity());
+        values.extend_from_slice(&self.values);
+        Self { nodes, values, live: self.live, scratch: Vec::with_capacity(self.scratch.capacity()) }
+    }
 }
 
 /// A leaf's key (in [`sortable`] form) and index, as stored in the nodes.
@@ -179,6 +191,20 @@ impl<V> TournamentTree<V> {
         let leaf = self.nodes[0].leaf;
         self.live -= 1;
         self.replay(Entry::new(REMOVED, leaf));
+        if self.live == 1 {
+            self.keep_survivor();
+        }
+    }
+
+    /// After the penultimate removal the remaining leaf needs no comparisons. Compact
+    /// once here, instead of testing the live count on every ordinary replacement.
+    #[cold]
+    fn keep_survivor(&mut self) {
+        let leaf = self.nodes[0].leaf as usize;
+        self.values.swap(0, leaf);
+        self.values.truncate(1);
+        self.nodes.truncate(1);
+        self.nodes[0].leaf = 0;
     }
 
     /// Plays the winner's leaf, now carrying `cand`, up to the root against the stored
@@ -266,6 +292,29 @@ mod tests {
         assert!(tree.is_empty());
         assert_eq!(tree.len(), 0);
         assert!(tree.min().is_none());
+    }
+
+    #[test]
+    fn last_survivor_has_no_tournament_path() {
+        let mut tree = TournamentTree::new((0..100).map(|i| (f64::from(i), i)));
+        for i in 0..99 {
+            assert_eq!(tree.min(), Some((f64::from(i), &i)));
+            tree.remove_min();
+        }
+        // A one-leaf tree bounds all subsequent replacements to constant work, even
+        // when this leaf originally sat at the end of a much deeper tournament.
+        assert_eq!(tree.nodes.len(), 1);
+        let mut cloned = tree.clone();
+        for key in [1000.0, -1000.0, 7.0] {
+            cloned.set_min(key, 99);
+            assert_eq!(cloned.min(), Some((key, &99)));
+        }
+        cloned.remove_min();
+        assert!(cloned.is_empty());
+        assert_eq!(tree.min(), Some((99.0, &99)));
+        tree.rebuild((0..100).map(|i| (f64::from(i), i)));
+        assert_eq!(tree.len(), 100);
+        assert_eq!(tree.min(), Some((0.0, &0)));
     }
 
     /// Data-structure cost alone: the tournament tree vs `BinaryHeap` on a merge-like

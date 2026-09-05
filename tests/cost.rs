@@ -79,6 +79,76 @@ fn seeking_backward_revives_parts_without_allocating() {
     assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(element(&order, 0)));
 }
 
+/// Cloning a partially exhausted mix retains the spare capacity of its seek buffers.
+#[test]
+fn cloned_cursors_revive_parts_without_allocating() {
+    let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
+    let mut cursor = order.iter(order.len() - 1..);
+    cursor.next();
+    let mut cloned = cursor.clone();
+    let count = allocations(|| cloned.seek(0));
+    assert_eq!(count, 0, "a cloned cursor allocated {count} times when reviving parts");
+    assert_eq!(cloned.next().map(|(&s, i)| (s, i)), Some(element(&order, 0)));
+    assert_eq!(cursor.next(), None);
+}
+
+/// Empty ranges, counts and untouched clones need no runtime tree. `last` pays only for
+/// its single random access, without first building a cursor over the beginning.
+#[test]
+fn cursors_allocate_only_when_drawing_an_element() {
+    let order = Order::new(Seq::mix((0..1000).map(|i| Seq::source(1000).shuffle(i)))).unwrap();
+    let count = allocations(|| {
+        for start in [0, order.len() / 2, order.len()] {
+            let mut cursor = order.iter(start..start);
+            assert_eq!(cursor.next(), None);
+            assert_eq!(cursor.nth(usize::MAX), None);
+            cursor.set_range(..);
+            cursor.seek(order.len() / 3);
+            assert_eq!(cursor.clone().count(), order.len() - order.len() / 3);
+            assert_eq!(cursor.count(), order.len() - order.len() / 3);
+        }
+        assert_eq!(order.iter(..).count(), order.len());
+    });
+    assert_eq!(count, 0, "an undrawn cursor allocated {count} times");
+    let lookup = allocations(|| {
+        black_box(order.get(order.len() - 1));
+    });
+    let last = allocations(|| {
+        black_box(order.iter(..).last());
+    });
+    assert_eq!(last, lookup, "last built a cursor in addition to its random access");
+}
+
+#[test]
+fn undrawn_cursors_resume_after_range_changes_and_skips() {
+    let mix = || Seq::mix([Seq::source(100).shuffle(1), Seq::source(50).shuffle(2)]);
+    let sequences = [
+        Seq::source(100),
+        Seq::source(100).shuffle(11),
+        mix(),
+        mix().repeat(3).stride(7, 2),
+        Seq::concat([mix(), mix().shuffle(7)]).skip(20),
+    ];
+    for seq in sequences {
+        let order = Order::with_seed(seq, 19).unwrap();
+        for start in [0, order.len() / 2, order.len()] {
+            let mut cursor = order.iter(start..start);
+            assert_eq!(cursor.nth(usize::MAX), None);
+            cursor.set_range(0..0);
+            cursor.set_range(..);
+            cursor.seek(order.len() / 3);
+            let mut cloned = cursor.clone();
+            let expected = Some(element(&order, order.len() / 3 + 1));
+            assert_eq!(cursor.nth(1).map(|(&s, i)| (s, i)), expected);
+            assert_eq!(cloned.nth(1).map(|(&s, i)| (s, i)), expected);
+            cursor.set_range(order.len()..);
+            assert_eq!(cursor.next(), None);
+            cursor.set_range(..);
+            assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(element(&order, 0)));
+        }
+    }
+}
+
 #[test]
 fn forward_seeks_land_in_the_target_repetition_and_part() {
     // Every repetition entered rebuilds the concat's current part cursor (a mix: two

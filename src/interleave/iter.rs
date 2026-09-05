@@ -105,6 +105,11 @@ struct Slot {
 /// those guesses poor, bisect progress instead; its nonnegative float bits are ordered,
 /// so at most 63 passes suffice. Never replay more than twice the number of parts.
 fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
+    if a == 0 {
+        counts.clear();
+        counts.resize(il.seqs.len(), 0);
+        return 0;
+    }
     let k = il.seqs.len() as u64;
     let count = |t, counts: &mut Vec<u64>| {
         counts.clear();
@@ -206,4 +211,19 @@ fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, u64) {
         tree.set_min(next_key, slot(il, seq as usize, j + 1, next_key, seg as usize));
     }
     (seq as usize, j)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Sampling;
+
+    #[test]
+    fn returning_to_zero_clears_the_previous_counts() {
+        let il = Interleave::with_sampling(&[10_000, 1000], &[Sampling::Uniform, Sampling::until(0.5)]).unwrap();
+        let mut iter = il.iter(9000..il.len());
+        iter.next();
+        iter.seek(0..il.len());
+        assert_eq!(iter.take(100).collect::<Vec<_>>(), il.iter(0..100).collect::<Vec<_>>());
+    }
 }

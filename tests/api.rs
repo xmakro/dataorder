@@ -134,7 +134,6 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    use serde::Deserialize;
     let seq = Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
@@ -159,11 +158,41 @@ fn serde_round_trip() {
     ] {
         assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
     }
-    // Every level of a `Seq` is two levels of JSON: past 64 levels serde_json needs its
-    // recursion limit lifted.
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn serde_depth_depends_on_the_variants() {
+    use serde::Deserialize;
+
+    // MixPart and WeightedPart add JSON objects beyond the enum's own representation.
+    for (variant, first_rejected) in [("Take", 65), ("Mix", 44), ("Weighted", 33)] {
+        let chain = |depth| {
+            (1..depth).fold(Seq::source(10usize), |seq, _| match variant {
+                "Take" => seq.take(10),
+                "Mix" => Seq::mix([seq]),
+                _ => Seq::weighted(10, [(seq, 1.0)]),
+            })
+        };
+        let shallow = chain(first_rejected - 1);
+        let json = serde_json::to_string(&shallow).unwrap();
+        assert_eq!(serde_json::from_str::<Seq<usize>>(&json).unwrap(), shallow, "{variant}");
+
+        let deep = chain(first_rejected);
+        assert_eq!(deep.check(), Ok(10));
+        let json = serde_json::to_string(&deep).unwrap();
+        let err = serde_json::from_str::<Seq<usize>>(&json).unwrap_err();
+        assert!(err.to_string().contains("recursion limit exceeded"), "{variant}: {err}");
+        let mut de = serde_json::Deserializer::from_str(&json);
+        de.disable_recursion_limit();
+        let back = Seq::<usize>::deserialize(&mut de).unwrap();
+        assert_eq!(back, deep, "{variant}");
+        assert_eq!(back.check(), Ok(10));
+    }
+
+    // Lifting the JSON limit still permits the compiler's full depth for a Take chain.
     let deep = (1..dataorder::MAX_DEPTH).fold(Seq::source(10), |s, _| s.take(10));
     let json = serde_json::to_string(&deep).unwrap();
-    assert!(serde_json::from_str::<Seq<usize>>(&json).is_err());
     let mut de = serde_json::Deserializer::from_str(&json);
     de.disable_recursion_limit();
     let back = Seq::<usize>::deserialize(&mut de).unwrap();

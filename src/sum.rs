@@ -1,7 +1,6 @@
-//! Compensated sums shared by schedule construction and weight allocation.
+//! Compensated sums for schedule construction.
 
-/// A sum kept as two floats using Knuth's two-sum. Sufficient for positive weights and
-/// bounded rate changes; signed slopes spanning many magnitudes need an `Expansion`.
+/// A sum kept as two floats using Knuth's two-sum. Sufficient for bounded rate changes; signed slopes spanning many magnitudes need an `Expansion`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Compensated {
     hi: f64,

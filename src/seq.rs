@@ -50,7 +50,9 @@ pub enum Seq<T> {
     Mix(Vec<MixPart<T>>),
     /// The parts mixed in the proportions of their weights, `total` elements in all: part `i`
     /// contributes `round(wᵢ / Σw · total)` elements (the largest remainders take the
-    /// rounding up, so the counts sum to `total`), [cycled](Seq::Cycle) to that count
+    /// rounding up, with the lowest part index first on exact ties, so the counts sum to
+    /// `total`). Quotas use the exact binary values of the weights. Each part is
+    /// [cycled](Seq::Cycle) to that count
     /// (repeated as often as needed, reshuffling any shuffle inside for each repetition, and
     /// cut there), then mixed like [`Mix`](Seq::Mix) with the parts' schedules. Weights must
     /// be finite and nonnegative with a positive sum, a part with a positive share must have

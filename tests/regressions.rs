@@ -195,3 +195,99 @@ fn json_preserves_float_bits_and_large_weighted_orders() {
         assert!(a.iter(n - 100..).map(|(s, i)| (a.source_index(s), i)).eq(b.iter(n - 100..).map(|(s, i)| (b.source_index(s), i))));
     }
 }
+
+fn weighted_counts(total: usize, weights: &[f64]) -> Vec<usize> {
+    // Equal source values deliberately exercise identity through the public source index.
+    // A zero-weight source is empty, so assigning it a share would also fail compilation.
+    let order = Order::new(Seq::weighted(total, weights.iter().map(|&w| (Seq::source(usize::from(w > 0.0)), w)))).unwrap();
+    assert_eq!(order.len(), total);
+    let mut counts = vec![0; weights.len()];
+    for (source, _) in order.iter(..) {
+        counts[order.source_index(source)] += 1;
+    }
+    counts
+}
+
+fn integer_weight_counts(total: usize, weights: &[usize]) -> Vec<usize> {
+    let sum: usize = weights.iter().sum();
+    let mut counts: Vec<_> = weights.iter().map(|w| total * w / sum).collect();
+    let mut remainders: Vec<_> = weights.iter().enumerate().map(|(i, w)| (i, total * w % sum)).collect();
+    remainders.sort_by_key(|&(i, r)| (std::cmp::Reverse(r), i));
+    let remaining = total - counts.iter().sum::<usize>();
+    for &(i, _) in remainders.iter().take(remaining) {
+        counts[i] += 1;
+    }
+    counts
+}
+
+#[test]
+fn weighted_apportionment_preserves_exact_remainder_ties() {
+    for (weights, expected) in [([1.0, 1.0, 7.0], [1, 0, 2]), ([1.0, 2.0, 12.0], [0, 1, 2]), ([7.0, 1.0, 1.0], [3, 0, 0])] {
+        assert_eq!(weighted_counts(3, &weights), expected, "weights={weights:?}");
+    }
+
+    // A small integer oracle computes quotas and remainder comparisons without floats.
+    for a in 1..=8 {
+        for b in 1..=8 {
+            for c in 1..=8 {
+                let weights = [a, b, c];
+                for total in 1..=20 {
+                    assert_eq!(
+                        weighted_counts(total, &weights.map(|w| w as f64)),
+                        integer_weight_counts(total, &weights),
+                        "weights={weights:?}, total={total}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn weighted_apportionment_preserves_dyadic_scale() {
+    for (weights, expected, high_exponent) in [([1.0, 1.0, 7.0], [1, 0, 2], 1021), ([1.0, 2.0, 12.0], [0, 1, 2], 1020)] {
+        for scale in [f64::from_bits(1), f64::MIN_POSITIVE, 1.0, f64::from_bits((1023 + high_exponent) << 52)] {
+            let scaled = weights.map(|w| w * scale);
+            assert!(scaled.iter().all(|w| w.is_finite() && *w > 0.0));
+            assert_eq!(weighted_counts(3, &scaled), expected, "weights={scaled:?}");
+        }
+    }
+}
+
+#[test]
+fn weighted_apportionment_keeps_tiny_terms_that_break_ties() {
+    // For [7s, s, s] and total 3, all remainders are exactly 1/3. Adding any of the
+    // tiny positive weights below makes the big part's remainder smaller than either
+    // unit part's. The first unit part must receive the last element, even when the
+    // tiny term is thousands of binary places below the other weights.
+    for scale in [1.0, f64::from_bits(2044 << 52)] {
+        for tiny in [f64::from_bits(1), f64::MIN_POSITIVE, f64::from_bits((1023 - 128) << 52)] {
+            for big in 0..4 {
+                for small in (0..4).filter(|&i| i != big) {
+                    let mut weights = [scale; 4];
+                    weights[big] *= 7.0;
+                    weights[small] = tiny;
+                    let first_unit = (0..4).find(|&i| i != big && i != small).unwrap();
+                    let mut expected = [0; 4];
+                    expected[big] = 2;
+                    expected[first_unit] = 1;
+                    assert_eq!(weighted_counts(3, &weights), expected, "weights={weights:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn zero_weight_parts_never_receive_an_element() {
+    for weights in [[0, 7, 1, 1, 0], [1, 0, 2, 0, 12], [0, 0, 1, 0, 0]] {
+        for scale in [f64::from_bits(1), 1.0, f64::from_bits(2043 << 52)] {
+            let scaled = weights.map(|w| if w == 0 { -0.0 } else { w as f64 * scale });
+            for total in 0..=32 {
+                let counts = weighted_counts(total, &scaled);
+                assert_eq!(counts, integer_weight_counts(total, &weights), "weights={scaled:?}, total={total}");
+                assert!(weights.iter().zip(counts).all(|(&w, count)| w != 0 || count == 0));
+            }
+        }
+    }
+}

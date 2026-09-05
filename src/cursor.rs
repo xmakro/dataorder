@@ -20,14 +20,15 @@ use std::ops::{Range, RangeBounds};
 /// `(&source, index in the source)`. [`seek`](Cursor::seek) repositions it,
 /// [`set_range`](Cursor::set_range) gives it another range, [`nth`](Iterator::nth) skips
 /// without visiting, and [`count`](Iterator::count) and [`last`](Iterator::last) answer
-/// from the range without walking it. It walks forward only (there is no
-/// `DoubleEndedIterator`); [`Order::get`] serves random access. `Debug` prints the
-/// position and the end of the range.
+/// from the range without walking it. Runtime allocations are deferred until the first
+/// draw, so constructing, repositioning or counting an undrawn cursor allocates nothing.
+/// It walks forward only (there is no `DoubleEndedIterator`); [`Order::get`] serves random
+/// access. `Debug` prints the position and the end of the range.
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     order: &'a Order<T>,
-    /// Positioned at `pos` whenever `pos < len` (a range starting at the end leaves it
-    /// untouched until a seek).
+    /// Positioned at `pos` when in bounds; allocation-heavy roots defer construction
+    /// until the first element is drawn.
     root: NodeCursor<'a>,
     pos: u64,
     end: u64,
@@ -36,10 +37,22 @@ pub struct Cursor<'a, T> {
 impl<'a, T> Cursor<'a, T> {
     pub(crate) fn new(order: &'a Order<T>, range: Range<usize>) -> Self {
         let (start, end) = (range.start as u64, range.end as u64);
-        let mut root = NodeCursor::new(&order.root);
-        if start < order.root.len() {
-            root.seek(start, order.ctx);
-        }
+        // Simple roots need no allocation. Preparing those here keeps their first draw
+        // as cheap as before; wider or composite roots defer their buffers and seeks.
+        let root = match &order.root {
+            Node::Empty => NodeCursor::Empty,
+            Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: *offset + start },
+            Node::Shuffle { seed, salt, shape, child } => NodeCursor::Shuffle(ShuffleCursor {
+                seed: *seed,
+                salt: *salt,
+                shape: *shape,
+                child,
+                key: perm::key(*seed, order.ctx, *salt),
+                pos: start,
+                ctx: order.ctx,
+            }),
+            node => NodeCursor::Uninitialized { node, pos: start, ctx: order.ctx },
+        };
         Cursor { order, root, pos: start, end }
     }
 
@@ -182,8 +195,10 @@ impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 const UNSEEKED: u64 = u64::MAX;
 
 /// An explicit tag: with one hidden in a field's niche, every dispatch would decode it.
-/// `Empty` doubles as "not built yet" for the lazily built children of a `Concat` or `Mix`,
-/// whose real children are never empty (a concat drops them, a mix never draws from them).
+/// `Uninitialized` defers the root's construction until an element is requested, including
+/// across seeks and range changes. `Empty` doubles as "not built yet" for the children of
+/// a `Concat` or `Mix`, whose real children are never empty (a concat drops them, a mix
+/// never draws from them).
 #[derive(Clone, Debug)]
 #[repr(u8)]
 pub(crate) enum NodeCursor<'a> {
@@ -224,6 +239,11 @@ pub(crate) enum NodeCursor<'a> {
         left: u64,
         child: Box<Self>,
     },
+    Uninitialized {
+        node: &'a Node,
+        pos: u64,
+        ctx: u64,
+    },
 }
 
 impl<'a> NodeCursor<'a> {
@@ -258,6 +278,10 @@ impl<'a> NodeCursor<'a> {
     fn seek(&mut self, pos: u64, ctx: u64) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: seek in an empty sequence"),
+            NodeCursor::Uninitialized { pos: p, ctx: c, .. } => {
+                *p = pos;
+                *c = ctx;
+            }
             NodeCursor::Source { offset, next, .. } => *next = *offset + pos,
             NodeCursor::Concat { children, offsets, idx, left, ctx: c, child } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
@@ -296,6 +320,10 @@ impl<'a> NodeCursor<'a> {
     fn next(&mut self) -> (u32, u64) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
+            NodeCursor::Uninitialized { node, pos, ctx } => {
+                let (node, pos, ctx) = (*node, *pos, *ctx);
+                self.enter(node, pos, ctx)
+            }
             NodeCursor::Source { src, next, .. } => {
                 let i = *next;
                 *next += 1;
@@ -334,6 +362,15 @@ impl<'a> NodeCursor<'a> {
         }
     }
 
+    /// Only the first draw takes this path; keep initialization out of the walk's code.
+    #[cold]
+    #[inline(never)]
+    fn enter(&mut self, node: &'a Node, pos: u64, ctx: u64) -> (u32, u64) {
+        *self = Self::new(node);
+        self.seek(pos, ctx);
+        self.next()
+    }
+
     /// Advances by `m` elements, which must exist. Within the current part or repetition the
     /// child skips; beyond it the cursor lands in the target one directly, or, exactly on a
     /// boundary, stays there and lets the next [`next`](NodeCursor::next) enter the following
@@ -344,6 +381,7 @@ impl<'a> NodeCursor<'a> {
         }
         match self {
             NodeCursor::Empty => unreachable!("dataorder: skip in an empty sequence"),
+            NodeCursor::Uninitialized { pos, .. } => *pos += m,
             NodeCursor::Source { next, .. } => *next += m,
             NodeCursor::Concat { children, offsets, idx, left, ctx, child } => {
                 if m <= *left {

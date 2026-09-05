@@ -34,9 +34,11 @@
 //! `φ_i = (2r+1)/(2k')` staggers the sequences so that equal ones round-robin instead of
 //! bunching (`k'` is the number of non-empty sequences and `r` the rank of `i` among them,
 //! so empty sequences do not affect the order), and the joint sequence is the sort of all
-//! elements by ideal progress (ties by sequence index). Every sequence follows its schedule
-//! to within about one element at any joint position; the joint position of an element is
-//! within `k` (typically `√k`) of `progress·N`, the same warp for all sequences.
+//! elements by ideal progress (ties by sequence index). Rounding each sequence's draw
+//! count contributes less than one element of error at a given ideal progress, and the
+//! combined rank differs from `progress·N` by at most `k` in exact arithmetic. These bounds
+//! assume a feasible schedule: accepting overcommit within the numerical tolerance and
+//! clamping its negative slack can add drift proportional to length times that tolerance.
 //!
 //! # Iteration
 //!
