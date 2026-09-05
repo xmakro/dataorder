@@ -1,10 +1,13 @@
 //! The cost model, pinned by counting allocations: seeking an existing cursor allocates
 //! nothing, and a forward seek or `nth` across many repetitions or concat parts lands in
-//! the target one instead of entering every one on the way.
+//! the target one instead of entering every one on the way. One timing test: a shard of a
+//! nested mix must skip the inner mixes' cursors rather than re-seek them per element.
 
 use dataorder::{Order, Seq};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::hint::black_box;
+use std::time::{Duration, Instant};
 
 struct Counting;
 
@@ -91,4 +94,25 @@ fn forward_seeks_land_in_the_target_repetition_and_part() {
         assert!(count <= 8, "forward seek across 20 000 parts made {count} allocations");
         assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(element(&order, target)));
     }
+}
+
+/// Walking a shard of a mix of mixes steps the outer interleave and skips the inner mixes'
+/// cursors forward, so it costs a small multiple of the unsharded walk (it steps `count`
+/// times as many interleave positions). Re-seeking an inner mix for every kept element, as
+/// a stale part cursor once did, costs a full interleave seek per element: 80 times the
+/// unsharded walk on this configuration, against 4 times when it skips.
+#[test]
+fn shards_of_nested_mixes_skip_the_inner_cursors() {
+    let inner = |first: u64| Seq::mix((0..50).map(move |i| Seq::source(20_000).shuffle(first + i + 1)));
+    let nested = || Seq::mix([inner(0), inner(50)]);
+    let unsharded = Order::new(nested()).unwrap();
+    let sharded = Order::new(nested().shard(8, 0)).unwrap();
+    let walk = |order: &Order<usize>| {
+        let t = Instant::now();
+        black_box(order.iter(..20_000).fold(0usize, |acc, (s, i)| acc ^ s ^ i));
+        t.elapsed()
+    };
+    let min = |order: &Order<usize>| (0..5).map(|_| walk(order)).min().unwrap_or(Duration::MAX);
+    let (base, shard) = (min(&unsharded), min(&sharded));
+    assert!(shard < base * 25, "a shard of a nested mix walked in {shard:?}, the mix itself in {base:?}");
 }

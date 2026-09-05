@@ -92,7 +92,8 @@
 //! a `Mix` costs `⌈log2 k⌉` comparisons per element plus one key computation, a `Shuffle`
 //! one permutation plus a [`Order::get`]-style descent into its child (so a shuffle *over*
 //! a mix pays the interleave seek per element; shuffle the parts, not the mix), a `Stride`
-//! skips `step − 1` elements of its child (re-seeking a mix when that is cheaper), so
+//! skips `step − 1` elements of its child (a mix steps its interleave, or re-seeks it when
+//! that is cheaper, and its parts skip along, a nested mix stepping its own interleave), so
 //! sharding a mix across `count` workers costs `count` times its interleaving in total
 //! (shard the parts instead when that matters). `Concat`, `Repeat`, `Skip` and `Take` add a
 //! few instructions. Creating a cursor allocates one cursor per node it enters and seeks;

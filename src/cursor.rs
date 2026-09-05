@@ -375,8 +375,8 @@ impl<'a> NodeCursor<'a> {
 }
 
 /// The cursor of a `Mix`. Children are built and seeked lazily: `next_j[s]` is the index
-/// the cursor of part `s` stands at, or [`UNSEEKED`]; skipping leaves them behind and the
-/// mismatch re-seeks them.
+/// the cursor of part `s` stands at, or [`UNSEEKED`] after a seek of the mix; skipping
+/// leaves them behind and the mismatch skips them forward when they are drawn from again.
 #[derive(Clone, Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
@@ -386,6 +386,12 @@ pub(crate) struct MixCursor<'a> {
     next_j: Vec<u64>,
     cursors: Vec<NodeCursor<'a>>,
     ctx: u64,
+    /// Skips of at least this many elements re-seek the interleave instead of stepping it:
+    /// twice the number of parts, four times when some are scheduled. Measured on mixes of
+    /// 100 parts of a million elements (Ryzen 9 9950X3D): a step costs 10 to 13 ns, a seek
+    /// 1.8 µs uniform and 4.5 µs with a fifth of the parts scheduled (their share functions
+    /// have more segments to search), so the break-even hops are about 1.7 and 3.6 parts.
+    hop: u64,
 }
 
 impl<'a> MixCursor<'a> {
@@ -398,6 +404,7 @@ impl<'a> MixCursor<'a> {
             next_j: vec![UNSEEKED; children.len()],
             cursors: children.iter().map(|_| NodeCursor::Empty).collect(),
             ctx: 0,
+            hop: children.len() as u64 * if il.is_scheduled() { 4 } else { 2 },
         }
     }
 
@@ -420,23 +427,32 @@ impl<'a> MixCursor<'a> {
         self.cursors[s].next()
     }
 
-    /// Builds the cursor of part `s` if it has not been entered yet and seeks it to `j`.
+    /// Brings the cursor of part `s` to `j`: builds it if the part has not been entered
+    /// yet, skips it forward if it stands before `j` (the mix only ever moves its parts
+    /// forward by skipping, so a part left behind is behind, never ahead; a skip of a part
+    /// that is itself a mix steps or re-seeks its interleave, where a seek would count
+    /// every element of every part again), and seeks it after a seek of the mix.
     /// Out of the walk's hot loop: inlined, it cost 0.3 to 0.6 ns per element on mixes.
     #[cold]
     #[inline(never)]
     fn seek_child(&mut self, s: usize, j: u64) {
+        let at = self.next_j[s];
         if matches!(self.cursors[s], NodeCursor::Empty) {
             self.cursors[s] = NodeCursor::new(&self.children[s]);
+        } else if at != UNSEEKED && at < j {
+            self.cursors[s].skip(j - at);
+            return;
         }
         self.cursors[s].seek(j, self.ctx);
     }
 
-    /// A long skip re-seeks the interleave instead of stepping through it.
+    /// A long skip re-seeks the interleave instead of stepping through it. Either way the
+    /// parts' cursors stay where they are: each is skipped up to its next index when it is
+    /// next drawn from (see [`seek_child`](MixCursor::seek_child)).
     fn skip(&mut self, m: u64) {
         self.pos += m;
-        if m >= 4 * self.cursors.len() as u64 {
+        if m >= self.hop {
             self.iter.seek(self.pos..self.il.len());
-            self.next_j.fill(UNSEEKED);
         } else {
             for _ in 0..m {
                 self.iter.step();

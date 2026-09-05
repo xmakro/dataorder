@@ -187,6 +187,11 @@ impl Interleave {
         self.total
     }
 
+    /// `true` when some non-empty sequence has a schedule.
+    pub(crate) fn is_scheduled(&self) -> bool {
+        self.profiles.len() > 1
+    }
+
     /// Rate profile of `seq`.
     #[inline(always)]
     fn profile(&self, seq: usize) -> &Profile {

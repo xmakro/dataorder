@@ -313,10 +313,12 @@ impl<T> Seq<T> {
     /// consecutive block of `count` positions, so a mix's schedule is preserved across
     /// workers. A shard of a sequence shorter than `count` may be empty.
     ///
-    /// Over a mix, a shard still walks every element of the mix and keeps one in `count`,
-    /// so `count` workers sharding one mix do `count` times its interleaving work in total.
-    /// When that matters, shard the parts and mix the shards: each worker then interleaves
-    /// only its own share, with the same schedule.
+    /// Over a mix, a shard still steps through every element of the mix's interleave and
+    /// keeps one in `count` (the parts' cursors skip past what is dropped; a part that is
+    /// itself a mix steps its own interleave), so `count` workers sharding one mix do
+    /// `count` times its interleaving work in total. When that matters, shard the parts and
+    /// mix the shards: each worker then interleaves only its own share, with the same
+    /// schedule.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

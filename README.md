@@ -147,9 +147,10 @@ a `Mix` costs a seek of the interleave (`O(k log s)` for `k` parts, `s` schedule
 cursor per node on the active path: a `Mix` costs `⌈log2 k⌉` comparisons per element plus one
 key computation, a `Shuffle` one permutation (about 4.5 ns) plus a `get`-style descent into its
 child (its positions are scattered, so a shuffle *over* a mix pays the interleave seek per
-element: shuffle the parts, not the mix), a `Stride` skips `step − 1` elements of its child,
-re-seeking a mix when that is cheaper than stepping. Seeking an existing cursor reuses its
-buffers; `Iterator::nth` skips without visiting. How these numbers came about, and what was
+element: shuffle the parts, not the mix), a `Stride` skips `step − 1` elements of its child
+(a mix steps its interleave, or re-seeks it when that is cheaper, and its parts skip along, a
+nested mix stepping its own interleave). Seeking an existing cursor reuses its buffers;
+`Iterator::nth` skips without visiting. How these numbers came about, and what was
 tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.md).
 
 ## Layout
