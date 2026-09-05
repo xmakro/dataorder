@@ -3,7 +3,7 @@
 Deterministic, seekable data order for training, without materializing anything. A `Seq<T>` is
 a tree of sequence expressions over `Source` leaves (any `T` that is a `Source`: something with
 a length): `Concat`, `Mix` (balanced, order-preserving interleaving with per-part sampling
-schedules), `Shuffle`, `Repeat`, `Skip`, `Take` and `Stride`. `Order::compile` validates it and
+schedules), `Shuffle`, `Repeat`, `Skip`, `Take` and `Stride`. `Order::new` validates it and
 precomputes what iteration needs; elements, `(&source, index in the source)`, are never
 materialized: `get` computes any position, `iter` walks any range.
 
@@ -20,7 +20,7 @@ let seq = Seq::mix_with([
     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
 ])
 .shard(0, 8);                                              // worker 0 of 8
-let order = Order::compile(seq)?;
+let order = Order::new(seq)?;
 for (shard, index) in order.iter(1000..1010) {              // positions 1000..1010, in order
     // element `index` of `shard.path`
 }
@@ -31,9 +31,9 @@ Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with
 `Seq`: `.shuffle(seed)`, `.repeat(times)`, `.slice(range)`, `.take(n)`, `.skip(n)`,
 `.stride(step, offset)`, `.shard(index, count)`, `.map(f)` (the same structure over other
 sources: handles become loaded datasets), `.check()` (validate and get the length without
-compiling). `Order::compile_seeded(seq, seed)` reseeds every
+building the order). `Order::with_seed(seq, seed)` reseeds every
 shuffle at once. A `Seq` is plain data (clone, compare; the `serde` feature derives
-`Serialize` and `Deserialize` for `Seq` and `Sampling`); compiling
+`Serialize` and `Deserialize` for `Seq` and `Sampling`); building the order
 consumes it, and the order owns the sources and yields references to them. A bare `usize` is
 a source too, when only the order matters. Lengths and positions are `usize` at the interface
 and 64-bit inside.
@@ -93,7 +93,7 @@ rises linearly until `d1` and stays constant afterwards; `Sampling::delayed(d)` 
 rate on at `d`. Every position holds exactly
 one element, so the uniform parts absorb the slack: they keep a constant rate relative to
 each other and take whatever share the scheduled parts leave free. If the scheduled parts
-alone would need more than 100% of the draw rate at some progress, compilation fails with
+alone would need more than 100% of the draw rate at some progress, `Order::new` fails with
 `Error::Overcommitted`.
 
 Every element gets an ideal progress `F⁻¹((j + φ)/n)` and the mix is the sort by that value
@@ -170,7 +170,7 @@ was tried and rejected, is in [docs/optimization-notes.md](docs/optimization-not
 | `src/error.rs` | `Error` |
 | `src/seq.rs` | `Seq` and its builder methods |
 | `src/source.rs` | `Source` |
-| `src/order.rs` | `Order`: compilation with folds, the node tree, random access |
+| `src/order.rs` | `Order`: construction with folds, the node tree, random access |
 | `src/cursor.rs` | `Cursor`: per-node cursors with seek, next and skip |
 | `src/perm.rs` | seeded permutations of `0..n` and context derivation |
 | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles and their integrals, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` merge against brute force, exact seeks, balance and schedule bounds |

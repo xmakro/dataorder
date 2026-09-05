@@ -4,7 +4,7 @@
 //! length) combined by [`Concat`](Seq::Concat) and [`Mix`](Seq::Mix) (balanced,
 //! order-preserving interleaving with per-part sampling schedules, see [`Sampling`]) and
 //! transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat), [`Skip`](Seq::Skip),
-//! [`Take`](Seq::Take) and [`Stride`](Seq::Stride). [`Order::compile`] checks it and precomputes what iteration
+//! [`Take`](Seq::Take) and [`Stride`](Seq::Stride). [`Order::new`] validates it and precomputes what iteration
 //! needs; the elements, `(&source, index in the source)`, are never materialized:
 //! [`Order::get`] computes any position and [`Order::iter`] walks any range.
 //!
@@ -21,7 +21,7 @@
 //!     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
 //! ])
 //! .shard(0, 8);
-//! let order = Order::compile(seq)?;
+//! let order = Order::new(seq)?;
 //! for (shard, index) in order.iter(1000..1010) {
 //!     // element `index` of `shard.path`
 //! }
@@ -86,7 +86,7 @@
 //! | `src/seq.rs` | [`Seq`] and its builder methods |
 //! | `src/source.rs` | [`Source`] |
 //! | `src/error.rs` | [`Error`] |
-//! | `src/order.rs` | [`Order`]: compilation with folds, the node tree, random access |
+//! | `src/order.rs` | [`Order`]: construction with folds, the node tree, random access |
 //! | `src/cursor.rs` | [`Cursor`]: per-node cursors with seek, next and skip |
 //! | `src/perm.rs` | seeded permutations of `0..n` and context derivation |
 //! | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` |

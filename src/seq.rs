@@ -6,8 +6,8 @@ use std::ops::{Bound, RangeBounds};
 
 /// A sequence expression over sources of type `T` (anything that is a
 /// [`Source`](crate::Source)). Leaves are [`Source`](Seq::Source)s; every other variant
-/// transforms or combines sequences. Compile it with
-/// [`Order::compile`](crate::Order::compile). It is plain data: clone it, compare it,
+/// transforms or combines sequences. Build its order with
+/// [`Order::new`](crate::Order::new). It is plain data: clone it, compare it,
 /// serialize it (with the `serde` feature), or [`map`](Seq::map) its sources to another type.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -37,7 +37,7 @@ pub enum Seq<T> {
         inner: Box<Self>,
     },
     /// `inner` without its first `n` positions. Skipping more than there are is an error at
-    /// compile time, unlike `Iterator::skip`: configurations are validated, and a silently
+    /// the time the order is built, unlike `Iterator::skip`: configurations are validated, and a silently
     /// empty sequence hides a mistake.
     Skip {
         /// Positions dropped from the front.
@@ -45,8 +45,8 @@ pub enum Seq<T> {
         /// The sequence to skip into.
         inner: Box<Self>,
     },
-    /// The first `n` positions of `inner`. Taking more than there are is an error at compile
-    /// time, unlike `Iterator::take`.
+    /// The first `n` positions of `inner`. Taking more than there are is an error at the
+    /// time the order is built, unlike `Iterator::take`.
     Take {
         /// Positions kept.
         n: usize,
@@ -128,13 +128,13 @@ impl<T> Seq<T> {
         }
     }
 
-    /// The first `n` positions (an error at compile time if there are fewer).
+    /// The first `n` positions (an error when the order is built if there are fewer).
     #[must_use]
     pub fn take(self, n: usize) -> Self {
         Self::Take { n, inner: Box::new(self) }
     }
 
-    /// Everything after the first `n` positions (an error at compile time if there are fewer).
+    /// Everything after the first `n` positions (an error when the order is built if there are fewer).
     #[must_use]
     pub fn skip(self, n: usize) -> Self {
         Self::Skip { n, inner: Box::new(self) }
@@ -182,12 +182,12 @@ impl<T> Seq<T> {
 
 impl<T: Source> Seq<T> {
     /// Validates the configuration and returns the length of its order, without consuming
-    /// it: the checks of [`Order::compile`], over the sources' lengths.
+    /// it: the checks of [`Order::new`], over the sources' lengths.
     ///
     /// # Errors
-    /// Whatever [`Order::compile`] would report.
+    /// Whatever [`Order::new`] would report.
     pub fn check(&self) -> Result<usize, Error> {
-        Order::compile(self.lens()).map(|o| o.len())
+        Order::new(self.lens()).map(|o| o.len())
     }
 
     /// The same expression over the sources' lengths.

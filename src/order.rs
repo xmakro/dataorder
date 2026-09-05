@@ -53,23 +53,23 @@ pub struct Order<T> {
 }
 
 impl<T: Source> Order<T> {
-    /// Compiles `seq` with seed 0. Consumes it; clone it first to keep it, or validate it
-    /// with [`Seq::check`] first.
+    /// The order of `seq` with seed 0: validates it and precomputes what iteration needs.
+    /// Consumes it; clone it first to keep it, or validate it with [`Seq::check`] first.
     ///
     /// # Errors
     /// Skips and takes past the end, a zero stride, lengths that overflow, and schedules the
     /// mix rejects (invalid, too steep, overcommitted) or totals beyond its limit; see
     /// [`Error`].
-    pub fn compile(seq: Seq<T>) -> Result<Self, Error> {
-        Self::compile_seeded(seq, 0)
+    pub fn new(seq: Seq<T>) -> Result<Self, Error> {
+        Self::with_seed(seq, 0)
     }
 
-    /// Compiles `seq`. The `seed` reseeds every shuffle in the order at once; shuffles
-    /// keep their relative distinctness from their own seeds.
+    /// The order of `seq` with the given `seed`, which reseeds every shuffle in it at once;
+    /// shuffles keep their relative distinctness from their own seeds.
     ///
     /// # Errors
-    /// As for [`Order::compile`].
-    pub fn compile_seeded(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
+    /// As for [`Order::new`].
+    pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
         let mut c = Compiler { sources: Vec::new() };
         let root = c.compile(seq, 0)?;
         if usize::try_from(root.len()).is_err() {

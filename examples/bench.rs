@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 fn measure(name: &str, seq: Seq<usize>, count: usize) {
-    let order = Order::compile(seq).unwrap();
+    let order = Order::new(seq).unwrap();
     let n = order.len();
     let seeks = 200;
     let t = Instant::now();

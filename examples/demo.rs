@@ -21,7 +21,7 @@ fn main() {
         (Seq::source(Src { name: 'C', len: 40 }).shuffle(3), Sampling::DelayedLinear { start: 0.2, full: 0.6 }), // C: ramps up from 20% to 60%
     ])
     .repeat(2);
-    let order = Order::compile(seq.clone()).unwrap();
+    let order = Order::new(seq.clone()).unwrap();
     let sources: Vec<(char, usize)> = order.sources().iter().map(|s| (s.name, s.len)).collect();
     println!("length {} over sources {sources:?}", order.len());
 
@@ -34,7 +34,7 @@ fn main() {
 
     println!("\nfour shards, first 10 elements each (shard w holds every 4th element, offset w):");
     for w in 0..4 {
-        let shard = Order::compile(seq.clone().shard(w, 4)).unwrap();
+        let shard = Order::new(seq.clone().shard(w, 4)).unwrap();
         let part: Vec<String> = shard.iter(0..10).map(|(s, i)| format!("{}{i}", s.name)).collect();
         println!("  shard {w}: {}", part.join(" "));
     }

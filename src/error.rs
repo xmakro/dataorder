@@ -1,10 +1,10 @@
-//! The errors of [`Order::compile`](crate::Order::compile).
+//! The errors of [`Order::new`](crate::Order::new).
 
 use crate::interleave::{SamplingError, MAX_TOTAL_LEN};
 use crate::Sampling;
 use std::fmt;
 
-/// Why a configuration was rejected by [`Order::compile`](crate::Order::compile).
+/// Why a configuration was rejected by [`Order::new`](crate::Order::new).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
     /// A `Skip` of `n` positions from a sequence of `len < n`.
