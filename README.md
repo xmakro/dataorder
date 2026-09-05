@@ -1,13 +1,41 @@
 # dataorder
 
-Deterministic, seekable dataset ordering for training.
+Shuffle and mix billions of records. Seek anywhere, then stream from there.
 
-Shuffle datasets, mix them in chosen proportions, repeat epochs and split the result
-across workers. `dataorder` computes each position as a **source and an index within
-that source**. It does not load records or build a list of all indices.
+`dataorder` provides deterministic ordering for datasets too large to keep a full
+index array in memory. Each lookup computes a **source and an index within that
+source**, leaving record loading to you. Ordering memory grows with the sources and
+sequence structure, not the number of records.
+
+- **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
+  and O(1) space, without generating or storing the full permutation.
+- **Jump into a mix.** Counting and binary searches locate the position within each
+  part, without replaying the preceding records. Seek cost depends on the parts and
+  their schedules, rather than how far into the dataset you go.
+- **Walk cheaply after seeking.** A mix keeps a tournament tree, choosing each next
+  part with **O(log k) comparisons** for `k` parts. Pay for the seek once, then
+  iterate from there.
+
+Combine these operations with sampling schedules, repeated epochs and worker sharding.
+The same configuration and seed reproduce the same order, including after a restart.
 
 [API documentation](https://docs.rs/dataorder) · [Runnable example](examples/demo.rs) ·
 [Benchmarks](docs/benchmarks.md)
+
+## Performance
+
+Current implementation on an Apple M2 Pro, release build, minimum of two runs:
+
+| Order | Positions | Seek + first item | Walk / item |
+| --- | --- | --- | --- |
+| Shuffled source | 1 billion | 0.04 µs | 14.2 ns |
+| Mix of 100 shuffled sources | 100 million | 2.20 µs | 26.7 ns |
+| Mix of 1,000 shuffled sources, 20% scheduled | 100 million | 47.40 µs | 45.1 ns |
+| Nested mix of 1,100 shuffled sources, 2–4 epochs | 4.1 billion | 33.86 µs | 62.4 ns |
+
+Seek includes creating a cursor and returning the first item. Walk averages a
+five-million-item range, including its initial seek. Timings measure ordering and
+exclude record I/O. See the [full results and methodology](docs/benchmarks.md#current-measurements).
 
 ## Getting started
 
@@ -23,22 +51,23 @@ A `usize` can stand in for a dataset when you only need its length:
 use dataorder::{Order, Seq};
 
 fn main() -> Result<(), dataorder::Error> {
-    // Two passes over 1,000 records, with a fresh shuffle for each pass.
-    let seq = Seq::source(1000).shuffle(42).repeat(2);
+    // Two passes over a billion records, with a fresh shuffle for each pass.
+    let seq = Seq::source(1_000_000_000).shuffle(42).repeat(2);
     let order = Order::new(seq)?;
-    assert_eq!(order.len(), 2000);
+    assert_eq!(order.len(), 2_000_000_000);
 
-    // Resume at position 1,200 without replaying the earlier positions.
-    for (source, index) in order.iter(1200..1210) {
+    // Resume deep into the second epoch without replaying the earlier positions.
+    let resume = 1_200_000_000;
+    for (source, index) in order.iter(resume..resume + 10) {
         println!("record {index} from a source of {source} records");
     }
-    assert_eq!(order.iter(1200..).next(), Some(order.get(1200)));
+    assert_eq!(order.iter(resume..).next(), Some(order.get(resume)));
     Ok(())
 }
 ```
 
-An order's position and a source's index are different: position 1,200 above selects
-one of the original 1,000 records. `get(pos)` returns that record's source and index;
+An order's position and a source's index are different: position 1,200,000,000 above
+selects one of the original billion records. `get(pos)` returns its source and index;
 `iter(range)` returns the same pairs in order.
 
 ## Using your datasets

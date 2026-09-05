@@ -1,8 +1,17 @@
-//! Deterministic, seekable dataset ordering for training.
+//! Deterministic ordering for large datasets: shuffle, seek anywhere, then stream.
 //!
-//! `dataorder` decides which record to read at each position. It returns a source and
-//! an index within that source, leaving record loading to you. The full list of
-//! positions is never stored.
+//! Shuffle and mix billions of records without storing a full index array. Ordering
+//! memory grows with the sources and sequence structure, not the number of records.
+//! Each lookup returns a source and an index within it, leaving record loading to you.
+//!
+//! - **Shuffle on demand:** each shuffled index takes O(1) time on average and O(1) space.
+//! - **Seek into a mix:** counting and binary searches locate each part's position
+//!   without replaying the preceding records.
+//! - **Walk from there:** a mix maintains a tournament tree, choosing each next part
+//!   with O(log k) comparisons for `k` parts, instead of seeking again for every element.
+//!
+//! See the [cost model](#cost) for composition costs and the
+//! [benchmarks](https://github.com/xmakro/dataorder/blob/main/docs/benchmarks.md) for timings.
 //!
 //! Three types make up the main API:
 //!
@@ -17,21 +26,22 @@
 //! ```
 //! use dataorder::{Order, Seq};
 //!
-//! // Shuffle 1,000 records and repeat for two epochs.
-//! let seq = Seq::source(1000).shuffle(42).repeat(2);
+//! // Shuffle a billion records and repeat for two epochs.
+//! let seq = Seq::source(1_000_000_000).shuffle(42).repeat(2);
 //! let order = Order::new(seq)?;
-//! assert_eq!(order.len(), 2000);
+//! assert_eq!(order.len(), 2_000_000_000);
 //!
 //! // Start anywhere, without replaying the earlier positions.
-//! let mut cursor = order.iter(1200..1210);
+//! let resume = 1_200_000_000;
+//! let mut cursor = order.iter(resume..resume + 10);
 //! let (source, index) = cursor.next().unwrap();
-//! assert_eq!(*source, 1000);
-//! assert!(index < 1000);
-//! assert_eq!((source, index), order.get(1200));
+//! assert_eq!(*source, 1_000_000_000);
+//! assert!(index < 1_000_000_000);
+//! assert_eq!((source, index), order.get(resume));
 //! # Ok::<(), dataorder::Error>(())
 //! ```
 //!
-//! Position 1,200 belongs to the *order*; the returned index belongs to the original
+//! Position 1,200,000,000 belongs to the *order*; the returned index belongs to the original
 //! source. [`Order::iter`] returns the same pairs as calling [`Order::get`] at each
 //! position in its range, regardless of previous iteration or seeks.
 //!
@@ -158,7 +168,7 @@
 //! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
 //! buffers, including in a cloned cursor, though entering a new child can allocate.
-//! For commands and historical timings, see the
+//! For measurements and reproduction commands, see the
 //! [benchmark guide](https://github.com/xmakro/dataorder/blob/main/docs/benchmarks.md).
 //!
 //! # Feature flags

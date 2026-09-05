@@ -2,7 +2,54 @@
 
 Run the benchmarks on the hardware and configuration you plan to use. The crate's
 [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) explains how composition
-affects performance; the timings below are historical measurements.
+affects performance. Current measurements are below; older Ryzen results are kept
+in the [historical section](#historical-measurements).
+
+## Current measurements
+
+Recorded on 2026-09-05 from revision [`bc2908f`](https://github.com/xmakro/dataorder/commit/bc2908f7f717461af2c302c2a5b7b8e267912a18),
+on an Apple M2 Pro with Rust 1.98.1, macOS arm64, release build. The benchmark is
+single-threaded, with no CPU affinity. Each column is the minimum of two runs.
+[Raw results](benchmarks/2026-09-05-m2-pro.json) include the exact command and toolchain.
+
+The benchmark uses source lengths and generates source/index pairs; it does not load
+records. Seek averages 200 randomly selected positions and includes cursor construction
+and the first item. Get averages up to 200,000 random lookups. Walk starts one third
+of the way into each order and averages up to five million items, including the
+initial seek. The shorter shard and slow-path cases use fewer items; see
+[`examples/bench.rs`](../examples/bench.rs) for the exact configurations.
+
+The nested training order combines mixes of 1,000 and 100 shuffled sources. Source
+lengths range from 0.5 to 2 million, repeated for 2–4 epochs, giving 4,098,465,102
+output positions. A fresh seek into it takes about 34 µs; walking from that point
+averages 62.4 ns per item. The order is computed without storing those four billion
+source/index pairs.
+
+```sh
+BENCH_CORE=none cargo run --locked --release --example bench_campaign -- run readme-2026-09-05 . default
+```
+
+| Order | Seek + first item | Walk / item | Get |
+| --- | --- | --- | --- |
+| `mix(mix(1000 × shuffled × 2–4 epochs), mix(100 × …))` | 33.86 µs | 62.4 ns | 30687.2 ns |
+| `source 1e9` | 0.01 µs | 3.5 ns | 3.8 ns |
+| `shuffle(source 1e9)` | 0.04 µs | 14.2 ns | 21.7 ns |
+| `shuffle(source 1e6).repeat(1000)` | 0.10 µs | 14.2 ns | 24.9 ns |
+| `concat(100 × shuffle(source 1e6))` | 0.10 µs | 14.1 ns | 35.2 ns |
+| `shuffle(concat(100 × source 1e6))` | 0.05 µs | 31.3 ns | 40.1 ns |
+| `mix(5 × source 1e6)` | 0.38 µs | 11.9 ns | 206.1 ns |
+| `mix(80% source + 4 × 5%)` | 0.36 µs | 13.0 ns | 221.7 ns |
+| `mix(60% shuffled + 9 × 4.4% shuffled)` | 0.54 µs | 37.7 ns | 368.9 ns |
+| `mix(100 × source 1e6)` | 2.26 µs | 18.9 ns | 1842.6 ns |
+| `mix(100 × shuffled)` | 2.20 µs | 26.7 ns | 1871.3 ns |
+| `mix(100 × shuffled, 20% scheduled)` | 4.91 µs | 28.3 ns | 4494.9 ns |
+| `mix(1000 × shuffled, 20% scheduled)` | 47.40 µs | 45.1 ns | 44184.3 ns |
+| `mix(100 × shuffled, 20% scheduled).shard(8, 0)` | 5.41 µs | 180.2 ns | 4463.7 ns |
+| `mix(100 × shuffled, 20% scheduled).shard(512, 0)` | 9.39 µs | 5040.1 ns | 4485.6 ns |
+| `repeat(3, mix(3 nested)).shard(4, 1)` | 0.53 µs | 79.9 ns | 272.2 ns |
+| `mix(mix(100 × shuffled) × 2)` | 2.57 µs | 36.2 ns | 2249.4 ns |
+| `mix(mix(100 × shuffled) × 2).shard(8, 0)` | 2.72 µs | 152.0 ns | 2254.6 ns |
+| `shuffle(mix(100 × source 1e6))  [slow path]` | 1.97 µs | 1954.4 ns | 1960.7 ns |
 
 ## Running the benchmarks
 
@@ -20,7 +67,7 @@ requests. `--all` runs every group.
 
 | Measurement | Operation |
 | --- | --- |
-| Walk | One `next()` after the cursor has been positioned |
+| Walk | Average per element over a long range, including the initial seek; continuous-tail cases resume an existing cursor |
 | Seek | `order.iter(pos..).next()` at a random position, including cursor construction |
 | Get | `order.get(pos)` at a random position |
 | Build | `Order::new`, excluding the clone of the input configuration |

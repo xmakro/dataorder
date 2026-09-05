@@ -1,0 +1,114 @@
+{
+  "date": "2026-09-05",
+  "revision": "bc2908f7f717461af2c302c2a5b7b8e267912a18",
+  "hardware": "Apple M2 Pro (12 CPU cores)",
+  "platform": "macOS arm64",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "profile": "release",
+  "threads": 1,
+  "cpu_affinity": null,
+  "aggregation": "Per-column minimum of two runs",
+  "command": "BENCH_CORE=none cargo run --locked --release --example bench_campaign -- run readme-2026-09-05 . default",
+  "columns": [
+    "seek_us",
+    "walk_ns_per_item",
+    "get_ns"
+  ],
+  "rows": {
+    "concat(100 × shuffle(source 1e6))": [
+      0.1,
+      14.1,
+      35.2
+    ],
+    "mix(100 × shuffled)": [
+      2.2,
+      26.7,
+      1871.3
+    ],
+    "mix(100 × shuffled, 20% scheduled)": [
+      4.91,
+      28.3,
+      4494.9
+    ],
+    "mix(100 × source 1e6)": [
+      2.26,
+      18.9,
+      1842.6
+    ],
+    "mix(1000 × shuffled, 20% scheduled)": [
+      47.4,
+      45.1,
+      44184.3
+    ],
+    "mix(5 × source 1e6)": [
+      0.38,
+      11.9,
+      206.1
+    ],
+    "mix(60% shuffled + 9 × 4.4% shuffled)": [
+      0.54,
+      37.7,
+      368.9
+    ],
+    "mix(80% source + 4 × 5%)": [
+      0.36,
+      13.0,
+      221.7
+    ],
+    "mix(mix(100 × shuffled) × 2)": [
+      2.57,
+      36.2,
+      2249.4
+    ],
+    "mix(mix(100 × shuffled) × 2).shard(8, 0)": [
+      2.72,
+      152.0,
+      2254.6
+    ],
+    "mix(mix(1000 × shuffled × 2–4 epochs), mix(100 × …))": [
+      33.86,
+      62.4,
+      30687.2
+    ],
+    "repeat(3, mix(3 nested)).shard(4, 1)": [
+      0.53,
+      79.9,
+      272.2
+    ],
+    "shuffle(concat(100 × source 1e6))": [
+      0.05,
+      31.3,
+      40.1
+    ],
+    "shuffle(mix(100 × source 1e6))  [slow path]": [
+      1.97,
+      1954.4,
+      1960.7
+    ],
+    "shuffle(source 1e6).repeat(1000)": [
+      0.1,
+      14.2,
+      24.9
+    ],
+    "shuffle(source 1e9)": [
+      0.04,
+      14.2,
+      21.7
+    ],
+    "source 1e9": [
+      0.01,
+      3.5,
+      3.8
+    ],
+    "↑ .shard(512, 0)": [
+      9.39,
+      5040.1,
+      4485.6
+    ],
+    "↑ .shard(8, 0)": [
+      5.41,
+      180.2,
+      4463.7
+    ]
+  }
+}

@@ -1,7 +1,7 @@
-//! Cost of typical orders: seek = `order.iter(pos..).next()` at a random position (builds and
-//! positions a cursor and draws its first element, which is what enters the parts of a mix),
-//! walk = one element of that cursor after the seek, get = `order.get(pos)` at a random
-//! position.
+//! Cost of typical orders: seek = `order.iter(pos..).next()` at a random position,
+//! including cursor construction. Walk is the average per element over a long range,
+//! including its initial seek; get = `order.get(pos)` at a random position. All
+//! measurements use source lengths only and exclude record I/O.
 //! `cargo run --release --example bench`
 //! `-- --phases` measures early, rising, falling and exhausted schedule phases; `-- --lifecycle`
 //! measures compilation, reusable seeks and requested cursor-allocation bytes. `-- --all`
