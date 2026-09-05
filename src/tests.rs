@@ -684,7 +684,9 @@ fn edge_cases() {
     let order = Order::with_seed(src(0, 5), 77).unwrap();
     assert_eq!(order.sources(), &[Src { id: 0, len: 5 }]);
     assert_eq!(order.seed(), 77);
+    assert_eq!(format!("{order:?}"), "Order { len: 5, seed: 77, sources: [Src { id: 0, len: 5 }] }");
     let mut c = order.iter(1..4);
+    assert_eq!(format!("{c:?}"), "Cursor { position: 1, end: 4 }");
     assert_eq!(c.remaining(), 3);
     assert_eq!(c.next().map(|(s, i)| (s.id, i)), Some((0, 1)));
     c.seek(4);

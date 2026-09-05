@@ -13,6 +13,7 @@
 use crate::interleave::{Interleave, Iter};
 use crate::order::{Node, Order, get, resolve};
 use crate::perm::{self, Key, Shape};
+use std::fmt;
 use std::ops::{Range, RangeBounds};
 
 /// Iterator over a range of an [`Order`], returned by [`Order::iter`]; yields
@@ -20,7 +21,8 @@ use std::ops::{Range, RangeBounds};
 /// [`set_range`](Cursor::set_range) gives it another range, [`nth`](Iterator::nth) skips
 /// without visiting, and [`count`](Iterator::count) and [`last`](Iterator::last) answer
 /// from the range without walking it. It walks forward only (there is no
-/// `DoubleEndedIterator`); [`Order::get`] serves random access.
+/// `DoubleEndedIterator`); [`Order::get`] serves random access. `Debug` prints the
+/// position and the end of the range.
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     order: &'a Order<T>,
@@ -108,6 +110,12 @@ impl<'a, T> Cursor<'a, T> {
         let range = resolve(range, self.order.len());
         self.end = range.end as u64;
         self.seek(range.start);
+    }
+}
+
+impl<T> fmt::Debug for Cursor<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Cursor").field("position", &self.position()).field("end", &(self.end as usize)).finish()
     }
 }
 

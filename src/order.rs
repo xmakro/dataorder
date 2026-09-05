@@ -6,6 +6,7 @@ use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
 use crate::seq::WeightedPart;
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
+use std::fmt;
 use std::ops::{Bound, Range, RangeBounds};
 
 /// A compiled node. Empty subtrees are folded to [`Node::Empty`], so every child of a
@@ -74,8 +75,9 @@ impl Node {
 /// A compiled [`Seq`]: its length, random access by [`Order::get`] and seekable iteration
 /// by [`Order::iter`]. Owns the sources; elements are `(&source, index)`. Lengths and
 /// positions are `usize` at the interface and 64-bit inside, so an intermediate node may
-/// be longer than the address space as long as the order itself is not.
-#[derive(Clone, Debug)]
+/// be longer than the address space as long as the order itself is not. `Debug` prints the
+/// length, the seed and the sources, not the compiled tree.
+#[derive(Clone)]
 pub struct Order<T> {
     pub(crate) root: Node,
     /// Context of the root (the order's seed); repetitions derive their own from it.
@@ -234,6 +236,12 @@ pub(crate) fn resolve(range: impl RangeBounds<usize>, len: usize) -> Range<usize
     assert!(start <= end, "dataorder: range {start}..{end} ends before it starts");
     assert!(end <= len, "dataorder: range end {end} out of range for {len} positions");
     start..end
+}
+
+impl<T: fmt::Debug> fmt::Debug for Order<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Order").field("len", &self.len()).field("seed", &self.ctx).field("sources", &self.sources).finish()
+    }
 }
 
 impl<T: Source> TryFrom<Seq<T>> for Order<T> {
