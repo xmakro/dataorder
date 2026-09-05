@@ -220,7 +220,8 @@ impl<T> Order<T> {
     /// The element at `pos`: the source and the index in it.
     ///
     /// Constant work per node on the path, except that a [`Seq::Mix`] on the path costs a
-    /// seek of the interleave (`O(k log s)` for `k` parts, `s` scheduled), which allocates.
+    /// seek of the interleave (`O(k log S)` for `k` parts and `S` distinct breakpoints among
+    /// their schedules), which allocates.
     /// For consecutive positions use [`Order::iter`]; for many scattered positions, a cursor
     /// and [`Cursor::seek`], which reuses the cursor's allocations.
     ///

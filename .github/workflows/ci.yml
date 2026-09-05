@@ -2,6 +2,9 @@ name: ci
 on:
   push:
   pull_request:
+  schedule:
+    # Weekly, against the current stable and nightly toolchains.
+    - cron: '17 6 * * 1'
 permissions:
   contents: read
 concurrency:

@@ -87,10 +87,10 @@ Every element gets an ideal progress `F⁻¹((j + φ)/n)` and the mix is the sor
 (ties by part index; `φ` staggers the non-empty parts so that equal ones round-robin). Each
 part follows its schedule to within about one element at any position, and the position of an
 element is within `k` (typically `√k`) of `progress·N`, the same warp for all parts. Nothing is
-materialized: a seek counts, per part, the elements below the target progress (`O(k log s)`
-for `k` parts, `s` scheduled; building the mix is `O(k + s log s)`), and the walk takes the
-minimum of a tournament tree over the
-parts' next elements, `⌈log2 k⌉` branch-free comparisons per element. Seeks are exact
+materialized: a seek counts, per part, the elements below the target progress (`O(k log S)`
+for `k` parts and `S` distinct breakpoints among their schedules; building the mix is
+`O(k + s log s)` for `s` scheduled parts), and the walk takes the minimum of a tournament tree
+over the parts' next elements, `⌈log2 k⌉` branch-free comparisons per element. Seeks are exact
 whatever was walked before, because the order is defined as a sort by keys that are monotone
 within a part by construction.
 
@@ -110,10 +110,10 @@ A seeded permutation of `0..n` in O(1) per element and no state: a seven-round F
 on the `k`-bit numbers (`2^(k−1) < n ≤ 2^k`) with cycle walking to `0..n`. The round function
 adds the round key to half the bits, multiplies by the round's odd multiplier and keeps the top
 bits of the product. It passes joint-distribution (grid and low bits), serial-correlation,
-consecutive-difference and fixed-point checks at every size tested, from 2 to 10⁶, over hundreds
-of keys at exact powers of two, where nothing but the network shapes the permutation
-(`src/perm.rs` tests; six rounds left about one key in a hundred there with a visible structure
-in consecutive differences). There is no security claim. A masked multiply–xorshift mixer
+consecutive-difference and fixed-point checks at every size tested, from 2 to 10⁶, the
+difference check over hundreds of keys per size (`src/perm.rs` tests; six rounds left about one
+key in 300 with a visible structure in consecutive differences, which the seventh removes for
+0.9 ns per element). There is no security claim. A masked multiply–xorshift mixer
 (MurmurHash3's finalizer cut to `k` bits) is twice as fast but fails badly as a permutation:
 consecutive inputs map to outputs with a nearly constant difference.
 

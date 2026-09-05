@@ -12,11 +12,11 @@
 //! top bits of the product, which every input bit influences. Six such rounds pass the
 //! statistics in this module's tests (joint distribution of position and image on a grid
 //! and in the low bits, serial correlation, fixed points) at every size tried, from 2 to
-//! 10⁶ and beyond, but at a domain of exactly `2^k` elements, where no cycle walking
-//! scrambles the network's output, about one key in a hundred leaves a visible structure in
-//! the differences of consecutive images (a 64-bin chi-square at 7 to 17σ); the seventh
-//! round removes that (no key of 300 above 3σ at 2¹⁶, 2¹⁷ and 2¹⁸) for about half a
-//! nanosecond per element. There is no security claim.
+//! 10⁶ and beyond, but about one key in 300 leaves a visible structure in the differences
+//! of consecutive images (a 64-bin chi-square at 5 to 47σ), at powers of two and at every
+//! other size tried alike (the cycle walk does not hide it); the seventh round removes that
+//! (no key of 300 above 4.2σ at any of eight sizes) for 0.9 ns per element. There is no
+//! security claim.
 //!
 //! Alternatives measured and rejected: a masked multiply–xorshift mixer (`MurmurHash3`'s
 //! finalizer cut to `k` bits) is twice as fast but maps consecutive inputs to outputs with
@@ -287,17 +287,15 @@ mod tests {
         }
     }
 
-    /// Domains of exactly `2^k` elements, where the network's output is the permutation
-    /// without any cycle walking, over many keys: the differences of consecutive images,
-    /// `p(i) − p(i − 1) mod n`, are spread over 64 bins within 4.5σ of a chi-square with 63
-    /// degrees of freedom for every key (six rounds left about one key in a hundred at 7 to
-    /// 17σ). Off powers of two the cycle walk hides such structure, so the sizes here are
-    /// the strict ones. Runs in release builds; in debug builds the 60 million permutations
-    /// would take seconds.
+    /// Over many keys, the differences of consecutive images, `p(i) − p(i − 1) mod n`, are
+    /// spread over 64 bins within 4.5σ of a chi-square with 63 degrees of freedom for every
+    /// key, at powers of two (the network's output as it is) and at sizes below them (six
+    /// rounds left about one key in 300 at 5 to 47σ at every one of these). Runs in release
+    /// builds; in debug builds the 80 million permutations would take seconds.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "runs in release builds (cargo test --release)")]
-    fn consecutive_differences_at_powers_of_two() {
-        for (n, seeds) in [(1u64 << 16, 300u64), (1 << 17, 100), (1 << 18, 100)] {
+    fn consecutive_differences_over_many_keys() {
+        for (n, seeds) in [(1u64 << 16, 300u64), (1 << 17, 100), (1 << 18, 100), (49_152, 100), (253_952, 100)] {
             for seed in 0..seeds {
                 let (shape, key) = (Shape::new(n), key(seed, 0, 0));
                 let mut bins = [0u64; 64];

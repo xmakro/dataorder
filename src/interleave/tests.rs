@@ -551,11 +551,14 @@ fn bench_seek_and_walk() {
     };
     for &k in &[3usize, 100, 1000, 10_000] {
         let lens: Vec<u64> = (0..k).map(|_| rnd(if k == 3 { 200 } else { 2_000_000 })).collect();
-        for scheduled in [false, true] {
+        // Uniform; a fifth scheduled with a few distinct starts; a fifth with distinct starts
+        // each (the uniform profile then has a segment per scheduled part).
+        for schedules in ["uniform", "scheduled", "distinct"] {
             let sampling: Vec<Sampling> = (0..k)
-                .map(|i| match (scheduled, i % 10) {
-                    (true, 3) => DelayedLinear { start: 0.1 + 0.05 * (i % 7) as f64, full: 0.1 + 0.05 * (i % 7) as f64 },
-                    (true, 7) => DelayedLinear { start: 0.05 * (i % 5) as f64, full: 0.3 + 0.05 * (i % 9) as f64 },
+                .map(|i| match (schedules, i % 10) {
+                    ("scheduled", 3) => DelayedLinear { start: 0.1 + 0.05 * (i % 7) as f64, full: 0.1 + 0.05 * (i % 7) as f64 },
+                    ("scheduled", 7) => DelayedLinear { start: 0.05 * (i % 5) as f64, full: 0.3 + 0.05 * (i % 9) as f64 },
+                    ("distinct", 3 | 7) => Sampling::delayed(0.1 + 0.6 * i as f64 / k as f64),
                     _ => Uniform,
                 })
                 .collect();
@@ -580,8 +583,7 @@ fn bench_seek_and_walk() {
             let per = t0.elapsed().as_nanos() as f64 / len as f64;
             black_box((acc, acc2));
             println!(
-                "k = {k:>6} {:<9} N = {n:>12}: build {:>7.1} µs | seek {:>9.1} µs | {per:>5.1} ns per element",
-                if scheduled { "scheduled" } else { "uniform" },
+                "k = {k:>6} {schedules:<9} N = {n:>12}: build {:>7.1} µs | seek {:>9.1} µs | {per:>5.1} ns per element",
                 build.as_nanos() as f64 / 1e3,
                 seek / 1e3
             );

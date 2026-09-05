@@ -123,7 +123,8 @@ pub enum ErrorKind {
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep,
     /// The scheduled parts of a mix need `demand` (> 1) times the whole draw rate at some
-    /// progress, leaving nothing for the uniform parts there.
+    /// progress, leaving nothing for the uniform parts there. A demand within 10⁻⁹ of 1 is
+    /// accepted, for rounding: a hand-over that needs exactly the whole rate is valid.
     Overcommitted {
         /// The scheduled parts' rates, summed, at their peak, as a fraction of the whole
         /// draw rate.

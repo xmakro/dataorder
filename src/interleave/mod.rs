@@ -41,9 +41,11 @@
 //! # Iteration
 //!
 //! [`Interleave::iter`] seeks by counting, per sequence, the elements below the progress
-//! `a/N` (inverse formula, then made exact against real keys) and then repeatedly takes the
-//! minimum of a [tournament tree](tournament::TournamentTree) over the next element of
-//! every sequence (`⌈log2 k⌉` comparisons per element).
+//! `a/N` (inverse formula, then made exact against real keys; `O(log S)` per sequence for a
+//! profile of `S` segments, and the uniform profile has one per distinct breakpoint of the
+//! scheduled ones) and then repeatedly takes the minimum of a
+//! [tournament tree](tournament::TournamentTree) over the next element of every sequence
+//! (`⌈log2 k⌉` comparisons per element).
 //!
 //! `iter(a..b)` yields exactly the elements at positions `a..b` of `iter(0..N)`, whatever
 //! the seek history. The order is defined as the sort by `(key, sequence, index)` and the

@@ -74,9 +74,11 @@
 //! Everything is deterministic in the configuration and the order's seed, and `iter(a..b)`
 //! yields exactly `get(a)..get(b)` whatever was iterated before.
 //!
-//! Compilation rejects skips and takes past the end, cycles of an empty sequence, zero strides, orders longer than
-//! `usize::MAX` (and intermediate lengths beyond 64 bits), invalid or overcommitted
-//! schedules, invalid weights, mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
+//! Compilation rejects skips and takes past the end, cycles of an empty sequence, zero
+//! strides, orders longer than `usize::MAX` (and intermediate lengths beyond 64 bits),
+//! invalid or overcommitted schedules (the scheduled parts of a mix needing more than the
+//! whole draw rate somewhere, beyond a tolerance of 10⁻⁹ for rounding), invalid weights,
+//! mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
 //! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node. Two
 //! builders panic instead, on mistakes no configuration can express (see [`Seq`]).
 //! Compilation folds what is exact: nested concats flatten, empty parts vanish (an empty
@@ -94,8 +96,9 @@
 //!
 //! Compilation is linear in the configuration (plus `O(k + s log s)` per mix of `k` parts,
 //! `s` of them scheduled). [`Order::get`] walks the path from the root to a source: constant
-//! work per node, except that a `Mix` costs a seek of the interleave (`O(k log s)`, which
-//! allocates) and a `Shuffle` a key derivation. [`Order::iter`] seeks once and then walks:
+//! work per node, except that a `Mix` costs a seek of the interleave (`O(k log S)` for `S`
+//! distinct breakpoints among the schedules, which allocates) and a `Shuffle` a key
+//! derivation. [`Order::iter`] seeks once and then walks:
 //! a `Mix` costs `⌈log2 k⌉` comparisons per element plus one key computation, a `Shuffle`
 //! one permutation plus a [`Order::get`]-style descent into its child (so a shuffle *over*
 //! a mix pays the interleave seek per element; shuffle the parts, not the mix), a `Stride`
