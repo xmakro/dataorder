@@ -2,12 +2,9 @@
 //! the builder methods on [`Seq`].
 
 use crate::interleave::float_bits;
-use crate::{Error, Order, Sampling, Source};
+use crate::{Error, MAX_DEPTH, Order, Sampling, Source};
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
-
-/// Deepest nesting [`Order::new`] accepts; see [`Seq::MAX_DEPTH`].
-pub(crate) const MAX_DEPTH: u32 = 256;
 
 /// A sequence expression over sources of type `T` (anything that is a [`Source`]). Leaves
 /// are [`Source`](Seq::Source)s; every other variant transforms or combines sequences.
@@ -26,9 +23,17 @@ pub(crate) const MAX_DEPTH: u32 = 256;
 /// the count. Everything that depends on the sources' lengths (skipping or taking past the
 /// end, a zero stride, overflow, schedules and weights) is reported by [`Order::new`] as an
 /// [`Error`], with the path of the node it was found at. Configurations nesting deeper than
-/// [`MAX_DEPTH`](Seq::MAX_DEPTH) levels are rejected as well.
+/// [`MAX_DEPTH`] levels are rejected as well.
+///
+/// # Depth
+///
+/// Like any boxed tree, a `Seq` is cloned, compared, hashed, printed, mapped, serialized and
+/// dropped by recursion, one stack frame per level. [`Order::new`] and [`check`](Seq::check)
+/// cope with any depth: they stop at [`MAX_DEPTH`] and take the rest apart without
+/// recursion. Keep the values themselves within a few thousand levels of a thread's stack
+/// all the same; no order accepts them deeper.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub enum Seq<T> {
     /// The elements `0..len()` of a source, in order.
@@ -164,11 +169,6 @@ impl<T: Hash> Hash for WeightedPart<T> {
 }
 
 impl<T> Seq<T> {
-    /// Deepest nesting [`Order::new`] accepts, the root counting as level 1: a chain of
-    /// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation is
-    /// recursive, and this keeps it well inside the default stack of a thread.
-    pub const MAX_DEPTH: u32 = MAX_DEPTH;
-
     /// The elements of `source`, in order.
     #[must_use]
     pub fn source(source: T) -> Self {
@@ -343,6 +343,25 @@ impl<T> Seq<T> {
         self.map_with(&mut f)
     }
 
+    /// Takes the tree apart without recursion: what dropping it does, on the heap instead
+    /// of the stack, for configurations too deep to drop the usual way.
+    pub(crate) fn dismantle(self) {
+        let mut stack = vec![self];
+        while let Some(seq) = stack.pop() {
+            match seq {
+                Self::Source(_) => {}
+                Self::Concat(parts) => stack.extend(parts),
+                Self::Mix(parts) => stack.extend(parts.into_iter().map(|p| p.seq)),
+                Self::Weighted { parts, .. } => stack.extend(parts.into_iter().map(|p| p.seq)),
+                Self::Shuffle { inner, .. }
+                | Self::Repeat { inner, .. }
+                | Self::Skip { inner, .. }
+                | Self::Take { inner, .. }
+                | Self::Stride { inner, .. } => stack.push(*inner),
+            }
+        }
+    }
+
     fn map_with<U, F: FnMut(T) -> U>(self, f: &mut F) -> Seq<U> {
         match self {
             Self::Source(t) => Seq::Source(f(t)),
@@ -379,21 +398,34 @@ impl<T: Source> Seq<T> {
         Order::new(self.lens()).map(|o| o.len())
     }
 
-    /// The same expression over the sources' lengths.
+    /// The same expression over the sources' lengths, cut off where [`Order::new`] stops
+    /// looking (one level beyond [`MAX_DEPTH`]), so that checking never recurses deeper than
+    /// compiling does.
     pub(crate) fn lens(&self) -> Seq<usize> {
+        self.lens_at(1)
+    }
+
+    fn lens_at(&self, level: u32) -> Seq<usize> {
+        if level > MAX_DEPTH {
+            return Seq::Source(0);
+        }
+        let inner = |s: &Self| Box::new(s.lens_at(level + 1));
         match self {
             Self::Source(t) => Seq::Source(t.len()),
-            Self::Concat(parts) => Seq::Concat(parts.iter().map(Self::lens).collect()),
-            Self::Mix(parts) => Seq::Mix(parts.iter().map(|p| MixPart { seq: p.seq.lens(), sampling: p.sampling }).collect()),
+            Self::Concat(parts) => Seq::Concat(parts.iter().map(|p| p.lens_at(level + 1)).collect()),
+            Self::Mix(parts) => Seq::Mix(parts.iter().map(|p| MixPart { seq: p.seq.lens_at(level + 1), sampling: p.sampling }).collect()),
             Self::Weighted { total, parts } => Seq::Weighted {
                 total: *total,
-                parts: parts.iter().map(|p| WeightedPart { seq: p.seq.lens(), weight: p.weight, sampling: p.sampling }).collect(),
+                parts: parts
+                    .iter()
+                    .map(|p| WeightedPart { seq: p.seq.lens_at(level + 1), weight: p.weight, sampling: p.sampling })
+                    .collect(),
             },
-            Self::Shuffle { seed, inner } => Seq::Shuffle { seed: *seed, inner: Box::new(inner.lens()) },
-            Self::Repeat { times, inner } => Seq::Repeat { times: *times, inner: Box::new(inner.lens()) },
-            Self::Skip { n, inner } => Seq::Skip { n: *n, inner: Box::new(inner.lens()) },
-            Self::Take { n, inner } => Seq::Take { n: *n, inner: Box::new(inner.lens()) },
-            Self::Stride { step, offset, inner } => Seq::Stride { step: *step, offset: *offset, inner: Box::new(inner.lens()) },
+            Self::Shuffle { seed, inner: i } => Seq::Shuffle { seed: *seed, inner: inner(i) },
+            Self::Repeat { times, inner: i } => Seq::Repeat { times: *times, inner: inner(i) },
+            Self::Skip { n, inner: i } => Seq::Skip { n: *n, inner: inner(i) },
+            Self::Take { n, inner: i } => Seq::Take { n: *n, inner: inner(i) },
+            Self::Stride { step, offset, inner: i } => Seq::Stride { step: *step, offset: *offset, inner: inner(i) },
         }
     }
 }

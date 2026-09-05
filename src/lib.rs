@@ -68,7 +68,7 @@
 //! Compilation rejects skips and takes past the end, zero strides, orders longer than
 //! `usize::MAX` (and intermediate lengths beyond 64 bits), invalid or overcommitted
 //! schedules, invalid weights, mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
-//! [`Seq::MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node.
+//! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node.
 //! Builders panic only on arguments that are wrong on their own (see [`Seq`]). Compilation
 //! folds what is exact: nested concats flatten, empty parts vanish (an empty part of a mix
 //! does not affect the order of the others), skips and takes merge into sources, slices and
@@ -133,6 +133,12 @@ pub use interleave::Sampling;
 pub use order::Order;
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::Source;
+
+/// Deepest nesting [`Order::new`] accepts, the root counting as level 1: a chain of
+/// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation recurses
+/// once per level, and this keeps it well inside the default stack of a thread; a deeper
+/// configuration is rejected without recursing into the rest of it (see [`Seq`]).
+pub const MAX_DEPTH: u32 = 256;
 
 /// Longest mix [`Order::new`] accepts: 2⁴⁶ elements. It keeps the gap between consecutive
 /// keys of one part far above floating-point rounding and every count exact in `f64`. A

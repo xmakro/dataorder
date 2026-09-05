@@ -90,7 +90,7 @@ pub enum ErrorKind {
     TooManySources,
     /// A mix has 2³¹ parts or more.
     TooManyMixParts,
-    /// The configuration nests deeper than [`Seq::MAX_DEPTH`](crate::Seq::MAX_DEPTH).
+    /// The configuration nests deeper than [`MAX_DEPTH`](crate::MAX_DEPTH).
     TooDeep,
     /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
@@ -140,7 +140,7 @@ impl fmt::Display for ErrorKind {
             Self::LengthOverflow => write!(f, "a length does not fit in 64 bits"),
             Self::TooManySources => write!(f, "more than 2^32 sources"),
             Self::TooManyMixParts => write!(f, "mix with 2^31 parts or more"),
-            Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::Seq::<()>::MAX_DEPTH),
+            Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { part, sampling } => write!(f, "mix part {part}: invalid {sampling:?}"),
             Self::TooSteep { part } => write!(f, "mix part {part}: too long for the steepness of its schedule"),

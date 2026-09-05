@@ -412,11 +412,42 @@ fn errors() {
 #[test]
 fn depth_limit() {
     let chain = |levels: u32| (1..levels).fold(src(0, 10), |s, _| s.take(10));
-    assert_eq!(Order::new(chain(Seq::<Src>::MAX_DEPTH)).unwrap().len(), 10);
-    let err = Order::new(chain(Seq::<Src>::MAX_DEPTH + 1)).unwrap_err();
+    assert_eq!(Order::new(chain(MAX_DEPTH)).unwrap().len(), 10);
+    let err = Order::new(chain(MAX_DEPTH + 1)).unwrap_err();
     assert_eq!(err.kind(), &ErrorKind::TooDeep);
-    assert_eq!(err.path().len(), Seq::<Src>::MAX_DEPTH as usize);
-    assert_eq!(chain(Seq::<Src>::MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
+    assert_eq!(err.path().len(), MAX_DEPTH as usize);
+    assert_eq!(chain(MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
+}
+
+/// Rejecting a configuration never recurses through the rest of it: chains far deeper than
+/// the limit are refused on a small stack, whichever node the error is found at.
+#[test]
+fn deep_configurations_are_rejected_on_a_small_stack() {
+    let run = || {
+        let deep = || (0..200_000).fold(src(0, 10), |s, _| s.take(10));
+        assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
+        let d = deep();
+        assert_eq!(d.check().unwrap_err().kind(), &ErrorKind::TooDeep);
+        d.dismantle();
+        let bad = || src(0, 10).take(99);
+        let out_of_range = ErrorKind::TakeOutOfRange { n: 99, len: 10 };
+        assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
+        assert_eq!(Order::new(Seq::mix([bad(), deep()])).unwrap_err().kind(), &out_of_range);
+        assert_eq!(Order::new(Seq::weighted(10, [(bad(), 1.0), (deep(), 1.0)])).unwrap_err().kind(), &out_of_range);
+        assert_eq!(
+            Order::new(Seq::weighted(10, [(deep(), -1.0)])).unwrap_err().kind(),
+            &ErrorKind::InvalidWeight { part: 0, weight: -1.0 }
+        );
+        assert_eq!(
+            Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (deep(), 1.0)])).unwrap_err().kind(),
+            &ErrorKind::EmptyWeightedPart { part: 0 }
+        );
+        assert_eq!(Order::new(deep().stride(0, 0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
+        let first_too_deep = Seq::concat([deep(), bad()]);
+        assert_eq!(first_too_deep.check().unwrap_err().kind(), &ErrorKind::TooDeep);
+        first_too_deep.dismantle();
+    };
+    std::thread::Builder::new().stack_size(2 << 20).spawn(run).unwrap().join().unwrap();
 }
 
 #[test]

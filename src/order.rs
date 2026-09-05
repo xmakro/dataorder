@@ -5,7 +5,7 @@ use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
 use crate::seq::WeightedPart;
-use crate::{Error, ErrorKind, Seq, Source};
+use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::ops::{Bound, RangeBounds};
 
 /// A compiled node. Empty subtrees are folded to [`Node::Empty`], so every child of a
@@ -86,8 +86,8 @@ impl<T: Source> Order<T> {
     ///
     /// # Errors
     /// Skips and takes past the end, a zero stride, lengths that overflow, nesting deeper
-    /// than [`Seq::MAX_DEPTH`], and schedules or weights the mix rejects; see [`ErrorKind`].
-    /// The error names the node it was found at.
+    /// than [`MAX_DEPTH`], and schedules or weights the mix rejects; see [`ErrorKind`]. The
+    /// error names the node it was found at.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
         Self::with_seed(seq, 0)
     }
@@ -270,10 +270,30 @@ impl<T: Source> Compiler<T> {
         node
     }
 
+    /// Compiles the children of a wide node in order. On an error, the parts not yet
+    /// compiled are taken apart without recursion, so that a rejected configuration of any
+    /// depth is dropped on the heap rather than the stack.
+    fn children(&mut self, parts: impl IntoIterator<Item = Seq<T>>, repeats: u32, level: u32) -> Result<Vec<Node>, Error> {
+        let mut parts = parts.into_iter();
+        let mut children = Vec::with_capacity(parts.size_hint().0);
+        while let Some(part) = parts.next() {
+            match self.child(children.len(), part, repeats, level) {
+                Ok(node) => children.push(node),
+                Err(e) => {
+                    parts.for_each(Seq::dismantle);
+                    return Err(e);
+                }
+            }
+        }
+        Ok(children)
+    }
+
     /// `repeats` is the number of repeats above `seq`, `level` its nesting level (the root
-    /// being 1).
+    /// being 1). A `seq` that is rejected before it is consumed is dismantled without
+    /// recursion (see [`Seq::dismantle`]).
     fn compile(&mut self, seq: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        if level > Seq::<T>::MAX_DEPTH {
+        if level > MAX_DEPTH {
+            seq.dismantle();
             return Err(self.err(ErrorKind::TooDeep));
         }
         Ok(match seq {
@@ -287,8 +307,8 @@ impl<T: Source> Compiler<T> {
                 // Flatten nested concatenations and drop empty parts: both keep the order
                 // and the context of every element.
                 let mut children = Vec::new();
-                for (i, part) in parts.into_iter().enumerate() {
-                    match self.child(i, part, repeats, level)? {
+                for node in self.children(parts, repeats, level)? {
+                    match node {
                         Node::Empty => {}
                         Node::Concat { children: inner, .. } => children.extend(inner),
                         node => children.push(node),
@@ -311,8 +331,7 @@ impl<T: Source> Compiler<T> {
             }
             Seq::Mix(parts) => {
                 let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
-                let children =
-                    parts.into_iter().enumerate().map(|(i, p)| self.child(i, p.seq, repeats, level)).collect::<Result<Vec<_>, _>>()?;
+                let children = self.children(parts.into_iter().map(|p| p.seq), repeats, level)?;
                 self.mix(children, &sampling)?
             }
             Seq::Weighted { total, parts } => self.weighted(total, parts, repeats, level)?,
@@ -352,6 +371,7 @@ impl<T: Source> Compiler<T> {
             }
             Seq::Stride { step, offset, inner } => {
                 if step == 0 {
+                    inner.dismantle();
                     return Err(self.err(ErrorKind::ZeroStep));
                 }
                 let child = self.child(0, *inner, repeats, level)?;
@@ -392,32 +412,48 @@ impl<T: Source> Compiler<T> {
     /// inside it move one level deeper after the fact.
     fn weighted(&mut self, total: usize, parts: Vec<WeightedPart<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
         let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
-        let shares = weighted_shares(total as u64, &weights).map_err(|k| self.err(k))?;
-        let mut children = Vec::with_capacity(parts.len());
-        let mut sampling = Vec::with_capacity(parts.len());
-        for (i, (part, share)) in parts.into_iter().zip(shares).enumerate() {
-            let mut child = self.child(i, part.seq, repeats, level)?;
-            let len = child.len();
-            if len == 0 && share > 0 {
-                return Err(self.err(ErrorKind::EmptyWeightedPart { part: i }));
+        let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
+        let shares = match weighted_shares(total as u64, &weights) {
+            Ok(shares) => shares,
+            Err(kind) => {
+                parts.into_iter().for_each(|p| p.seq.dismantle());
+                return Err(self.err(kind));
             }
-            let node = if share == 0 {
-                Node::Empty
-            } else {
-                let times = share.div_ceil(len);
-                times.checked_mul(len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
-                let repeated = if times > 1 {
-                    deepen(&mut child);
-                    Node::Repeat { times, child_len: len, depth: repeats, child: Box::new(child) }
-                } else {
-                    child
-                };
-                slice(repeated, 0, share)
-            };
-            children.push(node);
-            sampling.push(part.sampling);
+        };
+        let mut children = Vec::with_capacity(parts.len());
+        let mut parts = parts.into_iter().zip(shares);
+        while let Some((part, share)) = parts.next() {
+            let i = children.len();
+            match self.weighted_part(i, part.seq, share, repeats, level) {
+                Ok(node) => children.push(node),
+                Err(e) => {
+                    parts.for_each(|(p, _)| p.seq.dismantle());
+                    return Err(e);
+                }
+            }
         }
         self.mix(children, &sampling)
+    }
+
+    /// Part `i` of a weighted mix, repeated as often as its `share` needs and cut to it.
+    fn weighted_part(&mut self, i: usize, seq: Seq<T>, share: u64, repeats: u32, level: u32) -> Result<Node, Error> {
+        let mut child = self.child(i, seq, repeats, level)?;
+        let len = child.len();
+        if len == 0 && share > 0 {
+            return Err(self.err(ErrorKind::EmptyWeightedPart { part: i }));
+        }
+        if share == 0 {
+            return Ok(Node::Empty);
+        }
+        let times = share.div_ceil(len);
+        times.checked_mul(len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
+        let repeated = if times > 1 {
+            deepen(&mut child);
+            Node::Repeat { times, child_len: len, depth: repeats, child: Box::new(child) }
+        } else {
+            child
+        };
+        Ok(slice(repeated, 0, share))
     }
 }
 
