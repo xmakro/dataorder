@@ -2,6 +2,11 @@ name: ci
 on:
   push:
   pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     strategy:
@@ -11,9 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --release --all-features
-      - run: cargo test --all-features
-      - run: cargo test
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --release --all-features
+      - run: cargo test --locked --all-features
+      - run: cargo test --locked
   test-32bit:
     runs-on: ubuntu-latest
     steps:
@@ -21,9 +27,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
-      - run: cargo test --release --all-features --target i686-unknown-linux-gnu
-      - run: cargo test --all-features --target i686-unknown-linux-gnu
+      - run: cargo test --locked --release --all-features --target i686-unknown-linux-gnu
+      - run: cargo test --locked --all-features --target i686-unknown-linux-gnu
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -31,19 +38,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo doc --no-deps --all-features --document-private-items
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo doc --locked --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
-      - run: cargo package
+      - run: cargo package --locked
   docs-rs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo doc --no-deps --all-features
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --locked --no-deps --all-features
         env:
           RUSTDOCFLAGS: --cfg docsrs -D warnings
   msrv:
@@ -51,4 +60,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88
-      - run: cargo test --all-features
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --all-features
