@@ -3,7 +3,7 @@
 
 use dataorder::{Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source, WeightedPart};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Shard {
     name: &'static str,
     len: usize,
@@ -40,6 +40,12 @@ fn hand_built_configuration() {
         ],
     };
     assert_eq!(seq.check(), Ok(100));
+    // The builders take parts, pairs or bare sequences alike.
+    let Seq::Weighted { parts, .. } = seq.clone() else { unreachable!() };
+    assert_eq!(Seq::weighted_with(100, parts), seq);
+    let mixed = Seq::mix_with([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::default() }]);
+    assert_eq!(mixed, Seq::mix_with([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
+    assert_eq!(mixed, Seq::mix_with([shard("b", 40), shard("c", 5)]));
     let mut order: Order<Shard> = seq.try_into().unwrap();
     order.sources_mut()[0].name = "A";
     let all = names(order.iter(..));

@@ -6,13 +6,15 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 /// How a sequence's elements are spread over the joint sequence. Equality and hashing
-/// compare the parameters bit for bit (with `-0.0` taken as `0.0`).
-#[derive(Clone, Copy, Debug)]
+/// compare the parameters bit for bit (with `-0.0` taken as `0.0`); the default is
+/// [`Uniform`](Sampling::Uniform).
+#[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub enum Sampling {
     /// A constant rate relative to the other uniform sequences; uniform sequences absorb
     /// whatever share of the joint sequence the scheduled sequences leave free.
+    #[default]
     Uniform,
     /// Nothing before the joint sequence is a fraction `start` in, a rate rising linearly
     /// from zero at `start` to its final value at `full`, then constant until the end.

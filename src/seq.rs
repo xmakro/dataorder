@@ -195,7 +195,8 @@ impl<T> Seq<T> {
         Self::Mix(parts.into_iter().map(MixPart::from).collect())
     }
 
-    /// The parts interleaved, each with its own schedule.
+    /// The parts interleaved, each with its own schedule: anything that converts into a
+    /// [`MixPart`], `(seq, sampling)` pairs say.
     ///
     /// ```
     /// use dataorder::{Order, Sampling, Seq};
@@ -206,8 +207,8 @@ impl<T> Seq<T> {
     /// # Ok::<(), dataorder::Error>(())
     /// ```
     #[must_use]
-    pub fn mix_with(parts: impl IntoIterator<Item = (Self, Sampling)>) -> Self {
-        Self::Mix(parts.into_iter().map(MixPart::from).collect())
+    pub fn mix_with(parts: impl IntoIterator<Item = impl Into<MixPart<T>>>) -> Self {
+        Self::Mix(parts.into_iter().map(Into::into).collect())
     }
 
     /// The parts mixed by weight into `total` elements, all [`Sampling::Uniform`]; see
@@ -227,11 +228,12 @@ impl<T> Seq<T> {
         Self::Weighted { total, parts: parts.into_iter().map(WeightedPart::from).collect() }
     }
 
-    /// The parts mixed by weight into `total` elements, each with its own schedule; see
+    /// The parts mixed by weight into `total` elements, each with its own schedule: anything
+    /// that converts into a [`WeightedPart`], `(seq, weight, sampling)` triples say; see
     /// [`Weighted`](Seq::Weighted).
     #[must_use]
-    pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = (Self, f64, Sampling)>) -> Self {
-        Self::Weighted { total, parts: parts.into_iter().map(WeightedPart::from).collect() }
+    pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = impl Into<WeightedPart<T>>>) -> Self {
+        Self::Weighted { total, parts: parts.into_iter().map(Into::into).collect() }
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
