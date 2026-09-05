@@ -1,0 +1,14 @@
+[package]
+name = "dataorder"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic, seekable data order for training: shuffle, mix with sampling schedules, repeat epochs, slice, stride and concat datasets by length, without materializing anything"
+keywords = ["shuffle", "dataset", "data-loading", "interleave", "permutation"]
+categories = ["algorithms", "data-structures"]
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[profile.release]
+debug = 1

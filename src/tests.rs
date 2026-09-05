@@ -1,0 +1,333 @@
+//! Whole-crate tests: random configurations against a reference evaluator that
+//! materializes every node, plus the errors, the folds and the reshuffling semantics.
+
+use crate::interleave::Interleave;
+use crate::perm::{self, Shape};
+use crate::*;
+
+/// A test source: an id to compare orders by, and a length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Src {
+    id: u32,
+    len: usize,
+}
+
+impl Dataset for Src {
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+fn src(id: u32, len: usize) -> Seq<Src> {
+    Seq::source(Src { id, len })
+}
+
+/// Elements as `(id, index)`.
+fn ids<'a>(it: impl Iterator<Item = (&'a Src, usize)>) -> Vec<(u32, usize)> {
+    it.map(|(s, i)| (s.id, i)).collect()
+}
+
+impl Error {
+    /// A schedule or length rejection of a mix.
+    fn is_sampling(&self) -> bool {
+        matches!(self, Error::MixTooLong | Error::InvalidSampling { .. } | Error::TooSteep { .. } | Error::Overcommitted { .. })
+    }
+}
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// Materializes `seq` in context `ctx` by the definitions in the crate docs.
+fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
+    Ok(match seq {
+        Seq::Source(s) => (0..s.len).map(|i| (s.id, i)).collect(),
+        Seq::Concat(parts) => {
+            let mut out = Vec::new();
+            for p in parts {
+                out.extend(eval(p, ctx)?);
+            }
+            out
+        }
+        Seq::Mix(parts) => {
+            let evs = parts.iter().map(|(p, _)| eval(p, ctx)).collect::<Result<Vec<_>, _>>()?;
+            let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
+            let sampling: Vec<Sampling> = parts.iter().map(|(_, s)| *s).collect();
+            let il = Interleave::with_sampling(&lens, &sampling)?;
+            il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
+        }
+        Seq::Shuffle { seed, inner } => {
+            let v = eval(inner, ctx)?;
+            let (shape, key) = (Shape::new(v.len() as u64), perm::key(*seed, ctx));
+            (0..v.len() as u64).map(|i| v[perm::permute(shape, key, i) as usize]).collect()
+        }
+        Seq::Repeat { times, inner } => {
+            // Validated even when repeated zero times, like the compiler does.
+            let mut out = eval(inner, ctx)?;
+            out.clear();
+            for e in 0..*times {
+                out.extend(eval(inner, perm::epoch_ctx(ctx, e as u64))?);
+            }
+            out
+        }
+        Seq::Slice { start, end, inner } => {
+            let v = eval(inner, ctx)?;
+            let end = end.unwrap_or(v.len());
+            if *start > end || end > v.len() {
+                return Err(Error::SliceOutOfRange { start: *start, end, len: v.len() });
+            }
+            v[*start..end].to_vec()
+        }
+        Seq::Stride { step, offset, inner } => {
+            if *step == 0 {
+                return Err(Error::ZeroStep);
+            }
+            eval(inner, ctx)?.into_iter().skip(*offset).step_by(*step).collect()
+        }
+    })
+}
+
+fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
+    if depth == 0 || rng.below(5) == 0 {
+        let id = rng.below(lens.len());
+        return src(id as u32, lens[id]);
+    }
+    let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens)).collect::<Vec<_>>();
+    match rng.below(7) {
+        0 => Seq::concat(parts(rng, depth - 1)),
+        1 => Seq::mix(parts(rng, depth - 1)),
+        2 => Seq::mix_with(parts(rng, depth - 1).into_iter().map(|p| {
+            let sampling = match rng.below(4) {
+                0 => Sampling::DelayedLinear(0.3, 0.6),
+                1 => Sampling::DelayedLinear(0.5, 0.5),
+                _ => Sampling::Uniform,
+            };
+            (p, sampling)
+        })),
+        3 => random_seq(rng, depth - 1, lens).shuffle(rng.next()),
+        4 => random_seq(rng, depth - 1, lens).repeat(rng.below(4)),
+        5 => {
+            let inner = random_seq(rng, depth - 1, lens);
+            let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
+            let start = rng.below(n + 1);
+            match rng.below(3) {
+                0 => inner.skip(start),
+                1 => inner.take(rng.below(n + 1)),
+                _ => inner.slice(start..start + rng.below(n - start + 1)),
+            }
+        }
+        _ => {
+            let inner = random_seq(rng, depth - 1, lens);
+            let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
+            inner.stride(1 + rng.below(4), rng.below(n + 2))
+        }
+    }
+}
+
+/// Every random configuration: `get` at every position, the full iteration, random ranges
+/// and seeks all agree with the reference.
+#[test]
+fn random_configurations_match_reference() {
+    let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+    let lens = [0usize, 1, 2, 3, 7, 13, 40];
+    let (mut checked, mut skipped) = (0, 0);
+    for round in 0..600 {
+        let seq = random_seq(&mut rng, 4, &lens);
+        let seed = rng.next();
+        let order = match Order::compile_seeded(seq.clone(), seed) {
+            Ok(o) => o,
+            Err(e) if e.is_sampling() => {
+                assert!(eval(&seq, seed).is_err_and(|e| e.is_sampling()), "round {round}: {seq:?}");
+                skipped += 1;
+                continue;
+            }
+            Err(e) => panic!("round {round}: {e} for {seq:?}"),
+        };
+        let reference = eval(&seq, seed).unwrap();
+        let n = reference.len();
+        assert_eq!(order.len(), n, "round {round}: {seq:?}");
+        for (i, &r) in reference.iter().enumerate() {
+            let (s, idx) = order.get(i);
+            assert_eq!((s.id, idx), r, "round {round}: get({i}) of {seq:?}");
+        }
+        assert_eq!(ids(order.iter(0..n)), reference, "round {round}: {seq:?}");
+        for _ in 0..4 {
+            let a = rng.below(n + 1);
+            let b = a + rng.below(n - a + 1);
+            assert_eq!(ids(order.iter(a..b)), reference[a..b], "round {round}: {a}..{b} of {seq:?}");
+        }
+        let mut cursor = order.iter(0..n);
+        for _ in 0..4 {
+            let a = rng.below(n + 1);
+            cursor.seek(a);
+            assert_eq!(cursor.position(), a);
+            let m = rng.below(n - a + 1);
+            assert_eq!(cursor.len(), n - a);
+            let got = ids(cursor.by_ref().take(m));
+            assert_eq!(got, reference[a..a + m], "round {round}: seek {a} of {seq:?}");
+        }
+        checked += 1;
+    }
+    assert!(checked > 400, "only {checked} configurations checked ({skipped} overcommitted)");
+}
+
+/// Deeper, larger configurations exercise long strides over mixes (interleave re-seeks),
+/// epoch boundaries inside strides and nested repeats.
+#[test]
+fn large_configurations_match_reference() {
+    let mut rng = Rng(0xFEED_FACE_CAFE_BEEF);
+    let lens = [50usize, 333, 1000, 2000];
+    for round in 0..40 {
+        let seq = random_seq(&mut rng, 5, &lens);
+        let order = match Order::compile(seq.clone()) {
+            Ok(o) => o,
+            Err(e) if e.is_sampling() => continue,
+            Err(e) => panic!("round {round}: {e}"),
+        };
+        let reference = eval(&seq, 0).unwrap();
+        let n = reference.len();
+        if n == 0 || n > 200_000 {
+            continue;
+        }
+        assert_eq!(ids(order.iter(0..n)), reference, "round {round}: {seq:?}");
+        for _ in 0..8 {
+            let a = rng.below(n + 1);
+            let b = (a + rng.below(500)).min(n);
+            assert_eq!(ids(order.iter(a..b)), reference[a..b], "round {round}: {a}..{b}");
+            let p = a.min(n - 1);
+            let (s, i) = order.get(p);
+            assert_eq!((s.id, i), reference[p]);
+        }
+    }
+}
+
+#[test]
+fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
+    let seq = src(7, 1000).shuffle(3).repeat(3);
+    let order = Order::compile(seq.clone()).unwrap();
+    assert_eq!(order.len(), 3000);
+    let epochs: Vec<Vec<usize>> = (0..3)
+        .map(|e| {
+            order
+                .iter(e * 1000..(e + 1) * 1000)
+                .map(|(s, i)| {
+                    assert_eq!(s.id, 7);
+                    i
+                })
+                .collect()
+        })
+        .collect();
+    for epoch in &epochs {
+        let mut sorted = epoch.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..1000).collect::<Vec<_>>());
+    }
+    assert_ne!(epochs[0], epochs[1]);
+    assert_ne!(epochs[1], epochs[2]);
+    // Same seed twice under a concat: the same order twice.
+    let twice = Order::compile(Seq::concat([src(7, 1000).shuffle(3), src(7, 1000).shuffle(3)])).unwrap();
+    let v = ids(twice.iter(0..2000));
+    assert_eq!(v[..1000], v[1000..]);
+    // The order's seed changes every shuffle.
+    let reseeded = Order::compile_seeded(seq, 99).unwrap();
+    assert_ne!(ids(reseeded.iter(0..1000)), ids(order.iter(0..1000)));
+}
+
+#[test]
+fn shards_partition_the_sequence() {
+    let base = Seq::mix([src(0, 1000).shuffle(1), src(1, 300).shuffle(2)]).repeat(2);
+    let order = Order::compile(base.clone()).unwrap();
+    let all = ids(order.iter(0..order.len()));
+    let mut from_shards = Vec::new();
+    for w in 0..8 {
+        let shard = Order::compile(base.clone().shard(w, 8)).unwrap();
+        let elems = ids(shard.iter(0..shard.len()));
+        for (i, &e) in elems.iter().enumerate() {
+            assert_eq!(e, all[w + 8 * i]);
+        }
+        from_shards.extend(elems);
+    }
+    assert_eq!(from_shards.len(), all.len());
+}
+
+/// `map` keeps the structure: the same indices come out over the mapped sources.
+#[test]
+fn map_keeps_the_order() {
+    let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).shard(1, 3);
+    let order = Order::compile(seq.clone()).unwrap();
+    let mapped = Order::compile(seq.map(|s| s.len)).unwrap();
+    assert_eq!(mapped.sources(), &[700, 50, 120]);
+    let a: Vec<(usize, usize)> = order.iter(0..order.len()).map(|(s, i)| (s.len, i)).collect();
+    let b: Vec<(usize, usize)> = mapped.iter(0..mapped.len()).map(|(&l, i)| (l, i)).collect();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn errors() {
+    let a = src(0, 10);
+    assert_eq!(Order::compile(a.clone().slice(3..12)).unwrap_err(), Error::SliceOutOfRange { start: 3, end: 12, len: 10 });
+    let reversed = Seq::Slice { start: 5, end: Some(3), inner: Box::new(a.clone()) };
+    assert_eq!(Order::compile(reversed).unwrap_err(), Error::SliceOutOfRange { start: 5, end: 3, len: 10 });
+    assert_eq!(Order::compile(a.clone().stride(0, 0)).unwrap_err(), Error::ZeroStep);
+    assert_eq!(Order::compile(a.clone().repeat(usize::MAX)).unwrap_err(), Error::Overflow);
+    assert_eq!(Order::compile(Seq::concat([a.clone().repeat(usize::MAX / 10), a.clone()])).unwrap_err(), Error::Overflow);
+    let over = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear(0.5, 0.5)), (src(1, 1), Sampling::Uniform)]);
+    assert!(matches!(Order::compile(over), Err(Error::Overcommitted { .. })));
+    // A mix that folds away is still validated.
+    let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear(2.0, 2.0))]);
+    assert_eq!(Order::compile(over1).unwrap_err(), Error::InvalidSampling { part: 0, sampling: Sampling::DelayedLinear(2.0, 2.0) });
+}
+
+#[test]
+fn edge_cases() {
+    let empty = Order::compile(Seq::<Src>::concat([])).unwrap();
+    assert_eq!(empty.len(), 0);
+    assert_eq!(empty.iter(0..0).count(), 0);
+    let empty = Order::compile(src(1, 5).shuffle(1).take(0).repeat(4)).unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(Order::compile(src(1, 5).stride(3, 9)).unwrap().len(), 0);
+    let one = Order::compile(src(2, 1).shuffle(5).repeat(3)).unwrap();
+    assert_eq!(ids(one.iter(0..3)), vec![(2, 0); 3]);
+    let order = Order::compile(src(0, 5)).unwrap();
+    assert_eq!(order.sources(), &[Src { id: 0, len: 5 }]);
+    let mut c = order.iter(1..4);
+    assert_eq!(c.remaining(), 3);
+    assert_eq!(c.next().map(|(s, i)| (s.id, i)), Some((0, 1)));
+    c.seek(4);
+    assert!(c.next().is_none());
+    c.seek(0);
+    assert_eq!(ids(c), vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
+    // Bare lengths are sources; a source may be shared through a reference.
+    let lens = [5usize, 3];
+    let shared = Order::compile(Seq::concat([Seq::source(&lens[0]), Seq::source(&lens[1]), Seq::source(&lens[0]).shuffle(1)])).unwrap();
+    assert_eq!(shared.len(), 13);
+    assert_eq!(shared.sources().len(), 3);
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn huge_lengths() {
+    // Lengths far beyond anything materializable: positions must still resolve.
+    let seq = src(0, 1 << 40).shuffle(1).repeat(1 << 20).skip(12345);
+    let order = Order::compile(seq).unwrap();
+    assert_eq!(order.len(), (1usize << 60) - 12345);
+    let last = order.len() - 1;
+    let (s, i) = order.get(last);
+    assert_eq!(s.id, 0);
+    assert!(i < 1 << 40);
+    assert_eq!(ids(order.iter_from(last)), vec![(0, i)]);
+    let v = ids(order.iter(1 << 59..(1 << 59) + 5));
+    for (k, &e) in v.iter().enumerate() {
+        let (s, i) = order.get((1 << 59) + k);
+        assert_eq!((s.id, i), e);
+    }
+}
