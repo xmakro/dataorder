@@ -25,14 +25,14 @@ pub enum Sampling {
 impl Sampling {
     /// Nothing before progress `at`, then a constant rate.
     #[must_use]
-    pub const fn delayed(at: f64) -> Sampling {
-        Sampling::DelayedLinear { start: at, full: at }
+    pub const fn delayed(at: f64) -> Self {
+        Self::DelayedLinear { start: at, full: at }
     }
 
     /// Nothing before `start`, a rate rising linearly until `full`, then constant.
     #[must_use]
-    pub const fn ramp(start: f64, full: f64) -> Sampling {
-        Sampling::DelayedLinear { start, full }
+    pub const fn ramp(start: f64, full: f64) -> Self {
+        Self::DelayedLinear { start, full }
     }
 }
 

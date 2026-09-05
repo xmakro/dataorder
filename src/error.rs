@@ -69,10 +69,10 @@ impl std::error::Error for Error {}
 impl From<SamplingError> for Error {
     fn from(e: SamplingError) -> Self {
         match e {
-            SamplingError::TooLong => Error::MixTooLong,
-            SamplingError::InvalidParameter { seq, sampling } => Error::InvalidSampling { part: seq, sampling },
-            SamplingError::TooSteep { seq } => Error::TooSteep { part: seq },
-            SamplingError::Overcommitted { demand } => Error::Overcommitted { demand },
+            SamplingError::TooLong => Self::MixTooLong,
+            SamplingError::InvalidParameter { seq, sampling } => Self::InvalidSampling { part: seq, sampling },
+            SamplingError::TooSteep { seq } => Self::TooSteep { part: seq },
+            SamplingError::Overcommitted { demand } => Self::Overcommitted { demand },
         }
     }
 }

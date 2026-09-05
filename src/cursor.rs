@@ -100,12 +100,12 @@ pub(crate) enum NodeCursor<'a> {
     Empty,
     Source { src: u32, offset: u64, next: u64 },
     /// Only the current child has a cursor; the others are built on entry.
-    Concat { children: &'a [Node], offsets: &'a [u64], idx: usize, left: u64, ctx: u64, child: Box<NodeCursor<'a>> },
+    Concat { children: &'a [Node], offsets: &'a [u64], idx: usize, left: u64, ctx: u64, child: Box<Self> },
     Mix(MixCursor<'a>),
     Shuffle(ShuffleCursor<'a>),
-    Repeat { child_len: u64, depth: u32, epoch: u64, left: u64, ctx: u64, child: Box<NodeCursor<'a>> },
-    Slice { start: u64, child: Box<NodeCursor<'a>> },
-    Stride { step: u64, offset: u64, len: u64, left: u64, child: Box<NodeCursor<'a>> },
+    Repeat { child_len: u64, depth: u32, epoch: u64, left: u64, ctx: u64, child: Box<Self> },
+    Slice { start: u64, child: Box<Self> },
+    Stride { step: u64, offset: u64, len: u64, left: u64, child: Box<Self> },
 }
 
 impl<'a> NodeCursor<'a> {

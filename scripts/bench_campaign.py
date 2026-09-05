@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pinned, repeated benchmark runs with per-row minima, tabulated across labelled steps.
 
-    scripts/bench_campaign.py run LABEL DIR   # builds and runs DIR/examples/bench twice on one core, keeps minima
+    scripts/bench_campaign.py run LABEL DIR   # builds and runs DIR/examples/bench twice on one core (BENCH_CORE, default 2), keeps minima
     scripts/bench_campaign.py table [COL]     # 0 seek, 1 walk, 2 get, 3 fill (default 1)
 
 Results accumulate in results.json next to this script."""
@@ -11,7 +11,7 @@ RES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results.json')
 def load():
     return json.load(open(RES)) if os.path.exists(RES) else {'labels': [], 'rows': {}}
 
-def run(label, d, rounds=2, core='2'):
+def run(label, d, rounds=2, core=os.environ.get('BENCH_CORE', '2')):
     subprocess.run(['cargo', 'build', '--release', '--example', 'bench'], cwd=d, check=True, capture_output=True)
     rows = {}
     for _ in range(rounds):

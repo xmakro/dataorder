@@ -23,5 +23,3 @@ serde = ["dep:serde"]
 [package.metadata.docs.rs]
 all-features = true
 
-[profile.release]
-debug = 1

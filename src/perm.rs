@@ -18,6 +18,9 @@
 //! a nearly constant difference (serial correlation over 100σ); four rounds with a
 //! two-multiply round function (multiply, xorshift, multiply) have the same quality and
 //! cost about 0.8 ns more per element; three of those rounds fail the grid test.
+//!
+//! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small function
+//! and the permutation is most of it.
 
 /// Shape of the domain: `n` and the widths and masks of the two Feistel halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +38,7 @@ impl Shape {
         let bits = 64 - n.saturating_sub(1).leading_zeros();
         let lb = bits / 2;
         let rb = bits - lb;
-        Shape { n, lb, rb, lmask: (1u64 << lb) - 1, rmask: (1u64 << rb) - 1 }
+        Self { n, lb, rb, lmask: (1u64 << lb) - 1, rmask: (1u64 << rb) - 1 }
     }
 }
 
@@ -48,7 +51,7 @@ pub(crate) struct Key {
 
 impl Key {
     /// Placeholder for cursors that have not been seeked yet.
-    pub const UNSET: Key = Key { rk: [0; 6], mul: [1; 6] };
+    pub const UNSET: Self = Self { rk: [0; 6], mul: [1; 6] };
 }
 
 /// SplitMix64's finalizer: a fixed 64-bit bijection with good avalanche (maps 0 to 0).

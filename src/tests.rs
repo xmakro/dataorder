@@ -30,7 +30,7 @@ fn ids<'a>(it: impl Iterator<Item = (&'a Src, usize)>) -> Vec<(u32, usize)> {
 impl Error {
     /// A schedule or length rejection of a mix.
     fn is_sampling(&self) -> bool {
-        matches!(self, Error::MixTooLong | Error::InvalidSampling { .. } | Error::TooSteep { .. } | Error::Overcommitted { .. })
+        matches!(self, Self::MixTooLong | Self::InvalidSampling { .. } | Self::TooSteep { .. } | Self::Overcommitted { .. })
     }
 }
 

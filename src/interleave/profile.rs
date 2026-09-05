@@ -5,6 +5,8 @@
 //! The integral of a profile is the share function, the fraction of a sequence drawn by a
 //! given progress; `quantile` inverts it and is what every element's key comes from. It is
 //! monotone even under floating-point rounding, which the exact-seek guarantee relies on.
+//! `quantile` is `#[inline(always)]` for the same measured reason as the tournament tree:
+//! it is the key computation of every element of a walk.
 
 /// A nonnegative, piecewise-linear draw rate over joint progress, with its running integral.
 #[derive(Clone, Debug)]
@@ -33,7 +35,7 @@ struct Segment {
 impl Profile {
     /// From consecutive `(start, end, r0, r1)` segments covering `[0, 1]` (empty ones are
     /// dropped); the shares are accumulated by the trapezoid rule, which is exact here.
-    fn from_rates(rates: impl IntoIterator<Item = (f64, f64, f64, f64)>) -> Profile {
+    fn from_rates(rates: impl IntoIterator<Item = (f64, f64, f64, f64)>) -> Self {
         let mut share = 0.0;
         let mut segs = Vec::new();
         for (start, end, r0, r1) in rates {
@@ -45,25 +47,25 @@ impl Profile {
                 share += (r0 + r1) / 2.0 * (end - start);
             }
         }
-        Profile { segs }
+        Self { segs }
     }
 
     /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the final rate at `d1`,
     /// then constant. The final rate `r = 2/(2 − d0 − d1)` makes the total share one.
-    pub(crate) fn delayed_linear(d0: f64, d1: f64) -> Profile {
+    pub(crate) fn delayed_linear(d0: f64, d1: f64) -> Self {
         let r = 2.0 / (2.0 - d0 - d1);
-        Profile::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, 1.0, r, r)])
+        Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, 1.0, r, r)])
     }
 
     /// The uniform sequences' profile `(1 − Σ ρ_i·rate_i) / u` for the scheduled profiles
     /// with their element fractions `ρ_i`, `u` being the uniform fraction of all elements.
-    pub(crate) fn uniform(scheduled: &[(f64, Profile)], u: f64) -> Profile {
+    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> Self {
         let mut points: Vec<f64> = scheduled.iter().flat_map(|(_, p)| p.segs.iter().map(|s| s.start)).collect();
         points.extend([0.0, 1.0]);
         points.sort_by(f64::total_cmp);
         points.dedup();
         let rate = |t: f64, before: bool| (1.0 - scheduled.iter().map(|(rho, p)| rho * p.rate_at(t, before)).sum::<f64>()).max(0.0) / u;
-        Profile::from_rates(points.windows(2).map(|w| (w[0], w[1], rate(w[0], false), rate(w[1], true))))
+        Self::from_rates(points.windows(2).map(|w| (w[0], w[1], rate(w[0], false), rate(w[1], true))))
     }
 
     /// The rate just after `t` (`before == false`) or just before it.

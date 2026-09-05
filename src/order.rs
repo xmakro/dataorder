@@ -16,26 +16,26 @@ pub(crate) enum Node {
     /// Elements `offset..offset + len` of source `src` (an index into `Order::sources`).
     Source { src: u32, offset: u64, len: u64 },
     /// `offsets[i]` is the position of child `i`'s first element; `offsets[k]` the length.
-    Concat { offsets: Vec<u64>, children: Vec<Node> },
-    Mix { il: Interleave, children: Vec<Node> },
-    Shuffle { seed: u64, shape: Shape, child: Box<Node> },
+    Concat { offsets: Vec<u64>, children: Vec<Self> },
+    Mix { il: Interleave, children: Vec<Self> },
+    Shuffle { seed: u64, shape: Shape, child: Box<Self> },
     /// `depth` counts the repeats above this one; it salts the epoch contexts.
-    Repeat { times: u64, child_len: u64, depth: u32, child: Box<Node> },
-    Slice { start: u64, len: u64, child: Box<Node> },
-    Stride { step: u64, offset: u64, len: u64, child: Box<Node> },
+    Repeat { times: u64, child_len: u64, depth: u32, child: Box<Self> },
+    Slice { start: u64, len: u64, child: Box<Self> },
+    Stride { step: u64, offset: u64, len: u64, child: Box<Self> },
 }
 
 impl Node {
     pub(crate) fn len(&self) -> u64 {
         match self {
-            Node::Empty => 0,
-            Node::Source { len, .. } => *len,
-            Node::Concat { offsets, .. } => *offsets.last().unwrap(),
-            Node::Mix { il, .. } => il.len(),
-            Node::Shuffle { shape, .. } => shape.n,
-            Node::Repeat { times, child_len, .. } => times * child_len,
-            Node::Slice { len, .. } => *len,
-            Node::Stride { len, .. } => *len,
+            Self::Empty => 0,
+            Self::Source { len, .. } => *len,
+            Self::Concat { offsets, .. } => *offsets.last().unwrap(),
+            Self::Mix { il, .. } => il.len(),
+            Self::Shuffle { shape, .. } => shape.n,
+            Self::Repeat { times, child_len, .. } => times * child_len,
+            Self::Slice { len, .. } => *len,
+            Self::Stride { len, .. } => *len,
         }
     }
 }
@@ -53,20 +53,29 @@ pub struct Order<T> {
 }
 
 impl<T: Source> Order<T> {
-    /// Compiles `seq` with seed 0. Consumes it; clone it first to keep it.
-    pub fn compile(seq: Seq<T>) -> Result<Order<T>, Error> {
+    /// Compiles `seq` with seed 0. Consumes it; clone it first to keep it, or validate it
+    /// with [`Seq::check`] first.
+    ///
+    /// # Errors
+    /// Skips and takes past the end, a zero stride, lengths that overflow, and schedules the
+    /// mix rejects (invalid, too steep, overcommitted) or totals beyond its limit; see
+    /// [`Error`].
+    pub fn compile(seq: Seq<T>) -> Result<Self, Error> {
         Self::compile_seeded(seq, 0)
     }
 
     /// Compiles `seq`. The `seed` reseeds every shuffle in the order at once; shuffles
     /// keep their relative distinctness from their own seeds.
-    pub fn compile_seeded(seq: Seq<T>, seed: u64) -> Result<Order<T>, Error> {
+    ///
+    /// # Errors
+    /// As for [`Order::compile`].
+    pub fn compile_seeded(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
         let mut c = Compiler { sources: Vec::new() };
         let root = c.compile(seq, 0)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::Overflow);
         }
-        Ok(Order { root, ctx: seed, sources: c.sources })
+        Ok(Self { root, ctx: seed, sources: c.sources })
     }
 }
 

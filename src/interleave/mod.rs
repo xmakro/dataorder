@@ -65,9 +65,14 @@ use profile::Profile;
 use std::ops::Range;
 
 /// Largest supported total length. Keeps the gap between consecutive keys of one sequence
-/// (at least `1/N`) far above floating-point rounding. A scheduled sequence must likewise
-/// satisfy `length × final_rate ≤ MAX_TOTAL_LEN`.
+/// (at least `1/N`) far above floating-point rounding, and keeps every length and count
+/// exact when converted to `f64` (which holds integers up to 2⁵³). A scheduled sequence
+/// must likewise satisfy `length × final_rate ≤ MAX_TOTAL_LEN`.
 pub const MAX_TOTAL_LEN: u64 = 1 << 46;
+
+/// Slack on the overcommitment check: the final rates are rounded sums, and a mix whose
+/// scheduled parts need exactly the whole draw rate at the end is valid.
+const OVERCOMMIT_TOLERANCE: f64 = 1e-9;
 
 #[derive(Clone, Copy, Debug)]
 struct Seq {
@@ -143,13 +148,13 @@ impl Interleave {
             seqs.push(Seq { n, inv_n: 1.0 / n as f64, phi: (2 * i + 1) as f64 / (2 * k) as f64, profile });
         }
         let demand: f64 = scheduled.iter().map(|(rho, p)| rho * p.final_rate()).sum();
-        if demand > 1.0 + 1e-9 {
+        if demand > 1.0 + OVERCOMMIT_TOLERANCE {
             return Err(SamplingError::Overcommitted { demand });
         }
         let u = if total == 0 { 1.0 } else { uniform_len as f64 / total as f64 };
         let mut profiles = vec![Profile::uniform(&scheduled, u.max(f64::MIN_POSITIVE))];
         profiles.extend(scheduled.into_iter().map(|(_, p)| p));
-        Ok(Interleave { seqs, profiles, total })
+        Ok(Self { seqs, profiles, total })
     }
 
     /// Length of the merged sequence (sum of all sequence lengths).

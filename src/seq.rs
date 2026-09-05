@@ -15,18 +15,18 @@ pub enum Seq<T> {
     /// The elements `0..len()` of a source, in order.
     Source(T),
     /// The parts one after another.
-    Concat(Vec<Seq<T>>),
+    Concat(Vec<Self>),
     /// The parts interleaved: each part keeps its order and is drawn according to its
     /// [`Sampling`], balanced over the whole length. The total length of a mix is limited to
     /// 2⁴⁶.
-    Mix(Vec<(Seq<T>, Sampling)>),
+    Mix(Vec<(Self, Sampling)>),
     /// `inner` in a pseudorandom order selected by `seed`. Inside a [`Repeat`](Seq::Repeat)
     /// the order also depends on the repetition, so every epoch is shuffled differently.
     Shuffle {
         /// Selects the permutation.
         seed: u64,
         /// The sequence to permute.
-        inner: Box<Seq<T>>,
+        inner: Box<Self>,
     },
     /// `inner`, `times` times over: first as it is, then reshuffled at every shuffle inside
     /// it for each further repetition. `x.repeat(1)` is `x`.
@@ -34,7 +34,7 @@ pub enum Seq<T> {
         /// Number of repetitions.
         times: usize,
         /// The sequence to repeat.
-        inner: Box<Seq<T>>,
+        inner: Box<Self>,
     },
     /// `inner` without its first `n` positions. Skipping more than there are is an error at
     /// compile time, unlike `Iterator::skip`: configurations are validated, and a silently
@@ -43,7 +43,7 @@ pub enum Seq<T> {
         /// Positions dropped from the front.
         n: usize,
         /// The sequence to skip into.
-        inner: Box<Seq<T>>,
+        inner: Box<Self>,
     },
     /// The first `n` positions of `inner`. Taking more than there are is an error at compile
     /// time, unlike `Iterator::take`.
@@ -51,7 +51,7 @@ pub enum Seq<T> {
         /// Positions kept.
         n: usize,
         /// The sequence to take from.
-        inner: Box<Seq<T>>,
+        inner: Box<Self>,
     },
     /// Positions `offset, offset + step, offset + 2·step, …` of `inner`: shard `offset` of
     /// `step` shards.
@@ -61,45 +61,45 @@ pub enum Seq<T> {
         /// First kept position.
         offset: usize,
         /// The sequence to stride over.
-        inner: Box<Seq<T>>,
+        inner: Box<Self>,
     },
 }
 
 impl<T> Seq<T> {
     /// The elements of `source`, in order.
     #[must_use]
-    pub fn source(source: T) -> Seq<T> {
-        Seq::Source(source)
+    pub fn source(source: T) -> Self {
+        Self::Source(source)
     }
 
     /// The parts one after another.
     #[must_use]
-    pub fn concat(parts: impl IntoIterator<Item = Seq<T>>) -> Seq<T> {
-        Seq::Concat(parts.into_iter().collect())
+    pub fn concat(parts: impl IntoIterator<Item = Self>) -> Self {
+        Self::Concat(parts.into_iter().collect())
     }
 
     /// The parts interleaved, all [`Sampling::Uniform`].
     #[must_use]
-    pub fn mix(parts: impl IntoIterator<Item = Seq<T>>) -> Seq<T> {
-        Seq::Mix(parts.into_iter().map(|p| (p, Sampling::Uniform)).collect())
+    pub fn mix(parts: impl IntoIterator<Item = Self>) -> Self {
+        Self::Mix(parts.into_iter().map(|p| (p, Sampling::Uniform)).collect())
     }
 
     /// The parts interleaved, each with its own schedule.
     #[must_use]
-    pub fn mix_with(parts: impl IntoIterator<Item = (Seq<T>, Sampling)>) -> Seq<T> {
-        Seq::Mix(parts.into_iter().collect())
+    pub fn mix_with(parts: impl IntoIterator<Item = (Self, Sampling)>) -> Self {
+        Self::Mix(parts.into_iter().collect())
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
     #[must_use]
-    pub fn shuffle(self, seed: u64) -> Seq<T> {
-        Seq::Shuffle { seed, inner: Box::new(self) }
+    pub fn shuffle(self, seed: u64) -> Self {
+        Self::Shuffle { seed, inner: Box::new(self) }
     }
 
     /// This sequence `times` times over: itself, then reshuffled for each further time.
     #[must_use]
-    pub fn repeat(self, times: usize) -> Seq<T> {
-        Seq::Repeat { times, inner: Box::new(self) }
+    pub fn repeat(self, times: usize) -> Self {
+        Self::Repeat { times, inner: Box::new(self) }
     }
 
     /// The positions in `range` of this sequence: a [`Skip`](Seq::Skip) of its start and a
@@ -109,7 +109,7 @@ impl<T> Seq<T> {
     /// If the range's end lies before its start, or a bound is `usize::MAX` where one more
     /// would be needed (an exclusive start or an inclusive end at `usize::MAX`).
     #[must_use]
-    pub fn slice(self, range: impl RangeBounds<usize>) -> Seq<T> {
+    pub fn slice(self, range: impl RangeBounds<usize>) -> Self {
         let bump = |x: usize| x.checked_add(1).expect("dataorder: slice bound overflows usize");
         let start = match range.start_bound() {
             Bound::Included(&s) => s,
@@ -130,20 +130,20 @@ impl<T> Seq<T> {
 
     /// The first `n` positions (an error at compile time if there are fewer).
     #[must_use]
-    pub fn take(self, n: usize) -> Seq<T> {
-        Seq::Take { n, inner: Box::new(self) }
+    pub fn take(self, n: usize) -> Self {
+        Self::Take { n, inner: Box::new(self) }
     }
 
     /// Everything after the first `n` positions (an error at compile time if there are fewer).
     #[must_use]
-    pub fn skip(self, n: usize) -> Seq<T> {
-        Seq::Skip { n, inner: Box::new(self) }
+    pub fn skip(self, n: usize) -> Self {
+        Self::Skip { n, inner: Box::new(self) }
     }
 
     /// Every `step`-th position starting at `offset`.
     #[must_use]
-    pub fn stride(self, step: usize, offset: usize) -> Seq<T> {
-        Seq::Stride { step, offset, inner: Box::new(self) }
+    pub fn stride(self, step: usize, offset: usize) -> Self {
+        Self::Stride { step, offset, inner: Box::new(self) }
     }
 
     /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
@@ -155,7 +155,7 @@ impl<T> Seq<T> {
     /// When that matters, shard the parts and mix the shards: each worker then interleaves
     /// only its own share, with the same schedule.
     #[must_use]
-    pub fn shard(self, index: usize, count: usize) -> Seq<T> {
+    pub fn shard(self, index: usize, count: usize) -> Self {
         self.stride(count, index)
     }
 
@@ -168,14 +168,14 @@ impl<T> Seq<T> {
 
     fn map_with<U, F: FnMut(T) -> U>(self, f: &mut F) -> Seq<U> {
         match self {
-            Seq::Source(t) => Seq::Source(f(t)),
-            Seq::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.map_with(f)).collect()),
-            Seq::Mix(parts) => Seq::Mix(parts.into_iter().map(|(p, s)| (p.map_with(f), s)).collect()),
-            Seq::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.map_with(f)) },
-            Seq::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.map_with(f)) },
-            Seq::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.map_with(f)) },
-            Seq::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.map_with(f)) },
-            Seq::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.map_with(f)) },
+            Self::Source(t) => Seq::Source(f(t)),
+            Self::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.map_with(f)).collect()),
+            Self::Mix(parts) => Seq::Mix(parts.into_iter().map(|(p, s)| (p.map_with(f), s)).collect()),
+            Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.map_with(f)) },
+            Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.map_with(f)) },
+            Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.map_with(f)) },
+            Self::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.map_with(f)) },
+            Self::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.map_with(f)) },
         }
     }
 }
@@ -193,14 +193,14 @@ impl<T: Source> Seq<T> {
     /// The same expression over the sources' lengths.
     fn lens(&self) -> Seq<usize> {
         match self {
-            Seq::Source(t) => Seq::Source(t.len()),
-            Seq::Concat(parts) => Seq::Concat(parts.iter().map(Seq::lens).collect()),
-            Seq::Mix(parts) => Seq::Mix(parts.iter().map(|(p, s)| (p.lens(), *s)).collect()),
-            Seq::Shuffle { seed, inner } => Seq::Shuffle { seed: *seed, inner: Box::new(inner.lens()) },
-            Seq::Repeat { times, inner } => Seq::Repeat { times: *times, inner: Box::new(inner.lens()) },
-            Seq::Skip { n, inner } => Seq::Skip { n: *n, inner: Box::new(inner.lens()) },
-            Seq::Take { n, inner } => Seq::Take { n: *n, inner: Box::new(inner.lens()) },
-            Seq::Stride { step, offset, inner } => Seq::Stride { step: *step, offset: *offset, inner: Box::new(inner.lens()) },
+            Self::Source(t) => Seq::Source(t.len()),
+            Self::Concat(parts) => Seq::Concat(parts.iter().map(Self::lens).collect()),
+            Self::Mix(parts) => Seq::Mix(parts.iter().map(|(p, s)| (p.lens(), *s)).collect()),
+            Self::Shuffle { seed, inner } => Seq::Shuffle { seed: *seed, inner: Box::new(inner.lens()) },
+            Self::Repeat { times, inner } => Seq::Repeat { times: *times, inner: Box::new(inner.lens()) },
+            Self::Skip { n, inner } => Seq::Skip { n: *n, inner: Box::new(inner.lens()) },
+            Self::Take { n, inner } => Seq::Take { n: *n, inner: Box::new(inner.lens()) },
+            Self::Stride { step, offset, inner } => Seq::Stride { step: *step, offset: *offset, inner: Box::new(inner.lens()) },
         }
     }
 }
