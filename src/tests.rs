@@ -195,7 +195,11 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
                 .into_iter()
                 .map(|p| {
                     let w = (1 + rng.below(3)) as f64;
-                    let s = if rng.below(3) == 0 { Sampling::delayed(0.5) } else { Sampling::Uniform };
+                    let s = match rng.below(4) {
+                        0 => Sampling::delayed(0.5),
+                        1 => Sampling::fading(0.3, 0.8),
+                        _ => Sampling::Uniform,
+                    };
                     (p, w, s)
                 })
                 .collect();
@@ -204,9 +208,11 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         0 => Seq::concat(parts(rng, depth - 1)),
         1 => Seq::mix(parts(rng, depth - 1)),
         2 => Seq::mix_with(parts(rng, depth - 1).into_iter().map(|p| {
-            let sampling = match rng.below(4) {
+            let sampling = match rng.below(6) {
                 0 => Sampling::DelayedLinear { start: 0.3, full: 0.6 },
                 1 => Sampling::DelayedLinear { start: 0.5, full: 0.5 },
+                2 => Sampling::until(0.5),
+                3 => Sampling::trapezoid(0.1, 0.3, 0.6, 0.9),
                 _ => Sampling::Uniform,
             };
             (p, sampling)
@@ -460,6 +466,10 @@ fn errors() {
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
     let over = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 0.5, full: 0.5 }), (src(1, 1), Sampling::Uniform)]);
     assert!(matches!(Order::new(over).unwrap_err().kind(), ErrorKind::Overcommitted { .. }));
+    let over_early = Seq::mix_with([(src(0, 10), Sampling::until(0.5)), (src(1, 1), Sampling::Uniform)]);
+    let err = Order::new(over_early).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::Overcommitted { demand } if (demand - 20.0 / 11.0).abs() < 1e-9), "{err}");
+    assert!(err.to_string().starts_with("scheduled mix parts need 181.8% of the draw rate at their peak"));
     // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(
@@ -604,6 +614,10 @@ fn seq_eq_and_hash() {
     let nan = Seq::weighted(10, [(src(0, 5), f64::NAN)]);
     assert_eq!(nan, nan.clone());
     assert_eq!(Sampling::delayed(0.5), Sampling::ramp(0.5, 0.5));
+    assert_eq!(Sampling::until(0.5), Sampling::fading(0.5, 0.5));
+    assert_ne!(Sampling::until(0.5), Sampling::delayed(0.5));
+    assert_ne!(Sampling::trapezoid(0.0, 0.0, 1.0, 1.0), Sampling::ramp(0.0, 0.0));
+    assert_eq!(Sampling::trapezoid(-0.0, 0.1, 0.5, 0.9), Sampling::trapezoid(0.0, 0.1, 0.5, 0.9));
     assert_eq!(MixPart::from(src(1, 2)), MixPart { seq: src(1, 2), sampling: Sampling::Uniform });
     assert_eq!(WeightedPart::from((src(1, 2), 2.0)), WeightedPart { seq: src(1, 2), weight: 2.0, sampling: Sampling::Uniform });
 }

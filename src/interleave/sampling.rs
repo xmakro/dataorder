@@ -29,6 +29,23 @@ pub enum Sampling {
         /// Progress at which it reaches its final value.
         full: f64,
     },
+    /// A rate that is zero until `start`, rises linearly to its full value at `full`, stays
+    /// there until `fade`, falls linearly to zero at `off` and stays zero: a curriculum
+    /// source that is phased out, or [`DelayedLinear`](Sampling::DelayedLinear) with an
+    /// end. Equal neighbours make the change abrupt. Requires
+    /// `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and `start + full < fade + off` (some time at a
+    /// positive rate). Build it with [`Sampling::until`], [`Sampling::fading`] or
+    /// [`Sampling::trapezoid`].
+    Trapezoid {
+        /// Progress at which the rate starts rising from zero.
+        start: f64,
+        /// Progress at which it reaches its full value.
+        full: f64,
+        /// Progress at which it starts falling.
+        fade: f64,
+        /// Progress at which it reaches zero.
+        off: f64,
+    },
 }
 
 impl Sampling {
@@ -53,17 +70,56 @@ impl Sampling {
     pub const fn ramp(start: f64, full: f64) -> Self {
         Self::DelayedLinear { start, full }
     }
+
+    /// A constant rate from the start, switched off at progress `at`: the mirror image of
+    /// [`delayed`](Sampling::delayed).
+    ///
+    /// ```
+    /// use dataorder::Sampling;
+    /// assert_eq!(Sampling::until(0.5), Sampling::Trapezoid { start: 0.0, full: 0.0, fade: 0.5, off: 0.5 });
+    /// ```
+    #[must_use]
+    pub const fn until(at: f64) -> Self {
+        Self::Trapezoid { start: 0.0, full: 0.0, fade: at, off: at }
+    }
+
+    /// A constant rate from the start, falling linearly to zero between `fade` and `off`:
+    /// the mirror image of [`ramp`](Sampling::ramp).
+    ///
+    /// ```
+    /// use dataorder::Sampling;
+    /// assert_eq!(Sampling::fading(0.4, 0.8), Sampling::Trapezoid { start: 0.0, full: 0.0, fade: 0.4, off: 0.8 });
+    /// ```
+    #[must_use]
+    pub const fn fading(fade: f64, off: f64) -> Self {
+        Self::Trapezoid { start: 0.0, full: 0.0, fade, off }
+    }
+
+    /// Zero until `start`, rising until `full`, constant until `fade`, falling to zero at
+    /// `off`; see [`Trapezoid`](Sampling::Trapezoid).
+    ///
+    /// ```
+    /// use dataorder::Sampling;
+    /// assert_eq!(Sampling::trapezoid(0.1, 0.3, 0.6, 0.9), Sampling::Trapezoid { start: 0.1, full: 0.3, fade: 0.6, off: 0.9 });
+    /// ```
+    #[must_use]
+    pub const fn trapezoid(start: f64, full: f64, fade: f64, off: f64) -> Self {
+        Self::Trapezoid { start, full, fade, off }
+    }
+
+    /// The parameters, as the bits equality and hashing compare.
+    fn bits(&self) -> [u64; 4] {
+        match *self {
+            Self::Uniform => [0; 4],
+            Self::DelayedLinear { start, full } => [float_bits(start), float_bits(full), 0, 0],
+            Self::Trapezoid { start, full, fade, off } => [float_bits(start), float_bits(full), float_bits(fade), float_bits(off)],
+        }
+    }
 }
 
 impl PartialEq for Sampling {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Uniform, Self::Uniform) => true,
-            (Self::DelayedLinear { start: a, full: b }, Self::DelayedLinear { start: c, full: d }) => {
-                float_bits(*a) == float_bits(*c) && float_bits(*b) == float_bits(*d)
-            }
-            _ => false,
-        }
+        std::mem::discriminant(self) == std::mem::discriminant(other) && self.bits() == other.bits()
     }
 }
 
@@ -72,10 +128,7 @@ impl Eq for Sampling {}
 impl Hash for Sampling {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
-        if let Self::DelayedLinear { start, full } = self {
-            float_bits(*start).hash(state);
-            float_bits(*full).hash(state);
-        }
+        self.bits().hash(state);
     }
 }
 
@@ -88,8 +141,8 @@ pub(crate) enum SamplingError {
     InvalidParameter { seq: usize, sampling: Sampling },
     /// `length × final_rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize },
-    /// The scheduled sequences' final rates sum to `demand` (> 1) times the total draw
-    /// rate, leaving nothing for the uniform sequences at the end.
+    /// The scheduled sequences' rates sum to `demand` (> 1) times the total draw rate at
+    /// some progress, leaving nothing for the uniform sequences there.
     Overcommitted { demand: f64 },
 }
 
@@ -99,7 +152,7 @@ impl fmt::Display for SamplingError {
             Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
             Self::InvalidParameter { seq, sampling } => write!(f, "sequence {seq}: invalid {sampling:?}"),
             Self::TooSteep { seq } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
-            Self::Overcommitted { demand } => write!(f, "scheduled sequences need {:.1}% of the draw rate at the end", demand * 100.0),
+            Self::Overcommitted { demand } => write!(f, "scheduled sequences need {:.1}% of the draw rate at their peak", demand * 100.0),
         }
     }
 }

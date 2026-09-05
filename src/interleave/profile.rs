@@ -7,6 +7,10 @@
 //! monotone even under floating-point rounding, which the exact-seek guarantee relies on.
 //! `quantile` is `#[inline(always)]` for the same measured reason as the tournament tree:
 //! it is the key computation of every element of a walk.
+//!
+//! No fused multiply-add anywhere here (nor elsewhere in the crate): the orders are promised
+//! to be the same on every target, and `mul_add` rounds differently from a multiply and an
+//! add.
 
 /// A nonnegative, piecewise-linear draw rate over joint progress, with its running integral.
 #[derive(Clone, Debug)]
@@ -50,33 +54,84 @@ impl Profile {
         Self { segs }
     }
 
-    /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the final rate at `d1`,
-    /// then constant. The final rate `r = 2/(2 − d0 − d1)` makes the total share one.
+    /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the
+    /// final rate at `d1`, then constant. The final rate `r = 2/(2 − d0 − d1)` makes the
+    /// total share one.
     pub(crate) fn delayed_linear(d0: f64, d1: f64) -> Self {
-        let r = 2.0 / (2.0 - d0 - d1);
-        Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, 1.0, r, r)])
+        Self::trapezoid(d0, d1, 1.0, 1.0)
+    }
+
+    /// `Trapezoid { start: d0, full: d1, fade: d2, off: d3 }`: zero until `d0`, rising
+    /// linearly to the full rate at `d1`, constant until `d2`, falling linearly to zero at
+    /// `d3`, zero afterwards. The full rate `r = 2/((d2 + d3) − (d0 + d1))` makes the total
+    /// share one (the same expression as for `delayed_linear` when `d2 = d3 = 1`, evaluated
+    /// in the same order).
+    pub(crate) fn trapezoid(d0: f64, d1: f64, d2: f64, d3: f64) -> Self {
+        let r = 2.0 / (d2 + d3 - d0 - d1);
+        Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)])
     }
 
     /// The uniform sequences' profile `(1 − Σ ρ_i·rate_i) / u` for the scheduled profiles
-    /// with their element fractions `ρ_i`, `u` being the uniform fraction of all elements.
-    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> Self {
-        let mut points: Vec<f64> = scheduled.iter().flat_map(|(_, p)| p.segs.iter().map(|s| s.start)).collect();
-        points.extend([0.0, 1.0]);
-        points.sort_by(f64::total_cmp);
-        points.dedup();
-        let rate = |t: f64, before: bool| (1.0 - scheduled.iter().map(|(rho, p)| rho * p.rate_at(t, before)).sum::<f64>()).max(0.0) / u;
-        Self::from_rates(points.windows(2).map(|w| (w[0], w[1], rate(w[0], false), rate(w[1], true))))
+    /// with their element fractions `ρ_i`, `u` being the uniform fraction of all elements,
+    /// and the peak of `Σ ρ_i·rate_i` over all progress (above 1, the configuration is
+    /// overcommitted). With `u = 0` the profile is a placeholder (nothing reads it).
+    ///
+    /// A sweep over the segment starts of all scheduled profiles: between two of them every
+    /// rate is linear, so the summed rate is too and follows from its value and slope at the
+    /// last start. The running slope has every segment's slope added at its start and taken
+    /// away where the next one begins, and the running value is stepped along it; both are
+    /// compensated sums, so the additions and removals leave no residue. That is
+    /// `O(s log s)` for `s` scheduled profiles where evaluating every profile at every start
+    /// is `O(s²)`, and as accurate as that (about `s` roundings per value either way).
+    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> (Self, f64) {
+        // At a segment's start the summed rate jumps by ρ·(r0 − previous r1) and its slope
+        // changes by ρ·(m − previous m); events in profile order, stably sorted by time.
+        let mut events = Vec::new();
+        for (rho, p) in scheduled {
+            let (mut prev_r1, mut prev_m) = (0.0, 0.0);
+            for seg in &p.segs {
+                let m = (seg.r1 - seg.r0) / (seg.end - seg.start);
+                events.push((seg.start, rho * (seg.r0 - prev_r1), rho * (m - prev_m)));
+                (prev_r1, prev_m) = (seg.r1, m);
+            }
+        }
+        events.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let rate = |total: f64| if u > 0.0 { (1.0 - total).max(0.0) / u } else { 0.0 };
+        let (mut total, mut slope) = (Compensated::default(), Compensated::default());
+        let (mut windows, mut peak, mut next, mut t) = (Vec::new(), 0.0f64, 0, 0.0);
+        while t < 1.0 {
+            while next < events.len() && events[next].0 <= t {
+                total.add(events[next].1);
+                slope.add(events[next].2);
+                next += 1;
+            }
+            let t1 = if next < events.len() { events[next].0.min(1.0) } else { 1.0 };
+            let r0 = rate(total.value());
+            peak = peak.max(total.value());
+            total.add(slope.value() * (t1 - t));
+            peak = peak.max(total.value());
+            windows.push((t, t1, r0, rate(total.value())));
+            t = t1;
+        }
+        (if u > 0.0 { Self::from_rates(windows) } else { Self::delayed_linear(0.0, 0.0) }, peak)
     }
 
     /// The rate just after `t` (`before == false`) or just before it.
+    #[cfg(test)]
     fn rate_at(&self, t: f64, before: bool) -> f64 {
         let s = &self.segs[self.segs.partition_point(|s| if before { s.start < t } else { s.start <= t }).saturating_sub(1)];
         s.r0 + (s.r1 - s.r0) * ((t - s.start) / (s.end - s.start)).clamp(0.0, 1.0)
     }
 
     /// `f'(1⁻)`, the rate at the end.
+    #[cfg(test)]
     pub(crate) fn final_rate(&self) -> f64 {
         self.segs.last().map_or(0.0, |s| s.r1)
+    }
+
+    /// The largest rate anywhere.
+    pub(crate) fn max_rate(&self) -> f64 {
+        self.segs.iter().fold(0.0, |m, s| m.max(s.r0).max(s.r1))
     }
 
     /// The share drawn by progress `t`: the integral of the rate up to `t`.
@@ -122,12 +177,49 @@ impl Profile {
     }
 }
 
+/// A sum kept as two floats, exact enough that terms added and later subtracted leave no
+/// residue (each addition is an error-free transformation, Knuth's two-sum).
+#[derive(Clone, Copy, Debug, Default)]
+struct Compensated {
+    hi: f64,
+    lo: f64,
+}
+
+impl Compensated {
+    fn add(&mut self, x: f64) {
+        let (sum, err) = two_sum(self.hi, x);
+        (self.hi, self.lo) = two_sum(sum, self.lo + err);
+    }
+
+    fn value(self) -> f64 {
+        self.hi + self.lo
+    }
+}
+
+/// `a + b` rounded, and the rounding error, exactly.
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let sum = a + b;
+    let bb = sum - a;
+    (sum, (a - (sum - bb)) + (b - bb))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn grid() -> impl Iterator<Item = f64> {
         (0..=1000).map(|i| i as f64 / 1000.0)
+    }
+
+    /// The uniform profile by direct evaluation of every scheduled profile at every
+    /// breakpoint, the `O(s²)` way the sweep replaces.
+    fn uniform_direct(scheduled: &[(f64, Profile)], u: f64) -> Profile {
+        let mut points: Vec<f64> = scheduled.iter().flat_map(|(_, p)| p.segs.iter().map(|s| s.start)).collect();
+        points.extend([0.0, 1.0]);
+        points.sort_by(f64::total_cmp);
+        points.dedup();
+        let rate = |t: f64, before: bool| (1.0 - scheduled.iter().map(|(rho, p)| rho * p.rate_at(t, before)).sum::<f64>()).max(0.0) / u;
+        Profile::from_rates(points.windows(2).map(|w| (w[0], w[1], rate(w[0], false), rate(w[1], true))))
     }
 
     #[test]
@@ -162,28 +254,138 @@ mod tests {
     }
 
     #[test]
+    fn trapezoid_shape() {
+        for &(d0, d1, d2, d3) in
+            &[(0.0, 0.0, 0.5, 0.5), (0.1, 0.3, 0.6, 0.9), (0.0, 0.5, 0.5, 1.0), (0.2, 0.2, 0.2, 0.7), (0.0, 0.0, 1.0, 1.0)]
+        {
+            let p = Profile::trapezoid(d0, d1, d2, d3);
+            let r = 2.0 / (d2 + d3 - d0 - d1);
+            assert!((p.max_rate() - r).abs() < 1e-12);
+            assert_eq!(p.share(d0), 0.0);
+            assert!((p.share(d3) - 1.0).abs() < 1e-12, "F(d3) = {}", p.share(d3));
+            assert!((p.share(1.0) - 1.0).abs() < 1e-12);
+            assert_eq!(p.final_rate(), if d2 < d3 || d3 < 1.0 { 0.0 } else { r });
+            if d3 > d2 {
+                let mid = (d2 + d3) / 2.0;
+                assert!((p.rate_at(mid, false) - r / 2.0).abs() < 1e-9 * r);
+            }
+            if d3 < 1.0 {
+                assert_eq!(p.rate_at(d3, false), 0.0);
+            }
+            let mut prev = -1.0;
+            for t in grid() {
+                let v = p.share(t);
+                assert!(v >= prev);
+                prev = v;
+            }
+            let mut hint = 0;
+            let mut prev = -1.0;
+            for i in 0..=10_000 {
+                let t = p.quantile(i as f64 / 10_000.0, &mut hint);
+                assert!(t >= prev && t <= 1.0);
+                prev = t;
+            }
+        }
+        // A delayed-linear profile is the trapezoid with the fall at the end, bit for bit.
+        let (a, b) = (Profile::delayed_linear(0.2, 0.6), Profile::trapezoid(0.2, 0.6, 1.0, 1.0));
+        assert_eq!(a.segs.len(), b.segs.len());
+        for (x, y) in a.segs.iter().zip(&b.segs) {
+            assert_eq!((x.r0, x.r1, x.share, x.c), (y.r0, y.r1, y.share, y.c));
+        }
+        assert_eq!(a.max_rate(), 2.0 / (2.0 - 0.2 - 0.6));
+    }
+
+    #[test]
     fn uniform_absorbs_exactly() {
-        // u·F_U(τ) + Σ ρ_i·F_i(τ) = τ for every τ.
+        // u·F_U(τ) + Σ ρ_i·F_i(τ) = τ for every τ, with rising and falling rates.
         let scheduled = vec![
             (0.2, Profile::delayed_linear(0.3, 0.3)),
             (0.25, Profile::delayed_linear(0.1, 0.7)),
             (0.05, Profile::delayed_linear(0.0, 0.4)),
+            (0.1, Profile::trapezoid(0.0, 0.0, 0.4, 0.8)),
+            (0.05, Profile::trapezoid(0.5, 0.6, 0.8, 0.9)),
         ];
-        let u = 0.5;
-        let fu = Profile::uniform(&scheduled, u);
+        let u = 0.35;
+        let (fu, peak) = Profile::uniform(&scheduled, u);
+        assert!((0.97..1.0).contains(&peak), "peak {peak}");
         for t in grid() {
             let total = u * fu.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
             assert!((total - t).abs() < 1e-12, "τ = {t}: {total}");
         }
         // The uniform rate drops at the step and is lowest at the end.
         assert!(fu.rate_at(0.3, true) > fu.rate_at(0.3, false));
-        assert!((fu.rate_at(1.0, true) - (1.0 - 0.2 / 0.7 - 0.25 * 2.0 / 1.2 - 0.05 * 2.0 / 1.6) / u).abs() < 1e-12);
+        let end = (1.0 - 0.2 / 0.7 - 0.25 * 2.0 / 1.2 - 0.05 * 2.0 / 1.6) / u;
+        assert!((fu.rate_at(1.0, true) - end).abs() < 1e-12);
+        // The peak is where the summed rate is highest, not at the end.
+        let (_, peak) = Profile::uniform(&[(0.6, Profile::trapezoid(0.0, 0.0, 0.5, 0.5)), (0.2, Profile::delayed_linear(0.5, 0.5))], 0.2);
+        assert!((peak - 1.2).abs() < 1e-12, "peak {peak}");
+    }
+
+    /// The sweep agrees with evaluating every profile at every breakpoint, also when the
+    /// profiles are many, distinct and steep.
+    #[test]
+    fn sweep_matches_direct_evaluation() {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for &(s, steep) in &[(1usize, false), (3, false), (20, false), (300, true), (2000, true)] {
+            let mut scheduled = Vec::new();
+            for _ in 0..s {
+                let d0 = rnd() * 0.8;
+                let d1 = if steep && rnd() < 0.5 { d0 + 1e-9 * rnd() } else { d0 + rnd() * (1.0 - d0) };
+                let (d2, d3) = if rnd() < 0.5 {
+                    (1.0, 1.0)
+                } else {
+                    let d2 = d1 + rnd() * (1.0 - d1);
+                    (d2, d2 + rnd() * (1.0 - d2))
+                };
+                let p = Profile::trapezoid(d0, d1, d2, d3);
+                scheduled.push((0.3 / s as f64 / p.max_rate(), p));
+            }
+            let u = 0.5;
+            let (fu, peak) = Profile::uniform(&scheduled, u);
+            let direct = uniform_direct(&scheduled, u);
+            assert!(peak <= 0.31, "peak {peak}");
+            assert_eq!(fu.segs.len(), direct.segs.len());
+            for (a, b) in fu.segs.iter().zip(&direct.segs) {
+                assert_eq!((a.start, a.end), (b.start, b.end));
+                let tol = 1e-12 * (1.0 + a.r0.abs().max(a.r1.abs()));
+                assert!(
+                    (a.r0 - b.r0).abs() <= tol && (a.r1 - b.r1).abs() <= tol,
+                    "s = {s}: [{}, {}] rates {} {} vs {} {}",
+                    a.start,
+                    a.end,
+                    a.r0,
+                    a.r1,
+                    b.r0,
+                    b.r1
+                );
+            }
+            for t in grid() {
+                let total = u * fu.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
+                assert!((total - t).abs() < 1e-11, "s = {s}, τ = {t}: {total}");
+            }
+        }
     }
 
     #[test]
     fn quantile_inverts_share_and_is_monotone() {
-        let scheduled = vec![(0.3, Profile::delayed_linear(0.2, 0.6)), (0.1, Profile::delayed_linear(0.5, 0.5))];
-        let profiles = [Profile::uniform(&scheduled, 0.6), Profile::delayed_linear(0.2, 0.6), Profile::delayed_linear(0.5, 0.5)];
+        let scheduled = vec![
+            (0.3, Profile::delayed_linear(0.2, 0.6)),
+            (0.1, Profile::delayed_linear(0.5, 0.5)),
+            (0.1, Profile::trapezoid(0.1, 0.2, 0.3, 0.7)),
+        ];
+        let profiles = [
+            Profile::uniform(&scheduled, 0.5).0,
+            Profile::delayed_linear(0.2, 0.6),
+            Profile::delayed_linear(0.5, 0.5),
+            Profile::trapezoid(0.1, 0.2, 0.3, 0.7),
+            Profile::trapezoid(0.0, 0.0, 0.5, 0.5),
+        ];
         for p in &profiles {
             let mut hint = 0;
             let mut prev = -1.0;

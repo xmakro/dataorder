@@ -7,11 +7,11 @@
 //! sequence:
 //!
 //! ```text
-//!   ramp(d0, d1)                       delayed(d)                      Uniform
-//!             ________________                 ________________     ________________
-//!            /                                 |
-//!   ________/                         ________|
-//!           d0     d1                          d
+//!   ramp(d0, d1)               delayed(d)              trapezoid(d0, d1, d2, d3)     Uniform
+//!             ________                 ________              ____
+//!            /                         |                    /    \                ________
+//!   ________/                  ________|            _______/      \_______
+//!           d0     d1                  d                  d0  d1  d2  d3
 //! ```
 //!
 //! # Model
@@ -19,14 +19,14 @@
 //! Progress `τ ∈ [0, 1]` is the joint position divided by `N`. Every sequence has a share
 //! function `F(τ)`: the fraction of it drawn by progress `τ`. For a scheduled sequence it is
 //! the integral of its rate profile normalized to `F(1) = 1`: zero until `d0`, a parabola on
-//! the ramp, a straight line after `d1`. Every joint position holds exactly one element, so
-//! the uniform sequences absorb the slack: by progress `τ` they have jointly drawn the
-//! `τ·N − Σ_scheduled n_i·F_i(τ)` elements the scheduled ones did not, shared in proportion
-//! to their lengths, which gives them the common share function
+//! a ramp, a straight line at a constant rate. Every joint position holds exactly one
+//! element, so the uniform sequences absorb the slack: by progress `τ` they have jointly
+//! drawn the `τ·N − Σ_scheduled n_i·F_i(τ)` elements the scheduled ones did not, shared in
+//! proportion to their lengths, which gives them the common share function
 //! `F_U(τ) = (τ − Σ ρ_i·F_i(τ)) / u` with `ρ_i = n_i/N` and `u` the uniform fraction of all
-//! elements. Rates never fall, so `F_U` is steepest at the start and flattest at the end; it
-//! stays nondecreasing exactly when the scheduled sequences' final rates sum to at most the
-//! whole draw rate, otherwise the configuration is rejected.
+//! elements. It stays nondecreasing exactly when the scheduled sequences' rates sum to at
+//! most the whole draw rate at every progress; the rates are piecewise linear, so that is
+//! checked where their segments start, and otherwise the configuration is rejected.
 //!
 //! Every rate profile is piecewise linear and is stored as such; share functions are their
 //! integrals.
@@ -69,11 +69,11 @@ use std::ops::Range;
 /// Largest supported total length. Keeps the gap between consecutive keys of one sequence
 /// (at least `1/N`) far above floating-point rounding, and keeps every length and count
 /// exact when converted to `f64` (which holds integers up to 2⁵³). A scheduled sequence
-/// must likewise satisfy `length × final_rate ≤ MAX_TOTAL_LEN`.
+/// must likewise satisfy `length × max_rate ≤ MAX_TOTAL_LEN`.
 pub(crate) const MAX_TOTAL_LEN: u64 = 1 << 46;
 
-/// Slack on the overcommitment check: the final rates are rounded sums, and a mix whose
-/// scheduled parts need exactly the whole draw rate at the end is valid.
+/// Slack on the overcommitment check: the summed rates are rounded, and a mix whose
+/// scheduled parts need exactly the whole draw rate somewhere is valid.
 const OVERCOMMIT_TOLERANCE: f64 = 1e-9;
 
 #[derive(Clone, Copy, Debug)]
@@ -128,15 +128,28 @@ impl Interleave {
         let mut scheduled: Vec<(f64, Profile)> = Vec::new();
         let mut uniform_len = 0u64;
         for (i, (&n, &s)) in lens.iter().zip(sampling).enumerate() {
-            // Profile 0 is the shared uniform one; an empty scheduled sequence uses it too.
             let profile = match s {
-                Sampling::Uniform => 0,
+                Sampling::Uniform => None,
                 Sampling::DelayedLinear { start: d0, full: d1 } => {
-                    if !(d0.is_finite() && d1.is_finite() && 0.0 <= d0 && d0 <= d1 && d1 <= 1.0 && d0 < 1.0) {
+                    let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= 1.0 && d0 < 1.0;
+                    if !(d0.is_finite() && d1.is_finite() && ordered) {
                         return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
                     }
-                    let p = Profile::delayed_linear(d0, d1);
-                    if n as f64 * p.final_rate() > MAX_TOTAL_LEN as f64 {
+                    Some(Profile::delayed_linear(d0, d1))
+                }
+                Sampling::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
+                    let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 + d1 < d2 + d3;
+                    if !([d0, d1, d2, d3].iter().all(|d| d.is_finite()) && ordered) {
+                        return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
+                    }
+                    Some(Profile::trapezoid(d0, d1, d2, d3))
+                }
+            };
+            let profile = match profile {
+                // Profile 0 is the shared uniform one; an empty scheduled sequence uses it too.
+                None => 0,
+                Some(p) => {
+                    if n as f64 * p.max_rate() > MAX_TOTAL_LEN as f64 {
                         return Err(SamplingError::TooSteep { seq: i });
                     }
                     if n == 0 {
@@ -158,16 +171,12 @@ impl Interleave {
             };
             seqs.push(Seq { n, inv_n, phi, profile });
         }
-        let demand: f64 = scheduled.iter().map(|(rho, p)| rho * p.final_rate()).sum();
+        // Without uniform elements the shared profile is a placeholder that nothing reads.
+        let u = if uniform_len == 0 { 0.0 } else { uniform_len as f64 / total as f64 };
+        let (uniform, demand) = Profile::uniform(&scheduled, u);
         if demand > 1.0 + OVERCOMMIT_TOLERANCE {
             return Err(SamplingError::Overcommitted { demand });
         }
-        // Without uniform elements the shared profile is never read; any valid one will do.
-        let uniform = if uniform_len == 0 {
-            Profile::delayed_linear(0.0, 0.0)
-        } else {
-            Profile::uniform(&scheduled, uniform_len as f64 / total as f64)
-        };
         let mut profiles = vec![uniform];
         profiles.extend(scheduled.into_iter().map(|(_, p)| p));
         Ok(Self { seqs, profiles, total })

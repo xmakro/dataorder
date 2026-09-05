@@ -122,6 +122,10 @@ fn scheduled_cases() -> Vec<(Vec<u64>, Vec<Sampling>)> {
         (vec![1000, 50, 50], vec![Uniform, DelayedLinear { start: 0.9, full: 0.9 }, DelayedLinear { start: 0.8, full: 0.95 }]),
         (vec![100, 100, 800], vec![DelayedLinear { start: 0.0, full: 0.5 }, DelayedLinear { start: 0.5, full: 1.0 }, Uniform]),
         (vec![3, 1000, 1], vec![DelayedLinear { start: 0.7, full: 0.7 }, Uniform, DelayedLinear { start: 0.2, full: 0.9 }]),
+        (vec![300, 700], vec![Sampling::until(0.5), Uniform]),
+        (vec![200, 300, 500], vec![Sampling::fading(0.2, 0.6), Sampling::trapezoid(0.3, 0.5, 0.7, 0.9), Uniform]),
+        (vec![500, 500], vec![Sampling::until(0.5), Sampling::delayed(0.5)]),
+        (vec![40, 60, 900], vec![Sampling::trapezoid(0.1, 0.1, 0.1, 0.3), Sampling::trapezoid(0.6, 0.8, 0.8, 1.0), Uniform]),
     ]
 }
 
@@ -228,8 +232,17 @@ fn random_configurations() {
             .map(|_| {
                 let d0 = rng.below(999);
                 let d1 = if rng.below(2) == 0 { d0 } else { d0 + rng.below(1001 - d0) };
-                match rng.below(3) {
+                match rng.below(4) {
                     0 => Uniform,
+                    1 => {
+                        let d2 = d1 + rng.below(1001 - d1);
+                        let d3 = if rng.below(2) == 0 { d2 } else { d2 + rng.below(1001 - d2) };
+                        if d0 + d1 < d2 + d3 {
+                            Sampling::trapezoid(d0 as f64 / 1000.0, d1 as f64 / 1000.0, d2 as f64 / 1000.0, d3 as f64 / 1000.0)
+                        } else {
+                            Uniform
+                        }
+                    }
                     _ => DelayedLinear { start: d0 as f64 / 1000.0, full: d1 as f64 / 1000.0 },
                 }
             })
@@ -264,10 +277,16 @@ fn random_configurations() {
             assert_eq!(il.iter(a..b).collect::<Vec<_>>(), &all[a as usize..b as usize], "{lens:?} {sampling:?} seek {a}");
         }
         for (s, samp) in sampling.iter().enumerate() {
-            if let DelayedLinear { start: d0, full: _ } = samp
-                && let Some(first) = all.iter().position(|&(x, _)| x == s)
-            {
-                assert!(first as f64 >= d0 * n as f64 - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
+            let (start, off) = match *samp {
+                DelayedLinear { start, .. } => (start, 1.0),
+                Trapezoid { start, off, .. } => (start, off),
+                Uniform => continue,
+            };
+            if let Some(first) = all.iter().position(|&(x, _)| x == s) {
+                assert!(first as f64 >= start * n as f64 - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
+            }
+            if let Some(last) = all.iter().rposition(|&(x, _)| x == s) {
+                assert!(last as f64 <= off * n as f64 + k as f64 + 1.0, "{lens:?} {sampling:?} seq {s} last at {last}");
             }
         }
     }
@@ -308,10 +327,12 @@ fn schedules_are_followed() {
             let bound = 1.5 + k * lens[s] as f64 / n;
             assert!(*w <= bound, "{lens:?} {sampling:?} seq {s}: deviation {w} > {bound}");
         }
-        // Nothing from a delayed sequence before its start (up to the k-position warp).
+        // Nothing from a delayed sequence before its start, nor from a fading one after its
+        // end (up to the k-position warp).
         for (s, samp) in sampling.iter().enumerate() {
-            let start = match samp {
-                DelayedLinear { start: d0, full: _ } => *d0,
+            let (start, off) = match *samp {
+                DelayedLinear { start, .. } => (start, 1.0),
+                Trapezoid { start, off, .. } => (start, off),
                 Uniform => continue,
             };
             if lens[s] == 0 {
@@ -319,8 +340,28 @@ fn schedules_are_followed() {
             }
             let first = all.iter().position(|&(x, _)| x == s).unwrap() as f64;
             assert!(first >= start * n - k - 1.0, "{lens:?} {sampling:?} seq {s}: first at {first}, start {}", start * n);
+            let last = all.iter().rposition(|&(x, _)| x == s).unwrap() as f64;
+            assert!(last <= off * n + k + 1.0, "{lens:?} {sampling:?} seq {s}: last at {last}, off {}", off * n);
         }
     }
+}
+
+#[test]
+fn fading_sequences_stop_and_free_the_rest() {
+    // Seq 0 (30% of the elements) runs at a constant rate until 0.5 and stops: it is done
+    // by the middle, and only seq 1 fills the second half.
+    let il = Interleave::with_sampling(&[300, 700], &[Sampling::until(0.5), Uniform]).unwrap();
+    let all = full(&il);
+    assert!(all[500..].iter().all(|&(s, _)| s == 1));
+    assert_eq!(all[..500].iter().filter(|&&(s, _)| s == 0).count(), 300);
+    for w in all[..500].windows(50) {
+        let c = w.iter().filter(|&&(s, _)| s == 0).count();
+        assert!((28..=32).contains(&c), "window has {c} fading elements");
+    }
+    // A hand-over: one sequence until the middle, another from it; no uniform ones at all.
+    let il = Interleave::with_sampling(&[500, 500], &[Sampling::until(0.5), Sampling::delayed(0.5)]).unwrap();
+    let all = full(&il);
+    assert!(all[..500].iter().all(|&(s, _)| s == 0) && all[500..].iter().all(|&(s, _)| s == 1));
 }
 
 #[test]
@@ -380,9 +421,24 @@ fn rejects_bad_configurations() {
         DelayedLinear { start: 0.5, full: 0.4 },
         DelayedLinear { start: 1.0, full: 1.0 },
         DelayedLinear { start: 0.2, full: 1.5 },
+        Sampling::trapezoid(0.5, 0.5, 0.5, 0.5),
+        Sampling::trapezoid(0.0, 0.0, 0.0, 0.0),
+        Sampling::trapezoid(0.2, 0.1, 0.5, 0.6),
+        Sampling::trapezoid(0.1, 0.2, 0.6, 0.5),
+        Sampling::trapezoid(0.1, 0.2, 0.5, 1.1),
+        Sampling::trapezoid(-0.1, 0.2, 0.5, 0.9),
+        Sampling::trapezoid(0.1, f64::INFINITY, 0.5, 0.9),
+        Sampling::until(0.0),
     ] {
         assert!(matches!(Interleave::with_sampling(&[10, 10], &[Uniform, bad]), Err(InvalidParameter { seq: 1, .. })), "{bad:?}");
     }
+    // Overcommitted in the middle, although nothing is scheduled at the end.
+    assert!(matches!(Interleave::with_sampling(&[600, 400], &[Sampling::until(0.5), Uniform]), Err(Overcommitted { .. })));
+    assert!(Interleave::with_sampling(&[500, 500], &[Sampling::until(0.5), Uniform]).is_ok());
+    assert!(matches!(
+        Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, Sampling::trapezoid(0.0, 0.0, 0.001, 0.001)]),
+        Err(TooSteep { seq: 1 })
+    ));
     assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
     assert!(matches!(
         Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]),
@@ -421,7 +477,7 @@ fn empty_sequences_do_not_affect_the_order() {
         let mut sampling2 = sampling.clone();
         let at = rng.below(lens.len() as u64 + 1) as usize;
         lens2.insert(at, 0);
-        sampling2.insert(at, DelayedLinear { start: 0.99, full: 0.99 });
+        sampling2.insert(at, if at.is_multiple_of(2) { DelayedLinear { start: 0.99, full: 0.99 } } else { Sampling::until(0.01) });
         let il2 = Interleave::with_sampling(&lens2, &sampling2).unwrap();
         let got: Vec<(usize, u64)> = full(&il2).into_iter().map(|(s, j)| (if s > at { s - 1 } else { s }, j)).collect();
         assert_eq!(got, full(&il), "{lens:?} {sampling:?} with an empty part at {at}");

@@ -100,13 +100,14 @@ pub enum ErrorKind {
         /// The schedule.
         sampling: Sampling,
     },
-    /// A mix part is too long for the steepness of its schedule (`length × final_rate`
-    /// exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
+    /// A mix part is too long for the steepness of its schedule (`length × its highest
+    /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep,
-    /// The scheduled parts of a mix need `demand` (> 1) times the whole draw rate at the
-    /// end, leaving nothing for the uniform parts.
+    /// The scheduled parts of a mix need `demand` (> 1) times the whole draw rate at some
+    /// progress, leaving nothing for the uniform parts there.
     Overcommitted {
-        /// The scheduled parts' final rates, summed, as a fraction of the whole draw rate.
+        /// The scheduled parts' rates, summed, at their peak, as a fraction of the whole
+        /// draw rate.
         demand: f64,
     },
     /// The weight of a weighted mix part is negative or not finite.
@@ -135,7 +136,7 @@ impl fmt::Display for ErrorKind {
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),
             Self::TooSteep => write!(f, "mix part too long for the steepness of its schedule"),
-            Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at the end", demand * 100.0),
+            Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at their peak", demand * 100.0),
             Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
             Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
             Self::EmptyWeightedPart => write!(f, "weighted mix part has a share but no elements"),

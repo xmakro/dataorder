@@ -64,8 +64,17 @@ fn golden_orders() {
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
         ("weighted", Seq::weighted(3000, [(src(0, 100).shuffle(1), 0.6), (src(1, 5000).shuffle(2), 0.4)]), 0),
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
+        (
+            "mix fading",
+            Seq::mix_with([
+                (src(0, 1500).shuffle(1), Uniform),
+                (src(1, 300).shuffle(2), Sampling::until(0.4)),
+                (src(2, 400), Sampling::trapezoid(0.2, 0.4, 0.6, 0.9)),
+            ]),
+            0,
+        ),
     ];
-    const EXPECTED: [u64; 12] = [
+    const EXPECTED: [u64; 13] = [
         17918724613688720885,
         6314560897953129369,
         9731401842934529132,
@@ -78,6 +87,7 @@ fn golden_orders() {
         8789581730375861797,
         9381521998954631041,
         8555868547297370277,
+        9216860164093178041,
     ];
     let actual: Vec<u64> = cases
         .iter()
