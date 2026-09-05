@@ -7,6 +7,10 @@ index array in memory. Each lookup computes a **source and an index within that
 source**, leaving record loading to you. Ordering memory grows with the sources and
 sequence structure, not the number of records.
 
+On an Apple M2 Pro, shuffled random access takes about **22 ns**, a random lookup
+in a 100-source mix about **1.9 µs**, and walking that mix after a seek about
+**27 ns per item**. See the [performance highlights](#performance) below.
+
 - **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
   and O(1) space, without generating or storing the full permutation.
 - **Jump into a mix.** Counting and binary searches locate the position within each
@@ -20,22 +24,7 @@ Combine these operations with sampling schedules, repeated epochs and worker sha
 The same configuration and seed reproduce the same order, including after a restart.
 
 [API documentation](https://docs.rs/dataorder) · [Runnable example](examples/demo.rs) ·
-[Benchmarks](docs/benchmarks.md)
-
-## Performance
-
-Current implementation on an Apple M2 Pro, release build, minimum of two runs:
-
-| Order | Positions | Seek + first item | Walk / item |
-| --- | --- | --- | --- |
-| Shuffled source | 1 billion | 0.04 µs | 14.2 ns |
-| Mix of 100 shuffled sources | 100 million | 2.20 µs | 26.7 ns |
-| Mix of 1,000 shuffled sources, 20% scheduled | 100 million | 47.40 µs | 45.1 ns |
-| Nested mix of 1,100 shuffled sources, 2–4 epochs | 4.1 billion | 33.86 µs | 62.4 ns |
-
-Seek includes creating a cursor and returning the first item. Walk averages a
-five-million-item range, including its initial seek. Timings measure ordering and
-exclude record I/O. See the [full results and methodology](docs/benchmarks.md#current-measurements).
+[Performance](#performance)
 
 ## Getting started
 
@@ -170,6 +159,30 @@ using JSON, also enable `serde_json/float_roundtrip` to preserve weights and sch
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
 
+## Performance
+
+Measured on an Apple M2 Pro with Rust 1.98.1 on macOS, release build, on 2026-09-05.
+Each column is the minimum of two runs; timings exclude record I/O.
+
+| Order | Positions | Random lookup | Seek + first item | Walk / item |
+| --- | --- | --- | --- | --- |
+| Shuffled source | 1 billion | 21.7 ns | 0.04 µs | 14.2 ns |
+| Mix of 100 shuffled sources | 100 million | 1.87 µs | 2.20 µs | 26.7 ns |
+| Mix of 1,000 shuffled sources, 20% scheduled | 100 million | 44.18 µs | 47.40 µs | 45.1 ns |
+| Nested mix of 1,100 shuffled sources, 2–4 epochs | 4.1 billion | 30.69 µs | 33.86 µs | 62.4 ns |
+
+Random lookup measures `get(pos)`. Seek measures `iter(pos..).next()`, including
+cursor construction. Walk averages five million items, including the initial seek.
+The benchmark runs on one thread without CPU affinity. Run it locally with:
+
+```sh
+cargo run --release --example bench
+```
+
+See [the benchmark source](examples/bench.rs) for the measured configurations and
+the [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) for how composition
+affects performance.
+
 ## Development
 
 ```sh
@@ -179,6 +192,7 @@ cargo doc --locked --no-deps --all-features
 ```
 
 The README's Rust examples are tested with the crate's documentation examples.
-For performance measurements and comparisons, see the [benchmark guide](docs/benchmarks.md).
+For repeated benchmark runs and comparisons, run
+`cargo run --release --example bench_campaign -- --help`.
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

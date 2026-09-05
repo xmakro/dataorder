@@ -11,7 +11,7 @@
 //!   with O(log k) comparisons for `k` parts, instead of seeking again for every element.
 //!
 //! See the [cost model](#cost) for composition costs and the
-//! [benchmarks](https://github.com/xmakro/dataorder/blob/main/docs/benchmarks.md) for timings.
+//! [README](https://github.com/xmakro/dataorder/blob/main/README.md#performance) for timings.
 //!
 //! Three types make up the main API:
 //!
@@ -169,7 +169,7 @@
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
 //! buffers, including in a cloned cursor, though entering a new child can allocate.
 //! For measurements and reproduction commands, see the
-//! [benchmark guide](https://github.com/xmakro/dataorder/blob/main/docs/benchmarks.md).
+//! [README's performance section](https://github.com/xmakro/dataorder/blob/main/README.md#performance).
 //!
 //! # Feature flags
 //!
