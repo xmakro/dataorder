@@ -61,6 +61,13 @@ impl<'a, T> Cursor<'a, T> {
     }
 }
 
+/// A clone continues from the same position, independently (for a look-ahead, say).
+impl<T> Clone for Cursor<'_, T> {
+    fn clone(&self) -> Self {
+        Cursor { sources: self.sources, root: self.root.clone(), pos: self.pos, end: self.end, ctx: self.ctx }
+    }
+}
+
 impl<'a, T> Iterator for Cursor<'a, T> {
     type Item = (&'a T, usize);
 
@@ -87,7 +94,7 @@ impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 const UNSEEKED: u64 = u64::MAX;
 
 /// An explicit tag: with one hidden in a field's niche, every dispatch would decode it.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[repr(u8)]
 pub(crate) enum NodeCursor<'a> {
     Empty,
@@ -268,7 +275,7 @@ impl<'a> NodeCursor<'a> {
 /// The cursor of a `Mix`. Children are seeked lazily: `next_j[s]` is the index the cursor
 /// of part `s` stands at, or [`UNSEEKED`]; skipping leaves them behind and the mismatch
 /// re-seeks them.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
     iter: Iter<'a>,
@@ -324,7 +331,7 @@ impl<'a> MixCursor<'a> {
 }
 
 /// The cursor of a `Shuffle`: a position counter; the child is read by random access.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ShuffleCursor<'a> {
     seed: u64,
     shape: Shape,

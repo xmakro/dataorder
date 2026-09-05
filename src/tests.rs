@@ -452,3 +452,26 @@ fn serde_round_trip() {
     let (a, b) = (Order::compile(seq).unwrap(), Order::compile(back).unwrap());
     assert!(a.iter(0..a.len()).map(|(s, i)| (*s, i)).eq(b.iter(0..b.len()).map(|(s, i)| (*s, i))));
 }
+
+#[test]
+fn cloned_cursor_continues_independently() {
+    let order = Order::compile(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).shard(1, 3)).unwrap();
+    let n = order.len();
+    let mut c = order.iter(0..n);
+    let head = ids(c.by_ref().take(100));
+    let d = c.clone();
+    let rest_c = ids(c);
+    let rest_d = ids(d);
+    assert_eq!(rest_c, rest_d);
+    assert_eq!([head, rest_c].concat(), ids(order.iter(0..n)));
+}
+
+#[test]
+fn types_are_send_and_sync() {
+    fn assert_send_sync<X: Send + Sync>() {}
+    assert_send_sync::<Seq<usize>>();
+    assert_send_sync::<Order<usize>>();
+    assert_send_sync::<Cursor<'static, usize>>();
+    assert_send_sync::<Error>();
+    assert_send_sync::<Sampling>();
+}
