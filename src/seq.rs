@@ -149,6 +149,11 @@ impl<T> Seq<T> {
     /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
     /// sequence together cover it exactly once, and shard `i` holds position `i` of every
     /// consecutive block of `count` positions.
+    ///
+    /// Over a mix, a shard still walks every element of the mix and keeps one in `count`,
+    /// so `count` workers sharding one mix do `count` times its interleaving work in total.
+    /// When that matters, shard the parts and mix the shards: each worker then interleaves
+    /// only its own share, with the same schedule.
     #[must_use]
     pub fn shard(self, index: usize, count: usize) -> Seq<T> {
         self.stride(count, index)

@@ -71,9 +71,13 @@
 //! sources, 16 ns with shuffled parts), a `Shuffle` one permutation (about 4.5 ns) plus a
 //! [`Order::get`]-style descent into its child (so a shuffle *over* a mix pays the
 //! interleave seek per element; shuffle the parts, not the mix), a `Stride` skips
-//! `step − 1` elements of its child (re-seeking a mix when that is cheaper). `Concat`,
-//! `Repeat`, `Skip` and `Take` add a few instructions. `cargo run --release --example bench`
-//! measures these; the README has the table and what was measured and kept or rejected.
+//! `step − 1` elements of its child (re-seeking a mix when that is cheaper), so sharding a
+//! mix across `count` workers costs `count` times its interleaving in total (shard the parts
+//! instead when that matters). `Concat`, `Repeat`, `Skip` and `Take` add a few instructions.
+//! Creating a cursor allocates one per node and seeks (about 50 µs for a mix of 1100 parts),
+//! and `get` on a mix seeks it too. `cargo run --release --example bench` measures these;
+//! the README has the table, `docs/optimization-notes.md` what was measured and kept or
+//! rejected.
 //!
 //! # Layout
 //!

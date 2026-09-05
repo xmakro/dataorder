@@ -92,8 +92,8 @@ impl<T> Order<T> {
     /// The element at `pos`: the source and the index in it.
     ///
     /// Constant work per node on the path, except that a [`Seq::Mix`] on the path costs a
-    /// seek of the interleave (`O(k log s)` for `k` parts, `s` scheduled). Use [`Order::iter`]
-    /// for consecutive positions.
+    /// seek of the interleave (`O(k log s)` for `k` parts, `s` scheduled, allocating two
+    /// vectors of `k` entries). Use [`Order::iter`] for consecutive positions.
     ///
     /// # Panics
     /// If `pos >= len()`.
@@ -106,6 +106,11 @@ impl<T> Order<T> {
 
     /// Iterates positions `range` in order; `iter(a..b)` yields exactly the elements
     /// `get(a)..get(b)`.
+    ///
+    /// Building the cursor allocates one cursor per node of the order (every part of every
+    /// mix included) and then seeks, which for a mix counts the elements before `a` in
+    /// each part: about 50 µs for a mix of 1100 parts. Walking is then a few nanoseconds
+    /// per element, so make cursors for long ranges rather than many short ones.
     ///
     /// # Panics
     /// If `range.end > len()` or `range.start > range.end`.
