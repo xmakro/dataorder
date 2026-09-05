@@ -154,9 +154,10 @@ impl Profile {
 
     /// The smallest `t` whose share is at least `y`. `hint` is the segment to try first and
     /// is updated: consecutive keys of a sequence mostly stay on one segment or move on to
-    /// the next, which costs one or two comparisons; any other hint (a seek starts every
-    /// sequence at segment 0) is a binary search over the shares, so that a seek of a mix
-    /// costs `O(log S)` per part in the number `S` of segments, not `O(S)`.
+    /// the next, and a seek starts every sequence at segment 0, so the hint is walked a few
+    /// segments (cheaper than a search on the profiles of a few segments a schedule has)
+    /// and searched beyond that (the uniform profile of a mix with many distinct schedules
+    /// has thousands), which makes a seek `O(log S)` per part in the number `S` of segments.
     ///
     /// Nondecreasing in `y` even under rounding: the segment index is monotone because
     /// shares are, the result is clamped to the segment, and inside a segment every operation
@@ -165,14 +166,20 @@ impl Profile {
     pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
         // The last segment whose share is at most `y`.
         let mut m = *hint;
-        let last = self.segs.len() - 1;
-        if y < self.segs[m].share {
-            m = self.shares.partition_point(|&share| share <= y).saturating_sub(1);
-        } else if m < last && y >= self.segs[m + 1].share {
-            if m + 1 == last || y < self.segs[m + 2].share {
+        // A few schedules' worth of segments: within it the walk is what it always was.
+        let mut budget = 16;
+        loop {
+            if m + 1 < self.segs.len() && y >= self.segs[m + 1].share {
                 m += 1;
+            } else if m > 0 && y < self.segs[m].share {
+                m -= 1;
             } else {
+                break;
+            }
+            budget -= 1;
+            if budget == 0 {
                 m = self.shares.partition_point(|&share| share <= y).saturating_sub(1);
+                break;
             }
         }
         *hint = m;
