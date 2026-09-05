@@ -94,11 +94,11 @@ over the parts' next elements, `⌈log2 k⌉` branch-free comparisons per elemen
 whatever was walked before, because the order is defined as a sort by keys that are monotone
 within a part by construction.
 
-| k | seek (uniform / 20% scheduled) | per element (uniform / scheduled) |
+| k | seek (uniform / 20% scheduled, 7 distinct starts / 20% scheduled, all starts distinct) | per element (same three) |
 |---|---|---|
-| 100 | 5 µs / 6 µs | 15 ns / 17 ns |
-| 1 000 | 54 µs / 75 µs | 20 ns / 23 ns |
-| 10 000 | 0.75 ms / 0.87 ms | 31 ns / 32 ns |
+| 100 | 2.8 µs / 4.8 µs / 6.0 µs | 10 ns / 13 ns / 12 ns |
+| 1 000 | 29 µs / 51 µs / 91 µs | 15 ns / 19 ns / 18 ns |
+| 10 000 | 0.44 ms / 0.62 ms / 1.24 ms | 22 ns / 29 ns / 26 ns |
 
 A mix is at most 2⁴⁶ long (`MAX_MIX_LEN`), and a scheduled part must satisfy
 `length × peak rate ≤ 2⁴⁶`. `cargo test --release -- --ignored --nocapture` runs this table
@@ -130,30 +130,30 @@ mixed together.
 
 | order | walk | seek | get |
 |---|---|---|---|
-| `mix(mix(1000 × shuffled, 2–4 epochs), mix(100 × same))` | 36.3 ns | 30.1 µs | 28.0 µs |
-| `source` | 1.4 ns | 0.02 µs | 3.0 ns |
-| `shuffle(source)` | 8.0 ns | 0.03 µs | 14.1 ns |
-| `shuffle(source 10⁶).repeat(1000)` | 8.4 ns | 0.04 µs | 17.4 ns |
-| `concat(100 × shuffle(source))` | 8.3 ns | 0.05 µs | 27.9 ns |
-| `shuffle(concat(100 × source))` | 18.1 ns | 0.04 µs | 25.8 ns |
-| `mix(5 × source)` | 7.1 ns | 0.19 µs | 138.3 ns |
-| `mix(80% source + 4 × 5% source)` | 7.3 ns | 0.19 µs | 152.2 ns |
-| `mix(60% shuffled + 9 × 4.4% shuffled)` | 20.5 ns | 0.35 µs | 279.9 ns |
-| `mix(100 × source)` | 10.6 ns | 2.08 µs | 1.9 µs |
-| `mix(100 × shuffled)` | 17.5 ns | 2.10 µs | 1.9 µs |
-| `mix(100 × shuffled, 20% scheduled)` | 22.9 ns | 4.12 µs | 3.9 µs |
-| `mix(1000 × shuffled, 20% scheduled)` | 28.4 ns | 37 µs | 36.8 µs |
-| `mix(100 × shuffled, 20% scheduled).shard(8, 0)` | 112.7 ns | 3.80 µs | 3.9 µs |
-| `mix(100 × shuffled, 20% scheduled).shard(512, 0)` | 4.3 µs | 7.71 µs | 3.9 µs |
-| `repeat(3, mix(3 nested)).shard(4, 1)` | 53.6 ns | 0.26 µs | 168.4 ns |
-| `mix(mix(100 × shuffled), mix(100 × shuffled))` | 22.7 ns | 2.21 µs | 2.0 µs |
-| `mix(mix(100 × shuffled), mix(100 × shuffled)).shard(8, 0)` | 104.4 ns | 2.28 µs | 2.0 µs |
-| `shuffle(mix(100 × source))` | 1.9 µs | 1.90 µs | 1.9 µs |
+| `mix(mix(1000 × shuffled, 2–4 epochs), mix(100 × same))` | 38.4 ns | 30 µs | 27.6 µs |
+| `source` | 1.4 ns | 0.02 µs | 3.1 ns |
+| `shuffle(source)` | 9.0 ns | 0.03 µs | 16.2 ns |
+| `shuffle(source 10⁶).repeat(1000)` | 9.2 ns | 0.04 µs | 19.4 ns |
+| `concat(100 × shuffle(source))` | 9.2 ns | 0.06 µs | 29.9 ns |
+| `shuffle(concat(100 × source))` | 20.3 ns | 0.05 µs | 29.1 ns |
+| `mix(5 × source)` | 6.9 ns | 0.19 µs | 142.7 ns |
+| `mix(80% source + 4 × 5% source)` | 7.3 ns | 0.18 µs | 155.2 ns |
+| `mix(60% shuffled + 9 × 4.4% shuffled)` | 22.3 ns | 0.36 µs | 284.0 ns |
+| `mix(100 × source)` | 10.5 ns | 2.07 µs | 1.9 µs |
+| `mix(100 × shuffled)` | 18.3 ns | 2.10 µs | 1.9 µs |
+| `mix(100 × shuffled, 20% scheduled)` | 24.2 ns | 4.04 µs | 3.8 µs |
+| `mix(1000 × shuffled, 20% scheduled)` | 29.5 ns | 37 µs | 36.4 µs |
+| `mix(100 × shuffled, 20% scheduled).shard(8, 0)` | 114.8 ns | 3.76 µs | 3.8 µs |
+| `mix(100 × shuffled, 20% scheduled).shard(512, 0)` | 4.3 µs | 7.58 µs | 3.8 µs |
+| `repeat(3, mix(3 nested)).shard(4, 1)` | 56.7 ns | 0.26 µs | 170.6 ns |
+| `mix(mix(100 × shuffled), mix(100 × shuffled))` | 23.6 ns | 2.23 µs | 2.0 µs |
+| `mix(mix(100 × shuffled), mix(100 × shuffled)).shard(8, 0)` | 106.0 ns | 2.27 µs | 2.0 µs |
+| `shuffle(mix(100 × source))` | 1.9 µs | 1.96 µs | 1.9 µs |
 
 `get` and a seek walk the path from the root to a source: constant work per node, except that
 a `Mix` costs a seek of the interleave (`O(k log s)` for `k` parts, `s` scheduled). A walk keeps a
 cursor per node on the active path: a `Mix` costs `⌈log2 k⌉` comparisons per element plus one
-key computation, a `Shuffle` one permutation (about 4.5 ns) plus a `get`-style descent into its
+key computation, a `Shuffle` one permutation (about 5.5 ns) plus a `get`-style descent into its
 child (its positions are scattered, so a shuffle *over* a mix pays the interleave seek per
 element: shuffle the parts, not the mix), a `Stride` skips `step − 1` elements of its child
 (a mix steps its interleave, or re-seeks it when that is cheaper, and its parts skip along, a

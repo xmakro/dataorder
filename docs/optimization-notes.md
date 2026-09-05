@@ -107,3 +107,29 @@ sessions):
 - The seek column of the README's table times `iter(pos..).next()`: the parts of a mix are
   entered on the first element, so `iter(pos..)` alone measured 0.1 µs for the realistic
   order where positioning costs 30 µs, about a `get`.
+
+## Fourth review (2026-09-05)
+
+Measured with the interleaved harness (base and new binaries alternating, ABBA order, min of
+three or four runs each, one core); an A/A run of the same binary against itself puts the noise
+at ±0.3 ns on most rows and ±1 ns on the realistic order.
+
+- A seek of a mix walked the profile's segments from segment 0 for every part, so with `S`
+  distinct schedule breakpoints among the parts it cost `O(k · S)`: 9.5 ms for a mix of 10 000
+  parts with 2000 distinct `delayed` starts, against 0.26 ms with one start. `quantile` now
+  walks its hint at most 16 segments and then searches the shares (kept contiguous alongside
+  the segment starts, so that the searches touch a few cache lines rather than one 72-byte
+  segment each): 1.17 ms, and the rows with a few distinct starts gained 5 to 7 % on seeks
+  and gets. The walk is unchanged, because a key moving to the next segment takes the same
+  comparisons as before. The README's interleave table has the new column.
+- The seventh Feistel round costs 0.9 ns per permuted element (bare shuffle 8.1 → 9.0 ns),
+  0.7 to 0.9 ns on mixes of shuffled sources and about 1.8 ns on the realistic order. Six
+  rounds left about one key in 300 with a visible structure in consecutive differences (a
+  64-bin chi-square at 5 to 47σ), at every size tried, not only at powers of two.
+- Measured and rejected: boxing the per-part cursor slots of a mix (16 bytes per part instead
+  of about 220, 3× less memory for a cursor over 100 000 parts) costs 0.5 to 1.5 ns per
+  element on every mix and 2.9 ns on a mix of mixes, one dependent load per level per element.
+- Nested strides now fold into one (a shard of a shard walked 3 ns per level slower), a slice
+  of a concatenation keeps only the parts it touches, and a prefix take of a repeat is the
+  repeat cut short (a weighted part is one node less deep); none of these is measurable on
+  the table's rows.
