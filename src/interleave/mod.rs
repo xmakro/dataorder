@@ -101,13 +101,14 @@ impl Interleave {
         Self::with_sampling(lens, &vec![Sampling::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
     }
 
-    /// Sequences of the given lengths and schedules. Zero lengths are allowed and their
-    /// schedule is ignored. Cost `O(k + s²)` for `s` scheduled sequences, independent of
-    /// the lengths.
+    /// Sequences of the given lengths and schedules (one per sequence). Zero lengths are
+    /// allowed and their schedule is ignored. Cost `O(k + s²)` for `s` scheduled sequences,
+    /// independent of the lengths.
+    ///
+    /// # Panics
+    /// If `lens` and `sampling` differ in length.
     pub fn with_sampling(lens: &[u64], sampling: &[Sampling]) -> Result<Self, SamplingError> {
-        if lens.len() != sampling.len() {
-            return Err(SamplingError::LengthMismatch);
-        }
+        assert_eq!(lens.len(), sampling.len(), "interleave: one schedule per sequence");
         let k = lens.len();
         let mut total: u64 = 0;
         for &n in lens {

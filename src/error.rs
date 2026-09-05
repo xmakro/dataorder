@@ -19,7 +19,7 @@ pub enum Error {
     /// A stride with `step == 0`.
     ZeroStep,
     /// The order is longer than `usize::MAX`, an intermediate length does not fit in 64 bits,
-    /// or there are more than 2³² sources.
+    /// there are more than 2³² sources, or a mix has 2³¹ parts or more.
     Overflow,
     /// The total length of a mix exceeds 2⁴⁶.
     MixTooLong,
@@ -67,7 +67,6 @@ impl From<SamplingError> for Error {
             SamplingError::InvalidParameter { seq, sampling } => Error::InvalidSampling { part: seq, sampling },
             SamplingError::TooSteep { seq } => Error::TooSteep { part: seq },
             SamplingError::Overcommitted { demand } => Error::Overcommitted { demand },
-            SamplingError::LengthMismatch => unreachable!("dataorder: a mix passes one schedule per part"),
         }
     }
 }

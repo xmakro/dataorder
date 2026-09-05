@@ -47,8 +47,6 @@ pub enum SamplingError {
     /// The scheduled sequences' final rates sum to `demand` (> 1) times the total draw
     /// rate, leaving nothing for the uniform sequences at the end.
     Overcommitted { demand: f64 },
-    /// Lengths and sampling slices differ in length.
-    LengthMismatch,
 }
 
 impl fmt::Display for SamplingError {
@@ -58,7 +56,6 @@ impl fmt::Display for SamplingError {
             Self::InvalidParameter { seq, sampling } => write!(f, "sequence {seq}: invalid {sampling:?}"),
             Self::TooSteep { seq } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
             Self::Overcommitted { demand } => write!(f, "scheduled sequences need {:.1}% of the draw rate at the end", demand * 100.0),
-            Self::LengthMismatch => write!(f, "lengths and sampling have different lengths"),
         }
     }
 }

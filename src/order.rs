@@ -204,6 +204,10 @@ impl<T: Dataset> Compiler<T> {
                 }
             }
             Seq::Mix(parts) => {
+                // The tournament tree indexes parts with u32 and needs a spare bit.
+                if parts.len() >= u32::MAX as usize / 2 {
+                    return Err(Error::Overflow);
+                }
                 let sampling: Vec<Sampling> = parts.iter().map(|(_, s)| *s).collect();
                 let children = parts.into_iter().map(|(p, _)| self.compile(p, depth)).collect::<Result<Vec<_>, _>>()?;
                 let lens: Vec<u64> = children.iter().map(Node::len).collect();

@@ -355,7 +355,6 @@ fn rejects_bad_configurations() {
     for bad in [DelayedLinear { start: 1.0, full: 1.0 }, DelayedLinear { start: -0.1, full: -0.1 }, DelayedLinear { start: f64::NAN, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.4 }, DelayedLinear { start: 1.0, full: 1.0 }, DelayedLinear { start: 0.2, full: 1.5 }] {
         assert!(matches!(Interleave::with_sampling(&[10, 10], &[Uniform, bad]), Err(InvalidParameter { seq: 1, .. })), "{bad:?}");
     }
-    assert_eq!(Interleave::with_sampling(&[10, 10], &[Uniform]).err(), Some(LengthMismatch));
     assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
     assert!(matches!(Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]), Err(TooSteep { seq: 1 })));
     // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
