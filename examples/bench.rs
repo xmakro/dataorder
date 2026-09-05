@@ -1,6 +1,7 @@
-//! Cost of typical orders: seek = `order.iter(pos..)` at a random position (positions a
-//! cursor, allocating it), walk = one element of that cursor after the seek, get =
-//! `order.get(pos)` at a random position.
+//! Cost of typical orders: seek = `order.iter(pos..).next()` at a random position (builds and
+//! positions a cursor and draws its first element, which is what enters the parts of a mix),
+//! walk = one element of that cursor after the seek, get = `order.get(pos)` at a random
+//! position.
 //! `cargo run --release --example bench`
 use dataorder::{Order, Sampling, Seq};
 use std::hint::black_box;
@@ -12,7 +13,7 @@ fn measure(name: &str, seq: Seq<usize>, count: usize) {
     let seeks = 200;
     let t = Instant::now();
     for i in 0..seeks {
-        let _ = black_box(order.iter(n / seeks * i + 1..));
+        let _ = black_box(order.iter(n / seeks * i + 1..).next());
     }
     let seek_us = t.elapsed().as_nanos() as f64 / seeks as f64 / 1000.0;
 
@@ -86,5 +87,8 @@ fn main() {
     .repeat(3)
     .shard(4, 1);
     measure("repeat(3, mix(3 nested)).shard(4, 1)", nested, m);
+    let two_mixes = || Seq::mix([Seq::mix(shuffled(100, m)), Seq::mix((100..200).map(|i| src(i, m).shuffle(i as u64 + 1)))]);
+    measure("mix(mix(100 × shuffled) × 2)", two_mixes(), 5 * m);
+    measure("mix(mix(100 × shuffled) × 2).shard(8, 0)", two_mixes().shard(8, 0), m);
     measure("shuffle(mix(100 × source 1e6))  [slow path]", Seq::mix((0..100).map(|i| src(i, m))).shuffle(9), 100_000);
 }

@@ -3,7 +3,9 @@
 An optimization round over the walk (2026-09-04), measured with `scripts/bench_campaign.py`:
 one core (`taskset`), minimum of two runs per row, on a Ryzen 9 9950X3D. Unpinned numbers on
 that machine scatter by ±20% between its two dies, which is why the harness pins. *walk
-before* is the crate before the round; everything else is the crate as published.
+before* is the crate before the round; everything else is the crate as published. *seek* here
+is `order.iter(pos..)` alone, which leaves the parts of a nested mix unentered (the first row's
+47 µs is the eager cursor of the time); the README's table now times the first element too.
 
 | order | walk before | walk after | seek | get |
 |---|---|---|---|---|
@@ -85,3 +87,23 @@ sessions):
   lengthens the dependency chain of every level; counting the repeat depth at run time while
   descending (it would have saved a compile-time pass) costs about 0.5 ns per element on
   shuffles. The depth stays in the node and weighted parts get a post-pass instead.
+
+## Third review (2026-09-05)
+
+- A shard of a nested mix re-seeked the inner mixes for every element it kept: the mix's
+  `skip` stepped the outer interleave and left the parts' cursors behind, and the mismatch on
+  the next draw *seeked* the part, a full interleave seek when the part is a mix. Now a part
+  that has been entered skips forward to its next index, and a long hop (which re-seeks the
+  outer interleave) leaves the parts where they are. The realistic order sharded eight ways
+  went from 27.8 µs to 0.23 µs per element, a mix of two 100-part mixes from 1.85 µs to
+  93 ns; flat mixes are unchanged. The hop at which a skip re-seeks the interleave instead of
+  stepping it is twice the number of parts for uniform mixes and four times with schedules:
+  at 100 parts a step costs 10 to 13 ns and a seek 1.8 µs uniform or 4.5 µs with a fifth of
+  the parts scheduled, so the break-even is about 1.7 and 3.6 parts.
+- Measured and reverted: a `u32` segment hint through the key computation (the tree's slot
+  already stores it as `u32`) cost 0.6 ns per element on mixes of 100 parts and 2.3 ns on the
+  realistic order in an interleaved three-way A/B (base, new, new with the hunk reverted);
+  the hint stays `usize` in the walk and is narrowed at the slot.
+- The seek column of the README's table times `iter(pos..).next()`: the parts of a mix are
+  entered on the first element, so `iter(pos..)` alone measured 0.1 µs for the realistic
+  order where positioning costs 30 µs, about a `get`.
