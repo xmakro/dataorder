@@ -65,10 +65,20 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
         Seq::Weighted { total, parts } => {
             let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
             let shares = crate::order::weighted_shares(*total as u64, &weights).unwrap();
-            parts.iter().zip(shares).filter(|(_, share)| *share > 0).for_each(|(p, _)| whole(&p.seq, out));
+            for (p, share) in parts.iter().zip(shares) {
+                cycled(&p.seq, share as usize, out);
+            }
         }
+        Seq::Cycle { len, inner } => cycled(inner, *len, out),
         Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::Stride { inner, .. } => whole(inner, out),
     }
+}
+
+/// [`salts`] of `seq` cycled to `len` positions: within one repetition a take, beyond it the
+/// whole sequence.
+fn cycled(seq: &Seq<Src>, len: usize, out: &mut Vec<(u64, u64)>) {
+    let n = eval(seq, 0).unwrap().len();
+    if len <= n { reachable(seq, 0..len, out) } else { salts(seq, out) }
 }
 
 fn src(id: u32, len: usize) -> Seq<Src> {
@@ -162,11 +172,16 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
                 if len == 0 && share > 0 {
                     return Err(at(ErrorKind::EmptyWeightedPart, &[i]));
                 }
-                let times = if len == 0 { 1 } else { (share as usize).div_ceil(len).max(1) };
-                let inner = if times > 1 { Seq::Repeat { times, inner: Box::new(part.seq.clone()) } } else { part.seq.clone() };
-                mixed.push((Seq::Take { n: share as usize, inner: Box::new(inner) }, part.sampling));
+                mixed.push((cycle_of(&part.seq, share as usize, len), part.sampling));
             }
             eval_at(&Seq::mix_with(mixed), ctx, depth)?
+        }
+        Seq::Cycle { len, inner } => {
+            let n = eval_at(inner, ctx, depth)?.len();
+            if n == 0 && *len > 0 {
+                return Err(root(ErrorKind::EmptyCycle));
+            }
+            eval_at(&cycle_of(inner, *len, n), ctx, depth)?
         }
         Seq::Shuffle { seed, inner } => {
             let v = eval_at(inner, ctx, depth)?;
@@ -209,13 +224,27 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
     })
 }
 
+/// A cycle in terms of repeat and take: `seq` (of length `n`) repeated as often as `len`
+/// positions need, then cut to `len`; a repetition only when there is more than one, so
+/// that the depth of the repeats inside is what the compiler gives them.
+fn cycle_of(seq: &Seq<Src>, len: usize, n: usize) -> Seq<Src> {
+    let times = if n == 0 { 0 } else { len.div_ceil(n) };
+    let inner = if times > 1 { Seq::Repeat { times, inner: Box::new(seq.clone()) } } else { seq.clone() };
+    Seq::Take { n: len, inner: Box::new(inner) }
+}
+
 fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
     if depth == 0 || rng.below(5) == 0 {
         let id = rng.below(lens.len());
         return src(id as u32, lens[id]);
     }
     let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens)).collect::<Vec<_>>();
-    match rng.below(9) {
+    match rng.below(10) {
+        9 => {
+            let inner = random_seq(rng, depth - 1, lens);
+            let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
+            inner.cycle(if n == 0 { 0 } else { rng.below(70) })
+        }
         8 => {
             // Empty parts in a mix, which must not affect the order (checked separately) and
             // must not break the walk.
@@ -531,6 +560,64 @@ fn errors() {
     assert_eq!((err.kind(), err.path()), (&ErrorKind::InvalidWeight { weight: -1.0 }, &[1, 1][..]));
     assert_eq!(err.to_string(), "invalid weight -1 (at node 1/1)");
     assert_eq!(Order::new(Seq::<Src>::weighted(5, [])).unwrap_err(), root(ErrorKind::ZeroWeights));
+    assert_eq!(Order::new(src(0, 0).cycle(5)).unwrap_err(), root(ErrorKind::EmptyCycle));
+    assert_eq!(Order::new(Seq::concat([src(0, 3), src(1, 0).cycle(5)])).unwrap_err(), at(ErrorKind::EmptyCycle, &[1]));
+    assert_eq!(Order::new(src(0, 5).take(6).cycle(5)).unwrap_err(), at(ErrorKind::TakeOutOfRange { n: 6, len: 5 }, &[0]));
+    assert_eq!(Order::new(src(0, 0).cycle(0)).unwrap().len(), 0);
+    assert_eq!(root(ErrorKind::EmptyCycle).to_string(), "cannot cycle a sequence without elements (at the root)");
+}
+
+/// A cycle is the repeat cut to length, with the repeats inside one level deeper only when
+/// it does repeat; a weighted part is a cycle; and a prefix of a repeat folds into it.
+#[test]
+fn cycles() {
+    use crate::order::Node;
+    let x = || src(0, 100).shuffle(3);
+    let all = ids(Order::new(x().repeat(4)).unwrap().iter(..));
+    for len in [0, 1, 99, 100, 101, 250, 400] {
+        let order = Order::new(x().cycle(len)).unwrap();
+        assert_eq!(order.len(), len);
+        assert_eq!(ids(order.iter(..)), all[..len], "cycle({len})");
+        assert_eq!(x().cycle(len).check(), Ok(len));
+        assert_eq!(ids(Order::new(x().repeat(4).take(len)).unwrap().iter(..)), all[..len]);
+    }
+    assert_eq!(ids(Order::new(x().cycle(99)).unwrap().iter(..)), ids(Order::new(x().take(99)).unwrap().iter(..)));
+    // The repeats inside move one level deeper exactly when the cycle repeats.
+    let y = || src(0, 10).shuffle(3).repeat(2);
+    assert_eq!(ids(Order::new(y().cycle(15)).unwrap().iter(..)), ids(Order::new(y()).unwrap().iter(..15)));
+    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter(..)), ids(Order::new(y().repeat(3)).unwrap().iter(..45)));
+    assert_ne!(ids(Order::new(y().cycle(45)).unwrap().iter(..))[..20], ids(Order::new(y()).unwrap().iter(..))[..]);
+    // A weighted part is a cycle of its share.
+    let w = Order::new(Seq::weighted(300, [(x(), 2.0), (src(1, 1000).shuffle(4), 1.0)])).unwrap();
+    let zeros: Vec<(u32, usize)> = ids(w.iter(..)).into_iter().filter(|e| e.0 == 0).collect();
+    assert_eq!(zeros, ids(Order::new(x().cycle(200)).unwrap().iter(..)));
+    // Node shapes: no slice above a repeat, a short cycle is a slice or the child.
+    let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
+    assert!(matches!(root(x().cycle(250)), Node::Repeat { child_len: 100, len: 250, .. }));
+    assert!(matches!(root(x().repeat(4).take(250)), Node::Repeat { child_len: 100, len: 250, .. }));
+    assert!(matches!(root(x().repeat(4).take(100)), Node::Shuffle { .. }));
+    assert!(matches!(root(x().cycle(7)), Node::Slice { start: 0, len: 7, .. }));
+    assert!(matches!(root(src(0, 100).cycle(7)), Node::Source { offset: 0, len: 7, .. }));
+    assert!(matches!(root(x().repeat(4).skip(1).take(250)), Node::Slice { start: 1, len: 250, .. }));
+    let Node::Mix { children, .. } = root(Seq::weighted(300, [(x(), 2.0), (src(1, 1000).shuffle(4), 1.0)])) else { panic!() };
+    assert!(matches!(children[0], Node::Repeat { child_len: 100, len: 200, .. }));
+    assert!(matches!(children[1], Node::Slice { start: 0, len: 100, .. }));
+    // An order that never runs out.
+    let endless = Order::new(x().cycle(usize::MAX)).unwrap();
+    assert_eq!(endless.len(), usize::MAX);
+    let last = usize::MAX - 1;
+    assert_eq!(ids(endless.iter(last..)), vec![(0, endless.get(last).1)]);
+    assert_eq!(ids(endless.iter(..300)), all[..300]);
+    // A cycle over a concatenation narrows it like a take, beyond one repetition it counts
+    // every part.
+    let base = ids(Order::new(src(0, 100).shuffle(1)).unwrap().iter(..));
+    assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(100).shuffle(1)).unwrap().iter(..)), base);
+    assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(200).shuffle(1)).unwrap().iter(..))[..100], base[..]);
+    // A weighted part that is a concatenation is narrowed to its share as well.
+    let part = || Seq::concat([src(0, 100), src(1, 50)]);
+    let narrowed = Order::new(Seq::weighted(150, [(part(), 1.0), (src(2, 75), 1.0)]).shuffle(1)).unwrap();
+    let plain = Order::new(Seq::weighted(150, [(src(0, 100).take(75), 1.0), (src(2, 75), 1.0)]).shuffle(1)).unwrap();
+    assert_eq!(ids(narrowed.iter(..)), ids(plain.iter(..)));
 }
 
 #[test]

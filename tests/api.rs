@@ -148,6 +148,7 @@ fn serde_round_trip() {
         r#"{"Weighted":{"total":9,"parts":[{"seq":{"Shuffle":{"seed":1,"inner":{"Source":4}}},"weight":0.5,"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}}"#
     );
     assert_eq!(serde_json::to_string(&Sampling::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
+    assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
     // Unknown fields are rejected in every variant.
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,

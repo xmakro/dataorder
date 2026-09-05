@@ -139,6 +139,8 @@ pub enum ErrorKind {
     ZeroWeights,
     /// A part of a weighted mix has a positive share but no elements.
     EmptyWeightedPart,
+    /// A `Cycle` of positive length over a sequence without elements.
+    EmptyCycle,
 }
 
 impl fmt::Display for ErrorKind {
@@ -159,6 +161,7 @@ impl fmt::Display for ErrorKind {
             Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
             Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
             Self::EmptyWeightedPart => write!(f, "weighted mix part has a share but no elements"),
+            Self::EmptyCycle => write!(f, "cannot cycle a sequence without elements"),
         }
     }
 }

@@ -4,8 +4,9 @@
 //! length) combined by [`Concat`](Seq::Concat), [`Mix`](Seq::Mix) (balanced,
 //! order-preserving interleaving with per-part sampling schedules, see [`Sampling`]) and
 //! [`Weighted`](Seq::Weighted) (a mix in given proportions, repeating and cutting the parts)
-//! and transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat), [`Skip`](Seq::Skip),
-//! [`Take`](Seq::Take) and [`Stride`](Seq::Stride). [`Order::new`] validates it and
+//! and transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat),
+//! [`Cycle`](Seq::Cycle), [`Skip`](Seq::Skip), [`Take`](Seq::Take) and
+//! [`Stride`](Seq::Stride). [`Order::new`] validates it and
 //! precomputes what iteration needs; the elements, `(&source, index in the source)`, are
 //! never materialized: [`Order::get`] computes any position and [`Order::iter`] walks any
 //! range.
@@ -53,6 +54,7 @@
 //! | `Weighted { total, parts }` | `total` | the mix of each part repeated and cut to `round(wᵢ/Σw · total)` |
 //! | `Shuffle { seed, inner }` | `n` | `perm_seed(p)` of `inner` |
 //! | `Repeat { times, inner }` | `times·n` | `p mod n` of `inner`, in the context of epoch `p div n` |
+//! | `Cycle { len, inner }` | `len` | `p mod n` of `inner`, in the context of epoch `p div n` |
 //! | `Skip { n, inner }` | `len − n` | `n + p` of `inner` |
 //! | `Take { n, inner }` | `n` | `p` of `inner` |
 //! | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉`, or 0 | `offset + p·step` of `inner` |
@@ -72,7 +74,7 @@
 //! Everything is deterministic in the configuration and the order's seed, and `iter(a..b)`
 //! yields exactly `get(a)..get(b)` whatever was iterated before.
 //!
-//! Compilation rejects skips and takes past the end, zero strides, orders longer than
+//! Compilation rejects skips and takes past the end, cycles of an empty sequence, zero strides, orders longer than
 //! `usize::MAX` (and intermediate lengths beyond 64 bits), invalid or overcommitted
 //! schedules, invalid weights, mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
 //! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node. Two
@@ -81,8 +83,8 @@
 //! part of a mix does not affect the order of the others, nor does an empty source or part
 //! the shuffles above it), skips and takes merge into sources, slices and strides and narrow
 //! a concatenation to the parts they touch, nested strides merge, a mix with a single
-//! non-empty part is that part, a shuffle of at most one element is that element, and a
-//! single repetition is the sequence.
+//! non-empty part is that part, a shuffle of at most one element is that element, a single
+//! repetition is the sequence, and a cycle within one repetition is a take.
 //!
 //! A schedule is relative to the mix it belongs to, so `mix.repeat(n)` restarts every
 //! schedule in each repetition; to schedule over a whole run of several epochs, repeat the

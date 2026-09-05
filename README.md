@@ -36,7 +36,8 @@ fn main() -> Result<(), dataorder::Error> {
 Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with`,
 `Seq::weighted(total, [(seq, weight), …])` and `Seq::weighted_with` (each part is repeated and
 cut to its share of `total`, epochs reshuffled), and on a `Seq`: `.shuffle(seed)`,
-`.repeat(times)`, `.slice(range)`, `.take(n)`, `.skip(n)`, `.stride(step, offset)`,
+`.repeat(times)`, `.cycle(len)` (repeated as often as `len` positions need and cut there;
+`cycle(usize::MAX)` never runs out), `.slice(range)`, `.take(n)`, `.skip(n)`, `.stride(step, offset)`,
 `.shard(count, index)`, `.map(f)` and `.try_map(f)` (the same structure over other sources:
 handles become loaded datasets), `.check()` (validate and get the length without building the
 order). `Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once;

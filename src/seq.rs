@@ -49,11 +49,11 @@ pub enum Seq<T> {
     Mix(Vec<MixPart<T>>),
     /// The parts mixed in the proportions of their weights, `total` elements in all: part `i`
     /// contributes `round(wᵢ / Σw · total)` elements (the largest remainders take the
-    /// rounding up, so the counts sum to `total`), repeated as often as needed (reshuffling
-    /// any shuffle inside for each repetition) and cut to that count, then mixed like
-    /// [`Mix`](Seq::Mix) with the parts' schedules. Weights must be finite and nonnegative
-    /// with a positive sum, a part with a positive share must have elements, and `total` is
-    /// limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN) like any mix.
+    /// rounding up, so the counts sum to `total`), [cycled](Seq::Cycle) to that count
+    /// (repeated as often as needed, reshuffling any shuffle inside for each repetition, and
+    /// cut there), then mixed like [`Mix`](Seq::Mix) with the parts' schedules. Weights must
+    /// be finite and nonnegative with a positive sum, a part with a positive share must have
+    /// elements, and `total` is limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN) like any mix.
     Weighted {
         /// Length of the order.
         total: usize,
@@ -80,6 +80,17 @@ pub enum Seq<T> {
         /// Number of repetitions.
         times: usize,
         /// The sequence to repeat.
+        inner: Box<Self>,
+    },
+    /// `inner` repeated as often as `len` positions need and cut there: like
+    /// [`Repeat`](Seq::Repeat), the first time as it is and reshuffled at every shuffle
+    /// inside for each further repetition, the last repetition cut short. `x.cycle(n)` with
+    /// `n` at most the length of `x` is `x.take(n)`, and `x.cycle(usize::MAX)` is an order
+    /// that never runs out. A positive `len` over a sequence without elements is an error.
+    Cycle {
+        /// Length of the sequence.
+        len: usize,
+        /// The sequence to repeat and cut.
         inner: Box<Self>,
     },
     /// `inner` without its first `n` positions. Skipping more than there are is an error
@@ -298,6 +309,26 @@ impl<T> Seq<T> {
         Self::Repeat { times, inner: Box::new(self) }
     }
 
+    /// This sequence repeated as often as `len` positions need and cut there: `len`
+    /// positions of `self.repeat(∞)`, whatever the length of `self`; see
+    /// [`Cycle`](Seq::Cycle). `cycle(usize::MAX)` never runs out.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(1000).shuffle(1).cycle(2500))?;
+    /// assert_eq!(order.len(), 2500);
+    /// let epochs = Order::new(Seq::source(1000).shuffle(1).repeat(3))?;
+    /// assert!(order.iter(..).eq(epochs.iter(..2500)));
+    /// let endless = Order::new(Seq::source(1000).shuffle(1).cycle(usize::MAX))?;
+    /// assert_eq!(endless.len(), usize::MAX);
+    /// assert!(endless.get(usize::MAX - 1).1 < 1000);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    #[must_use]
+    pub fn cycle(self, len: usize) -> Self {
+        Self::Cycle { len, inner: Box::new(self) }
+    }
+
     /// The positions in `range` of this sequence: a [`Skip`](Seq::Skip) of its start and a
     /// [`Take`](Seq::Take) of its length, either omitted when trivial.
     ///
@@ -451,6 +482,7 @@ impl<T> Seq<T> {
                 Self::Weighted { parts, .. } => stack.extend(parts.into_iter().map(|p| p.seq)),
                 Self::Shuffle { inner, .. }
                 | Self::Repeat { inner, .. }
+                | Self::Cycle { inner, .. }
                 | Self::Skip { inner, .. }
                 | Self::Take { inner, .. }
                 | Self::Stride { inner, .. } => stack.push(*inner),
@@ -474,6 +506,7 @@ impl<T> Seq<T> {
             },
             Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.try_map_with(f)?) },
             Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.try_map_with(f)?) },
+            Self::Cycle { len, inner } => Seq::Cycle { len, inner: Box::new(inner.try_map_with(f)?) },
             Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.try_map_with(f)?) },
             Self::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.try_map_with(f)?) },
             Self::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.try_map_with(f)?) },
@@ -524,6 +557,7 @@ impl<T: Source> Seq<T> {
             },
             Self::Shuffle { seed, inner: i } => Seq::Shuffle { seed: *seed, inner: inner(i) },
             Self::Repeat { times, inner: i } => Seq::Repeat { times: *times, inner: inner(i) },
+            Self::Cycle { len, inner: i } => Seq::Cycle { len: *len, inner: inner(i) },
             Self::Skip { n, inner: i } => Seq::Skip { n: *n, inner: inner(i) },
             Self::Take { n, inner: i } => Seq::Take { n: *n, inner: inner(i) },
             Self::Stride { step, offset, inner: i } => Seq::Stride { step: *step, offset: *offset, inner: inner(i) },
