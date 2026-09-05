@@ -369,9 +369,15 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert!(alike(&w[..1000], &w[1000..2000]) < 10);
     assert!(alike(&w[..999], &w[2000..]) < 10);
     assert!(alike(&w[1000..1999], &w[2000..]) < 10);
-    // The order's seed changes every shuffle.
+    // The order's seed changes every shuffle, whether given at construction or set later.
     let reseeded = Order::with_seed(seq, 99).unwrap();
     assert_ne!(ids(reseeded.iter(0..1000)), ids(order.iter(0..1000)));
+    let mut later = order.clone();
+    later.set_seed(99);
+    assert_eq!(later.seed(), 99);
+    assert_eq!(ids(later.iter(..)), ids(reseeded.iter(..)));
+    later.set_seed(0);
+    assert_eq!(ids(later.iter(..)), ids(order.iter(..)));
 }
 
 #[test]

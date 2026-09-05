@@ -95,7 +95,8 @@ impl<T: Source> Order<T> {
     }
 
     /// The order of `seq` with the given `seed`, which reseeds every shuffle in it at once;
-    /// shuffles keep their relative distinctness from their own seeds.
+    /// shuffles keep their relative distinctness from their own seeds. An existing order is
+    /// reseeded for free with [`Order::set_seed`].
     ///
     /// # Errors
     /// As for [`Order::new`].
@@ -122,10 +123,27 @@ impl<T> Order<T> {
         self.len() == 0
     }
 
-    /// The seed given to [`Order::with_seed`] (0 for [`Order::new`]).
+    /// The seed given to [`Order::with_seed`] or [`Order::set_seed`] (0 for [`Order::new`]).
     #[must_use]
     pub fn seed(&self) -> u64 {
         self.ctx
+    }
+
+    /// Reseeds every shuffle at once, as [`Order::with_seed`] does, without rebuilding
+    /// anything: the seed enters only the keys derived while iterating. Cursors made before
+    /// keep the old seed.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let seq = Seq::source(100).shuffle(1);
+    /// let mut order = Order::new(seq.clone())?;
+    /// order.set_seed(7);
+    /// let reseeded = Order::with_seed(seq, 7)?;
+    /// assert!(order.iter(..).eq(reseeded.iter(..)));
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    pub fn set_seed(&mut self, seed: u64) {
+        self.ctx = seed;
     }
 
     /// The sources, in order of appearance in the configuration.

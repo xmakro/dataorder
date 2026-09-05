@@ -39,7 +39,7 @@ cut to its share of `total`, epochs reshuffled), and on a `Seq`: `.shuffle(seed)
 `.repeat(times)`, `.slice(range)`, `.take(n)`, `.skip(n)`, `.stride(step, offset)`,
 `.shard(count, index)`, `.map(f)` (the same structure over other sources: handles become loaded
 datasets), `.check()` (validate and get the length without building the order).
-`Order::with_seed(seq, seed)` reseeds every shuffle at once. A `Seq` is plain data (clone,
+`Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once. A `Seq` is plain data (clone,
 compare, hash; the `serde` feature derives `Serialize` and `Deserialize`); building the order
 consumes it, and the order owns the sources, yields references to them and gives them back with
 `into_sources`. A bare `usize` is a source too, when only the order matters, as are slices and
