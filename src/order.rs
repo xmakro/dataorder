@@ -68,18 +68,23 @@ impl<T: Dataset> Order<T> {
         }
         Ok(Order { root, ctx: seed, sources: c.sources })
     }
+}
 
+impl<T> Order<T> {
     /// Number of elements.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.root.len() as usize
     }
 
     /// `true` when there are no elements.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// The sources, in order of appearance in the configuration.
+    #[must_use]
     pub fn sources(&self) -> &[T] {
         &self.sources
     }
@@ -92,6 +97,7 @@ impl<T: Dataset> Order<T> {
     ///
     /// # Panics
     /// If `pos >= len()`.
+    #[must_use]
     pub fn get(&self, pos: usize) -> (&T, usize) {
         assert!(pos < self.len(), "dataorder: position {pos} out of range");
         let (s, i) = get(&self.root, pos as u64, self.ctx);

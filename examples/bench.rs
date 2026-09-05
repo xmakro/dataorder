@@ -12,7 +12,7 @@ fn measure(name: &str, seq: Seq<usize>, count: usize) {
     let seeks = 200;
     let t = Instant::now();
     for i in 0..seeks {
-        black_box(order.iter_from(n / seeks * i + 1));
+        let _ = black_box(order.iter_from(n / seeks * i + 1));
     }
     let seek_us = t.elapsed().as_nanos() as f64 / seeks as f64 / 1000.0;
 

@@ -58,31 +58,37 @@ pub enum Seq<T> {
 
 impl<T> Seq<T> {
     /// The elements of `source`, in order.
+    #[must_use]
     pub fn source(source: T) -> Seq<T> {
         Seq::Source(source)
     }
 
     /// The parts one after another.
+    #[must_use]
     pub fn concat(parts: impl IntoIterator<Item = Seq<T>>) -> Seq<T> {
         Seq::Concat(parts.into_iter().collect())
     }
 
     /// The parts interleaved, all [`Sampling::Uniform`].
+    #[must_use]
     pub fn mix(parts: impl IntoIterator<Item = Seq<T>>) -> Seq<T> {
         Seq::Mix(parts.into_iter().map(|p| (p, Sampling::Uniform)).collect())
     }
 
     /// The parts interleaved, each with its own schedule.
+    #[must_use]
     pub fn mix_with(parts: impl IntoIterator<Item = (Seq<T>, Sampling)>) -> Seq<T> {
         Seq::Mix(parts.into_iter().collect())
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
+    #[must_use]
     pub fn shuffle(self, seed: u64) -> Seq<T> {
         Seq::Shuffle { seed, inner: Box::new(self) }
     }
 
     /// This sequence `times` times over: itself, then reshuffled for each further time.
+    #[must_use]
     pub fn repeat(self, times: usize) -> Seq<T> {
         Seq::Repeat { times, inner: Box::new(self) }
     }
@@ -92,6 +98,7 @@ impl<T> Seq<T> {
     /// # Panics
     /// If a bound is `usize::MAX` where one more would be needed (an exclusive start or an
     /// inclusive end at `usize::MAX`).
+    #[must_use]
     pub fn slice(self, range: impl RangeBounds<usize>) -> Seq<T> {
         let bump = |x: usize| x.checked_add(1).expect("dataorder: slice bound overflows usize");
         let start = match range.start_bound() {
@@ -108,16 +115,19 @@ impl<T> Seq<T> {
     }
 
     /// The first `n` positions.
+    #[must_use]
     pub fn take(self, n: usize) -> Seq<T> {
         self.slice(..n)
     }
 
     /// Everything after the first `n` positions.
+    #[must_use]
     pub fn skip(self, n: usize) -> Seq<T> {
         self.slice(n..)
     }
 
     /// Every `step`-th position starting at `offset`.
+    #[must_use]
     pub fn stride(self, step: usize, offset: usize) -> Seq<T> {
         Seq::Stride { step, offset, inner: Box::new(self) }
     }
@@ -125,12 +135,14 @@ impl<T> Seq<T> {
     /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
     /// sequence together cover it exactly once, and shard `i` holds position `i` of every
     /// consecutive block of `count` positions.
+    #[must_use]
     pub fn shard(self, index: usize, count: usize) -> Seq<T> {
         self.stride(count, index)
     }
 
     /// The same expression over the sources mapped by `f`, in order of appearance: a
     /// configuration over handles becomes one over loaded datasets.
+    #[must_use]
     pub fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Seq<U> {
         self.map_with(&mut f)
     }

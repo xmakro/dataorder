@@ -16,6 +16,7 @@ use std::ops::Range;
 /// Iterator over a range of an [`Order`], returned by [`Order::iter`]; yields
 /// `(&source, index in the source)`.
 #[derive(Debug)]
+#[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     sources: &'a [T],
     root: NodeCursor<'a>,
@@ -35,11 +36,13 @@ impl<'a, T> Cursor<'a, T> {
     }
 
     /// Position of the next element.
+    #[must_use]
     pub fn position(&self) -> usize {
         self.pos as usize
     }
 
     /// Elements left until the end of the range.
+    #[must_use]
     pub fn remaining(&self) -> usize {
         (self.end - self.pos) as usize
     }
