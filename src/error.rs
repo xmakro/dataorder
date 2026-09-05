@@ -7,13 +7,18 @@ use std::fmt;
 /// Why a configuration was rejected by [`Order::compile`](crate::Order::compile).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
-    /// A slice's `start..end` does not fit in the `len` of its inner sequence.
-    SliceOutOfRange {
-        /// First position of the slice.
-        start: usize,
-        /// One past its last position.
-        end: usize,
-        /// Length of the sliced sequence.
+    /// A `Skip` of `n` positions from a sequence of `len < n`.
+    SkipOutOfRange {
+        /// Positions to skip.
+        n: usize,
+        /// Length of the sequence.
+        len: usize,
+    },
+    /// A `Take` of `n` positions from a sequence of `len < n`.
+    TakeOutOfRange {
+        /// Positions to take.
+        n: usize,
+        /// Length of the sequence.
         len: usize,
     },
     /// A stride with `step == 0`.
@@ -47,7 +52,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SliceOutOfRange { start, end, len } => write!(f, "slice {start}..{end} out of range for length {len}"),
+            Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
+            Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
             Self::ZeroStep => write!(f, "stride step is zero"),
             Self::Overflow => write!(f, "order longer than usize::MAX, or a length beyond 64 bits"),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),

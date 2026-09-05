@@ -242,15 +242,21 @@ impl<T: Dataset> Compiler<T> {
                     Node::Repeat { times, child_len, depth, child: Box::new(child) }
                 }
             }
-            Seq::Slice { start, end, inner } => {
+            Seq::Skip { n, inner } => {
                 let child = self.compile(*inner, depth)?;
                 let len = child.len();
-                let (start, end) = (start as u64, end.map_or(len, |e| e as u64));
-                if start > end || end > len {
-                    let clamp = |x: u64| usize::try_from(x).unwrap_or(usize::MAX);
-                    return Err(Error::SliceOutOfRange { start: clamp(start), end: clamp(end), len: clamp(len) });
+                if n as u64 > len {
+                    return Err(Error::SkipOutOfRange { n, len: usize::try_from(len).unwrap_or(usize::MAX) });
                 }
-                slice(child, start, end - start)
+                slice(child, n as u64, len - n as u64)
+            }
+            Seq::Take { n, inner } => {
+                let child = self.compile(*inner, depth)?;
+                let len = child.len();
+                if n as u64 > len {
+                    return Err(Error::TakeOutOfRange { n, len: usize::try_from(len).unwrap_or(usize::MAX) });
+                }
+                slice(child, 0, n as u64)
             }
             Seq::Stride { step, offset, inner } => {
                 if step == 0 {

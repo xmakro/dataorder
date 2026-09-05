@@ -84,13 +84,19 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             }
             out
         }
-        Seq::Slice { start, end, inner } => {
+        Seq::Skip { n, inner } => {
             let v = eval_at(inner, ctx, depth)?;
-            let end = end.unwrap_or(v.len());
-            if *start > end || end > v.len() {
-                return Err(Error::SliceOutOfRange { start: *start, end, len: v.len() });
+            if *n > v.len() {
+                return Err(Error::SkipOutOfRange { n: *n, len: v.len() });
             }
-            v[*start..end].to_vec()
+            v[*n..].to_vec()
+        }
+        Seq::Take { n, inner } => {
+            let v = eval_at(inner, ctx, depth)?;
+            if *n > v.len() {
+                return Err(Error::TakeOutOfRange { n: *n, len: v.len() });
+            }
+            v[..*n].to_vec()
         }
         Seq::Stride { step, offset, inner } => {
             if *step == 0 {
@@ -148,6 +154,7 @@ fn random_configurations_match_reference() {
     for round in 0..600 {
         let seq = random_seq(&mut rng, 4, &lens);
         let seed = rng.next();
+        assert_eq!(seq.check(), Order::compile(seq.clone()).map(|o| o.len()), "round {round}: check");
         let order = match Order::compile_seeded(seq.clone(), seed) {
             Ok(o) => o,
             Err(e) if e.is_sampling() => {
@@ -289,9 +296,11 @@ fn map_keeps_the_order() {
 #[test]
 fn errors() {
     let a = src(0, 10);
-    assert_eq!(Order::compile(a.clone().slice(3..12)).unwrap_err(), Error::SliceOutOfRange { start: 3, end: 12, len: 10 });
-    let reversed = Seq::Slice { start: 5, end: Some(3), inner: Box::new(a.clone()) };
-    assert_eq!(Order::compile(reversed).unwrap_err(), Error::SliceOutOfRange { start: 5, end: 3, len: 10 });
+    assert_eq!(Order::compile(a.clone().slice(3..12)).unwrap_err(), Error::TakeOutOfRange { n: 9, len: 7 });
+    assert_eq!(Order::compile(a.clone().skip(11)).unwrap_err(), Error::SkipOutOfRange { n: 11, len: 10 });
+    assert_eq!(Order::compile(a.clone().take(11)).unwrap_err(), Error::TakeOutOfRange { n: 11, len: 10 });
+    assert_eq!(Order::compile(a.clone().slice(2..=9)).unwrap().len(), 8);
+    assert_eq!(Order::compile(a.clone().slice(10..)).unwrap().len(), 0);
     assert_eq!(Order::compile(a.clone().stride(0, 0)).unwrap_err(), Error::ZeroStep);
     assert_eq!(Order::compile(a.clone().repeat(usize::MAX)).unwrap_err(), Error::Overflow);
     assert_eq!(Order::compile(Seq::concat([a.clone().repeat(usize::MAX / 10), a.clone()])).unwrap_err(), Error::Overflow);
@@ -300,6 +309,13 @@ fn errors() {
     // A mix that folds away is still validated.
     let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(Order::compile(over1).unwrap_err(), Error::InvalidSampling { part: 0, sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } });
+}
+
+#[test]
+#[should_panic(expected = "slice end before start")]
+#[allow(clippy::reversed_empty_ranges)]
+fn reversed_slice_panics() {
+    let _ = src(0, 10).slice(5..3);
 }
 
 #[test]

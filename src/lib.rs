@@ -3,8 +3,8 @@
 //! A [`Seq`] is a tree: [`Source`](Seq::Source) leaves (anything that is a [`Dataset`]: a
 //! length) combined by [`Concat`](Seq::Concat) and [`Mix`](Seq::Mix) (balanced,
 //! order-preserving interleaving with per-part sampling schedules, see [`Sampling`]) and
-//! transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat), [`Slice`](Seq::Slice)
-//! and [`Stride`](Seq::Stride). [`Order::compile`] checks it and precomputes what iteration
+//! transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat), [`Skip`](Seq::Skip),
+//! [`Take`](Seq::Take) and [`Stride`](Seq::Stride). [`Order::compile`] checks it and precomputes what iteration
 //! needs; the elements, `(&source, index in the source)`, are never materialized:
 //! [`Order::get`] computes any position and [`Order::iter`] walks any range.
 //!
@@ -48,7 +48,8 @@
 //! | `Mix(parts)` | sum | what the interleave of the parts' lengths puts at `p` |
 //! | `Shuffle { seed, inner }` | `n` | `perm_seed(p)` of `inner` |
 //! | `Repeat { times, inner }` | `times·n` | `p mod n` of `inner`, in the context of epoch `p div n` |
-//! | `Slice { start, end, inner }` | `end − start` | `start + p` of `inner` |
+//! | `Skip { n, inner }` | `len − n` | `n + p` of `inner` |
+//! | `Take { n, inner }` | `n` | `p` of `inner` |
 //! | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉` | `offset + p·step` of `inner` |
 //!
 //! Shuffles are seeded permutations of `0..n` (a keyed six-round Feistel network with cycle
@@ -70,7 +71,7 @@
 //! [`Order::get`]-style descent into its child (so a shuffle *over* a mix pays the
 //! interleave seek per element; shuffle the parts, not the mix), a `Stride` skips
 //! `step − 1` elements of its child (re-seeking a mix when that is cheaper). `Concat`,
-//! `Repeat` and `Slice` add a few instructions. `cargo run --release --example bench`
+//! `Repeat`, `Skip` and `Take` add a few instructions. `cargo run --release --example bench`
 //! measures these; the README has the table and what was measured and kept or rejected.
 //!
 //! # Layout

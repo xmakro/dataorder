@@ -1,7 +1,7 @@
 //! The configuration: a tree of sequence expressions over sources, built by hand or with
 //! the builder methods on [`Seq`].
 
-use crate::Sampling;
+use crate::{Dataset, Error, Order, Sampling};
 use std::ops::{Bound, RangeBounds};
 
 /// A sequence expression over sources of type `T` (anything that is a
@@ -35,13 +35,21 @@ pub enum Seq<T> {
         /// The sequence to repeat.
         inner: Box<Seq<T>>,
     },
-    /// Positions `start..end` of `inner`; `end = None` means up to the end.
-    Slice {
-        /// First position kept.
-        start: usize,
-        /// One past the last position kept, or `None` for the end of `inner`.
-        end: Option<usize>,
-        /// The sequence to slice.
+    /// `inner` without its first `n` positions. Skipping more than there are is an error at
+    /// compile time, unlike `Iterator::skip`: configurations are validated, and a silently
+    /// empty sequence hides a mistake.
+    Skip {
+        /// Positions dropped from the front.
+        n: usize,
+        /// The sequence to skip into.
+        inner: Box<Seq<T>>,
+    },
+    /// The first `n` positions of `inner`. Taking more than there are is an error at compile
+    /// time, unlike `Iterator::take`.
+    Take {
+        /// Positions kept.
+        n: usize,
+        /// The sequence to take from.
         inner: Box<Seq<T>>,
     },
     /// Positions `offset, offset + step, offset + 2·step, …` of `inner`: shard `offset` of
@@ -93,11 +101,12 @@ impl<T> Seq<T> {
         Seq::Repeat { times, inner: Box::new(self) }
     }
 
-    /// The positions in `range` of this sequence.
+    /// The positions in `range` of this sequence: a [`Skip`](Seq::Skip) of its start and a
+    /// [`Take`](Seq::Take) of its length, either omitted when trivial.
     ///
     /// # Panics
-    /// If a bound is `usize::MAX` where one more would be needed (an exclusive start or an
-    /// inclusive end at `usize::MAX`).
+    /// If the range's end lies before its start, or a bound is `usize::MAX` where one more
+    /// would be needed (an exclusive start or an inclusive end at `usize::MAX`).
     #[must_use]
     pub fn slice(self, range: impl RangeBounds<usize>) -> Seq<T> {
         let bump = |x: usize| x.checked_add(1).expect("dataorder: slice bound overflows usize");
@@ -111,19 +120,23 @@ impl<T> Seq<T> {
             Bound::Excluded(&e) => Some(e),
             Bound::Unbounded => None,
         };
-        Seq::Slice { start, end, inner: Box::new(self) }
+        let skipped = if start == 0 { self } else { self.skip(start) };
+        match end {
+            Some(end) => skipped.take(end.checked_sub(start).expect("dataorder: slice end before start")),
+            None => skipped,
+        }
     }
 
-    /// The first `n` positions.
+    /// The first `n` positions (an error at compile time if there are fewer).
     #[must_use]
     pub fn take(self, n: usize) -> Seq<T> {
-        self.slice(..n)
+        Seq::Take { n, inner: Box::new(self) }
     }
 
-    /// Everything after the first `n` positions.
+    /// Everything after the first `n` positions (an error at compile time if there are fewer).
     #[must_use]
     pub fn skip(self, n: usize) -> Seq<T> {
-        self.slice(n..)
+        Seq::Skip { n, inner: Box::new(self) }
     }
 
     /// Every `step`-th position starting at `offset`.
@@ -154,8 +167,34 @@ impl<T> Seq<T> {
             Seq::Mix(parts) => Seq::Mix(parts.into_iter().map(|(p, s)| (p.map_with(f), s)).collect()),
             Seq::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.map_with(f)) },
             Seq::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.map_with(f)) },
-            Seq::Slice { start, end, inner } => Seq::Slice { start, end, inner: Box::new(inner.map_with(f)) },
+            Seq::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.map_with(f)) },
+            Seq::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.map_with(f)) },
             Seq::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.map_with(f)) },
+        }
+    }
+}
+
+impl<T: Dataset> Seq<T> {
+    /// Validates the configuration and returns the length of its order, without consuming
+    /// it: the checks of [`Order::compile`], over the sources' lengths.
+    ///
+    /// # Errors
+    /// Whatever [`Order::compile`] would report.
+    pub fn check(&self) -> Result<usize, Error> {
+        Order::compile(self.lens()).map(|o| o.len())
+    }
+
+    /// The same expression over the sources' lengths.
+    fn lens(&self) -> Seq<usize> {
+        match self {
+            Seq::Source(t) => Seq::Source(t.len()),
+            Seq::Concat(parts) => Seq::Concat(parts.iter().map(Seq::lens).collect()),
+            Seq::Mix(parts) => Seq::Mix(parts.iter().map(|(p, s)| (p.lens(), *s)).collect()),
+            Seq::Shuffle { seed, inner } => Seq::Shuffle { seed: *seed, inner: Box::new(inner.lens()) },
+            Seq::Repeat { times, inner } => Seq::Repeat { times: *times, inner: Box::new(inner.lens()) },
+            Seq::Skip { n, inner } => Seq::Skip { n: *n, inner: Box::new(inner.lens()) },
+            Seq::Take { n, inner } => Seq::Take { n: *n, inner: Box::new(inner.lens()) },
+            Seq::Stride { step, offset, inner } => Seq::Stride { step: *step, offset: *offset, inner: Box::new(inner.lens()) },
         }
     }
 }

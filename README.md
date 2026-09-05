@@ -3,7 +3,7 @@
 Deterministic, seekable data order for training, without materializing anything. A `Seq<T>` is
 a tree of sequence expressions over `Source` leaves (any `T` that is a `Dataset`: something with
 a length): `Concat`, `Mix` (balanced, order-preserving interleaving with per-part sampling
-schedules), `Shuffle`, `Repeat`, `Slice` and `Stride`. `Order::compile` validates it and
+schedules), `Shuffle`, `Repeat`, `Skip`, `Take` and `Stride`. `Order::compile` validates it and
 precomputes what iteration needs; elements, `(&source, index in the source)`, are never
 materialized: `get` computes any position, `iter` walks any range.
 
@@ -30,7 +30,8 @@ let (shard, index) = order.get(1005);
 Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with`, and on a
 `Seq`: `.shuffle(seed)`, `.repeat(times)`, `.slice(range)`, `.take(n)`, `.skip(n)`,
 `.stride(step, offset)`, `.shard(index, count)`, `.map(f)` (the same structure over other
-sources: handles become loaded datasets). `Order::compile_seeded(seq, seed)` reseeds every
+sources: handles become loaded datasets), `.check()` (validate and get the length without
+compiling). `Order::compile_seeded(seq, seed)` reseeds every
 shuffle at once. A `Seq` is plain data (clone, compare, serialize with your own `T`); compiling
 consumes it, and the order owns the sources and yields references to them. A bare `usize` is
 a source too, when only the order matters. Lengths and positions are `usize` at the interface
@@ -47,7 +48,8 @@ Every node maps its positions to positions of its children:
 | `Mix(parts)` | sum | what the interleave of the parts' lengths puts at `p` |
 | `Shuffle { seed, inner }` | `n` | `perm_seed(p)` of `inner` |
 | `Repeat { times, inner }` | `times·n` | `p mod n` of `inner`, in the context of epoch `p div n` |
-| `Slice { start, end, inner }` | `end − start` | `start + p` of `inner` |
+| `Skip { n, inner }` | `len − n` | `n + p` of `inner` |
+| `Take { n, inner }` | `n` | `p` of `inner` |
 | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉` | `offset + p·step` of `inner` |
 
 A shuffle's permutation depends on its `seed`, the order's seed and the *context*, which every
@@ -58,10 +60,11 @@ block of `count` consecutive positions, so a mix's schedule is preserved across 
 Everything is deterministic in the configuration and the order's seed, and `iter(a..b)` yields
 exactly `get(a)..get(b)` whatever was iterated before.
 
-Compilation rejects out-of-range slices, zero strides, orders longer than `usize::MAX` (and
+Compilation rejects skips and takes past the end, zero strides, orders longer than `usize::MAX` (and
 intermediate lengths beyond 64 bits), invalid or overcommitted schedules, and mixes longer
-than 2⁴⁶. It folds what is exact: nested concats flatten, empty parts vanish, slices of
-sources/slices/strides merge, a mix or shuffle of a single element is the element.
+than 2⁴⁶. It folds what is exact: nested concats flatten, empty parts vanish, skips and takes
+merge into sources, slices and strides, a mix or shuffle of a single element is the element,
+and a single repetition is the sequence.
 
 ## Stability
 
