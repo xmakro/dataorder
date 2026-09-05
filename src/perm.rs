@@ -66,10 +66,12 @@ const RC: [u64; 12] = [
     0x9216_D5D9_8979_FB1B, 0xD131_0BA6_98DF_B5AC, 0x2FFD_72DB_D01A_DFB7, 0xB8E1_AFED_6A26_7E96,
 ];
 
-/// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]).
+/// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]): the two are
+/// hashed together, not merely xored, so no simple relation between a seed and a context
+/// reproduces another pair's key. Not a security boundary: seeds are for reproducibility.
 #[inline]
 pub(crate) fn key(seed: u64, ctx: u64) -> Key {
-    let a = mix64(seed ^ 0x2545_F491_4F6C_DD1D ^ ctx.wrapping_mul(PHI));
+    let a = mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)) ^ 0x1F83_D9AB_FB41_BD6B);
     let b = mix64(a ^ PHI);
     let mut k = Key::UNSET;
     for i in 0..6 {

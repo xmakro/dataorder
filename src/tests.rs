@@ -394,16 +394,16 @@ fn golden_orders() {
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
     ];
     const EXPECTED: [u64; 10] = [
-        2858856362520336285,
-        8678721152593299605,
-        9098117545377468812,
-        2253643174293614737,
-        994532566028467186,
-        17815674728835076284,
-        7189627902135896981,
-        100476818119445447,
-        18408440380577682910,
-        2436343062908294565,
+        8944480274337887517,
+        4625008917299269681,
+        10153334795136506768,
+        2873731158959093005,
+        11124861484752690026,
+        11279912391434559340,
+        10444670851558434453,
+        9703835265997803807,
+        10527708798688175491,
+        15930632077147421093,
     ];
     let actual: Vec<u64> = cases
         .iter()
@@ -416,7 +416,7 @@ fn golden_orders() {
     assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
     // A few elements in the clear, for the first case.
     let order = Order::compile(src(0, 1000).shuffle(7)).unwrap();
-    const FIRST: [usize; 6] = [186, 295, 837, 564, 496, 727];
+    const FIRST: [usize; 6] = [658, 809, 435, 971, 671, 326];
     assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
 }
