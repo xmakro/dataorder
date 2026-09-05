@@ -32,7 +32,8 @@ Builders: `Seq::source`, `Seq::concat`, `Seq::mix` (all uniform), `Seq::mix_with
 `.stride(step, offset)`, `.shard(index, count)`, `.map(f)` (the same structure over other
 sources: handles become loaded datasets), `.check()` (validate and get the length without
 compiling). `Order::compile_seeded(seq, seed)` reseeds every
-shuffle at once. A `Seq` is plain data (clone, compare, serialize with your own `T`); compiling
+shuffle at once. A `Seq` is plain data (clone, compare; the `serde` feature derives
+`Serialize` and `Deserialize` for `Seq` and `Sampling`); compiling
 consumes it, and the order owns the sources and yields references to them. A bare `usize` is
 a source too, when only the order matters. Lengths and positions are `usize` at the interface
 and 64-bit inside.

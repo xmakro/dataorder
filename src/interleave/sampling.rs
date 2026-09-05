@@ -5,6 +5,7 @@ use std::fmt;
 
 /// How a sequence's elements are spread over the joint sequence.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Sampling {
     /// A constant rate relative to the other uniform sequences; uniform sequences absorb
     /// whatever share of the joint sequence the scheduled sequences leave free.

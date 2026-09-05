@@ -30,7 +30,8 @@
 //! # Ok::<(), dataorder::Error>(())
 //! ```
 //!
-//! A `Seq` is plain data: clone it, compare it, serialize it (with your own `T`), and
+//! A `Seq` is plain data: clone it, compare it, serialize it (the `serde` feature derives
+//! `Serialize` and `Deserialize` for `Seq` and `Sampling`), and
 //! [`Seq::map`] its sources from handles to loaded datasets while keeping the structure.
 //! A bare `usize` is a source too, when only the order matters. Lengths and positions are
 //! `usize`; inside, the arithmetic is 64-bit, so on a 32-bit target an intermediate node may

@@ -8,8 +8,9 @@ use std::ops::{Bound, RangeBounds};
 /// [`Dataset`](crate::Dataset)). Leaves are [`Source`](Seq::Source)s; every other variant
 /// transforms or combines sequences. Compile it with
 /// [`Order::compile`](crate::Order::compile). It is plain data: clone it, compare it,
-/// serialize it, or [`map`](Seq::map) its sources to another type.
+/// serialize it (with the `serde` feature), or [`map`](Seq::map) its sources to another type.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Seq<T> {
     /// The elements `0..len()` of a source, in order.
     Source(T),

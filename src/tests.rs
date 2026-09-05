@@ -436,3 +436,19 @@ fn golden_orders() {
     assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
 }
+
+/// With the `serde` feature a configuration survives a round trip and compiles to the same order.
+#[cfg(feature = "serde")]
+#[test]
+fn serde_round_trip() {
+    let seq: Seq<usize> = Seq::mix_with([
+        (Seq::source(1000).shuffle(1).repeat(2), Sampling::Uniform),
+        (Seq::concat([Seq::source(300).skip(10), Seq::source(50).take(20)]).shuffle(2), Sampling::ramp(0.2, 0.6)),
+    ])
+    .shard(1, 3);
+    let json = serde_json::to_string(&seq).unwrap();
+    let back: Seq<usize> = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, seq);
+    let (a, b) = (Order::compile(seq).unwrap(), Order::compile(back).unwrap());
+    assert!(a.iter(0..a.len()).map(|(s, i)| (*s, i)).eq(b.iter(0..b.len()).map(|(s, i)| (*s, i))));
+}

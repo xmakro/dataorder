@@ -12,6 +12,16 @@ license = "MIT OR Apache-2.0"
 exclude = ["/.github", "/scripts"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+serde = ["dep:serde"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [profile.release]
 debug = 1
