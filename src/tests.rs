@@ -475,3 +475,58 @@ fn types_are_send_and_sync() {
     assert_send_sync::<Error>();
     assert_send_sync::<Sampling>();
 }
+
+/// Sources through references and smart pointers, trait objects included.
+#[test]
+fn source_impls() {
+    use std::rc::Rc;
+    use std::sync::Arc;
+    let shared = Arc::new(Src { id: 3, len: 7 });
+    let seq: Seq<Box<dyn Source>> = Seq::concat([
+        Seq::source(Box::new(5usize) as Box<dyn Source>),
+        Seq::source(Box::new(Rc::new(3usize)) as Box<dyn Source>),
+        Seq::source(Box::new(shared.clone()) as Box<dyn Source>),
+        Seq::source(Box::new(&*shared) as Box<dyn Source>),
+    ]);
+    assert_eq!(seq.check(), Ok(22));
+    let order = Order::compile(seq).unwrap();
+    assert_eq!(order.sources().iter().map(|s| s.len()).collect::<Vec<_>>(), [5, 3, 7, 7]);
+    assert_eq!(order.get(21).1, 6);
+    assert!(Seq::source(Rc::new(4usize)).check() == Ok(4) && Seq::source(Box::new(4usize)).check() == Ok(4));
+}
+
+/// Inclusive and open bounds in `slice`.
+#[test]
+fn slice_bounds() {
+    let a = || src(0, 10);
+    assert_eq!(ids(Order::compile(a().slice(..=2)).unwrap().iter(0..3)), vec![(0, 0), (0, 1), (0, 2)]);
+    assert_eq!(ids(Order::compile(a().slice(8..)).unwrap().iter(0..2)), vec![(0, 8), (0, 9)]);
+    assert_eq!(ids(Order::compile(a().slice(3..=3)).unwrap().iter(0..1)), vec![(0, 3)]);
+    assert_eq!(Order::compile(a().slice(..)).unwrap().len(), 10);
+    assert_eq!(Order::compile(a().slice(4..4)).unwrap().len(), 0);
+}
+
+/// Schedules at the steep end of what a mix accepts, at lengths near its limit: seeks and
+/// walks agree, so the interleave's count-and-fix loops settle there too.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn steep_schedule_at_scale() {
+    let seq = Seq::mix_with([
+        (src(0, 1 << 45), Sampling::Uniform),
+        (src(1, 1 << 44), Sampling::delayed(0.5)), // final rate 2: length × rate = 2⁴⁵, within 2⁴⁶
+        (src(2, 1 << 40), Sampling::ramp(0.0, 1.0)),
+    ]);
+    let order = Order::compile(seq).unwrap();
+    let n = order.len();
+    assert_eq!(n, (1 << 45) + (1 << 44) + (1 << 40));
+    for start in [0, n / 2 - 777, n - 1500, 12_345_678_901] {
+        let walked = ids(order.iter(start..start + 1500));
+        for (k, &e) in walked.iter().enumerate() {
+            let (s, i) = order.get(start + k);
+            assert_eq!((s.id, i), e, "position {}", start + k);
+        }
+    }
+    // Too steep is rejected, not looped over.
+    let steep = Seq::mix_with([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
+    assert!(matches!(Order::compile(steep), Err(Error::TooSteep { part: 1 }) | Err(Error::MixTooLong)));
+}
