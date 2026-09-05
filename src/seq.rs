@@ -184,12 +184,29 @@ impl<T> Seq<T> {
     }
 
     /// The parts one after another.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::concat([Seq::source(2), Seq::source(3)]))?;
+    /// let elements: Vec<(usize, usize)> = order.iter(..).map(|(&s, i)| (s, i)).collect();
+    /// assert_eq!(elements, [(2, 0), (2, 1), (3, 0), (3, 1), (3, 2)]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn concat(parts: impl IntoIterator<Item = Self>) -> Self {
         Self::Concat(parts.into_iter().collect())
     }
 
     /// The parts interleaved, all [`Sampling::Uniform`].
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// // Each part keeps its order and is spread evenly: the longer one appears twice as often.
+    /// let order = Order::new(Seq::mix([Seq::source(4), Seq::source(2)]))?;
+    /// let sources: Vec<usize> = order.iter(..).map(|(&s, _)| s).collect();
+    /// assert_eq!(sources, [4, 4, 2, 4, 4, 2]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn mix(parts: impl IntoIterator<Item = Self>) -> Self {
         Self::Mix(parts.into_iter().map(MixPart::from).collect())
@@ -231,12 +248,33 @@ impl<T> Seq<T> {
     /// The parts mixed by weight into `total` elements, each with its own schedule: anything
     /// that converts into a [`WeightedPart`], `(seq, weight, sampling)` triples say; see
     /// [`Weighted`](Seq::Weighted).
+    ///
+    /// ```
+    /// use dataorder::{Order, Sampling, Seq};
+    /// // Three quarters from a source of 300 (repeated) and a quarter from one of 100, the
+    /// // latter in the second half only.
+    /// let seq = Seq::weighted_with(1000, [(Seq::source(300), 3.0, Sampling::Uniform), (Seq::source(100), 1.0, Sampling::delayed(0.5))]);
+    /// let order = Order::new(seq)?;
+    /// assert_eq!(order.iter(..).filter(|&(&s, _)| s == 100).count(), 250);
+    /// assert!(order.iter(..490).all(|(&s, _)| s == 300));
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = impl Into<WeightedPart<T>>>) -> Self {
         Self::Weighted { total, parts: parts.into_iter().map(Into::into).collect() }
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(100).shuffle(1))?;
+    /// let mut indices: Vec<usize> = order.iter(..).map(|(_, i)| i).collect();
+    /// assert_ne!(indices[..5], [0, 1, 2, 3, 4]);
+    /// indices.sort_unstable();
+    /// assert_eq!(indices, (0..100).collect::<Vec<_>>());
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn shuffle(self, seed: u64) -> Self {
         Self::Shuffle { seed, inner: Box::new(self) }
@@ -293,12 +331,28 @@ impl<T> Seq<T> {
     }
 
     /// The first `n` positions (an error when the order is built if there are fewer).
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let all = Order::new(Seq::source(10).shuffle(1))?;
+    /// let first = Order::new(Seq::source(10).shuffle(1).take(3))?;
+    /// assert!(first.iter(..).eq(all.iter(..3)));
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn take(self, n: usize) -> Self {
         Self::Take { n, inner: Box::new(self) }
     }
 
     /// Everything after the first `n` positions (an error when the order is built if there are fewer).
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let all = Order::new(Seq::source(10).shuffle(1))?;
+    /// let rest = Order::new(Seq::source(10).shuffle(1).skip(7))?;
+    /// assert!(rest.iter(..).eq(all.iter(7..)));
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn skip(self, n: usize) -> Self {
         Self::Skip { n, inner: Box::new(self) }
@@ -306,6 +360,14 @@ impl<T> Seq<T> {
 
     /// Every `step`-th position starting at `offset`, as many as exist; `offset` may exceed
     /// `step`. See [`Stride`](Seq::Stride).
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(10).stride(4, 1))?;
+    /// assert_eq!(order.iter(..).map(|(_, i)| i).collect::<Vec<_>>(), [1, 5, 9]);
+    /// assert!(Order::new(Seq::source(10).stride(4, 12))?.is_empty());
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     #[must_use]
     pub fn stride(self, step: usize, offset: usize) -> Self {
         Self::Stride { step, offset, inner: Box::new(self) }

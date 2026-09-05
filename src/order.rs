@@ -89,6 +89,15 @@ impl<T: Source> Order<T> {
     /// The order of `seq` with seed 0: validates it and precomputes what iteration needs.
     /// Consumes it; clone it first to keep it, or validate it with [`Seq::check`] first.
     ///
+    /// ```
+    /// use dataorder::{ErrorKind, Order, Seq};
+    /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(2).shuffle(1)]))?;
+    /// assert_eq!(order.len(), 5);
+    /// let err = Order::new(Seq::source(3).skip(4)).unwrap_err();
+    /// assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 4, len: 3 });
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    ///
     /// # Errors
     /// Skips and takes past the end, a zero stride, lengths that overflow, nesting deeper
     /// than [`MAX_DEPTH`], and schedules or weights the mix rejects; see [`ErrorKind`]. The
@@ -100,6 +109,15 @@ impl<T: Source> Order<T> {
     /// The order of `seq` with the given `seed`, which reseeds every shuffle in it at once;
     /// shuffles keep their relative distinctness from their own seeds. An existing order is
     /// reseeded for free with [`Order::set_seed`].
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let seq = Seq::source(100).shuffle(1);
+    /// let (a, b) = (Order::with_seed(seq.clone(), 1)?, Order::with_seed(seq, 2)?);
+    /// assert!(a.iter(..).ne(b.iter(..)));
+    /// assert_eq!(b.seed(), 2);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
     ///
     /// # Errors
     /// As for [`Order::new`].
@@ -133,8 +151,8 @@ impl<T> Order<T> {
     }
 
     /// Reseeds every shuffle at once, as [`Order::with_seed`] does, without rebuilding
-    /// anything: the seed enters only the keys derived while iterating. Cursors made before
-    /// keep the old seed.
+    /// anything: the seed enters only the keys derived while iterating. A clone of the
+    /// order keeps its seed.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -186,7 +204,8 @@ impl<T> Order<T> {
     /// ```
     ///
     /// # Panics
-    /// If `pos >= len()`.
+    /// If `pos >= len()`, as indexing does; there is no fallible form, so check
+    /// [`len`](Order::len) first where a position may be out of range.
     #[must_use]
     pub fn get(&self, pos: usize) -> (&T, usize) {
         assert!(pos < self.len(), "dataorder: position {pos} out of range");

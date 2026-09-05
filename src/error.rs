@@ -7,6 +7,14 @@ use std::fmt;
 /// Why and where [`Order::new`](crate::Order::new) rejected a configuration: the
 /// [`kind`](Error::kind) of the problem and the [`path`](Error::path) of the node it was
 /// found at.
+///
+/// ```
+/// use dataorder::{ErrorKind, Seq};
+/// let err = Seq::concat([Seq::source(10), Seq::source(5).take(6)]).check().unwrap_err();
+/// assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 6, len: 5 });
+/// assert_eq!(err.path(), [1]);
+/// assert_eq!(err.to_string(), "cannot take 6 of 5 positions (at node 1)");
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Error {
     kind: ErrorKind,
@@ -61,6 +69,14 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// What [`Order::new`](crate::Order::new) found wrong with a configuration.
+///
+/// ```
+/// use dataorder::{ErrorKind, Sampling, Seq};
+/// let err = Seq::source(10).stride(0, 0).check().unwrap_err();
+/// assert!(matches!(err.kind(), ErrorKind::ZeroStep));
+/// let err = Seq::mix_with([(Seq::source(10), Sampling::delayed(1.5))]).check().unwrap_err();
+/// assert!(matches!(err.kind(), ErrorKind::InvalidSampling { .. }));
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {

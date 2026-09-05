@@ -8,6 +8,21 @@ use std::hash::{Hash, Hasher};
 /// How a sequence's elements are spread over the joint sequence. Equality and hashing
 /// compare the parameters bit for bit (with `-0.0` taken as `0.0`); the default is
 /// [`Uniform`](Sampling::Uniform).
+///
+/// ```
+/// use dataorder::{Order, Sampling, Seq};
+/// let seq = Seq::mix_with([
+///     (Seq::source(600), Sampling::Uniform),
+///     (Seq::source(200), Sampling::until(0.5)),   // in the first half only
+///     (Seq::source(100), Sampling::delayed(0.5)), // in the second half only
+/// ]);
+/// let order = Order::new(seq)?;
+/// let positions = |source: usize| order.iter(..).enumerate().filter(|&(_, (&s, _))| s == source).map(|(p, _)| p).collect::<Vec<_>>();
+/// assert!(positions(200).iter().all(|&p| p < 455));
+/// assert!(positions(100).iter().all(|&p| p >= 445));
+/// assert_eq!(positions(600).len(), 600);
+/// # Ok::<(), dataorder::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
@@ -136,7 +151,7 @@ pub(crate) enum SamplingError {
     TooLong,
     /// A schedule parameter is out of range or not finite.
     InvalidParameter { seq: usize, sampling: Sampling },
-    /// `length × final_rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
+    /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize },
     /// The scheduled sequences' rates sum to `demand` (> 1) times the total draw rate at
     /// some progress, leaving nothing for the uniform sequences there.

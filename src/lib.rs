@@ -77,9 +77,9 @@
 //! builders panic instead, on mistakes no configuration can express (see [`Seq`]).
 //! Compilation folds what is exact: nested concats flatten, empty parts vanish (an empty
 //! part of a mix does not affect the order of the others, nor does an empty source or part
-//! the shuffles above it), skips and takes merge into
-//! sources, slices and strides, a mix or shuffle with a single non-empty part is that part,
-//! and a single repetition is the sequence.
+//! the shuffles above it), skips and takes merge into sources, slices and strides, a mix
+//! with a single non-empty part is that part, a shuffle of at most one element is that
+//! element, and a single repetition is the sequence.
 //!
 //! A schedule is relative to the mix it belongs to, so `mix.repeat(n)` restarts every
 //! schedule in each repetition; to schedule over a whole run of several epochs, repeat the
@@ -109,7 +109,9 @@
 //!   serde's derived representation with the variant and field names as written here,
 //!   `{"Shuffle":{"seed":1,"inner":{"Source":50}}}` for instance; unknown fields are
 //!   rejected in every variant. It is stable under the same policy as the orders: a change
-//!   to it is a breaking change. Two caveats: lengths and counts are `usize`, so a
+//!   to it is a breaking change. Only configurations [`Order::new`] accepts round-trip:
+//!   `serde_json` writes an infinite or NaN weight or schedule parameter as `null`, which
+//!   does not read back. Two more caveats: lengths and counts are `usize`, so a
 //!   configuration written on a 64-bit machine need not read back on a 32-bit one; and
 //!   every level of a `Seq` is two levels of nesting in a self-describing format, so
 //!   `serde_json` reads at most 64 levels under its default recursion limit of 128
@@ -164,12 +166,28 @@ pub(crate) fn float_bits(x: f64) -> u64 {
 /// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation recurses
 /// once per level, and this keeps it well inside the default stack of a thread; a deeper
 /// configuration is rejected without recursing into the rest of it (see [`Seq`]).
+///
+/// ```
+/// use dataorder::{ErrorKind, MAX_DEPTH, Seq};
+/// let chain = |levels: u32| (1..levels).fold(Seq::source(10), |s, _| s.take(10));
+/// assert_eq!(chain(MAX_DEPTH).check(), Ok(10));
+/// assert_eq!(chain(MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
+/// ```
 pub const MAX_DEPTH: u32 = 256;
 
 /// Longest mix [`Order::new`] accepts: 2⁴⁶ elements. It keeps the gap between consecutive
 /// keys of one part far above floating-point rounding and every count exact in `f64`. A
-/// scheduled part must likewise satisfy `length × final_rate ≤ MAX_MIX_LEN`. Longer orders
+/// scheduled part must likewise satisfy `length × peak rate ≤ MAX_MIX_LEN`. Longer orders
 /// are possible by repeating, concatenating or striding mixes.
+///
+/// ```
+/// use dataorder::{ErrorKind, MAX_MIX_LEN, Seq};
+/// assert_eq!(MAX_MIX_LEN, 1 << 46);
+/// let long = Seq::mix([Seq::source(1 << 30).repeat(1 << 16), Seq::source(1)]);
+/// assert_eq!(long.check().unwrap_err().kind(), &ErrorKind::MixTooLong);
+/// let repeated = Seq::mix([Seq::source(1 << 30), Seq::source(1)]).repeat(3);
+/// assert_eq!(repeated.check(), Ok(3 * (1 << 30) + 3));
+/// ```
 pub const MAX_MIX_LEN: u64 = interleave::MAX_TOTAL_LEN;
 
 /// The README's code blocks, compiled as doctests.

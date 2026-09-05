@@ -8,7 +8,9 @@ use std::sync::Arc;
 /// other sources of the same length when it is shuffled. Implement it for your dataset
 /// handle and put the handle into [`Seq::Source`](crate::Seq::Source); the order yields
 /// `(&handle, index)`. A bare `usize` is a source too (salt 0), handy when only the order
-/// matters, as are slices, arrays and vectors of anything.
+/// matters, as are slices, arrays and vectors of anything. `usize` is the only integer that
+/// is a source, and stays so: `Seq::source(10)` infers `usize` only because of that, and a
+/// second integer impl would break every such call.
 ///
 /// The order reads the length and the salt once, when it is built; a source whose length
 /// changes afterwards yields indices past its new end.

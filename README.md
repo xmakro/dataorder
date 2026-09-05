@@ -44,7 +44,7 @@ a cursor is repositioned with `seek(pos)` and re-ranged with `set_range(range)`.
 plain data (clone, compare, hash; the `serde` feature derives `Serialize` and `Deserialize`);
 building the order consumes it, and the order owns the sources, yields references to them and
 gives them back with `into_sources`. A bare `usize` is a source too, when only the order
-matters, as are slices and vectors.
+matters, as are slices, arrays and vectors.
 
 The precise semantics of every node, what compilation rejects and folds, and the stability
 policy are in the [crate documentation](https://docs.rs/dataorder). In short: every node maps its
@@ -98,7 +98,7 @@ within a part by construction.
 | 10 000 | 0.75 ms / 0.87 ms | 31 ns / 32 ns |
 
 A mix is at most 2⁴⁶ long (`MAX_MIX_LEN`), and a scheduled part must satisfy
-`length × final_rate ≤ 2⁴⁶`. `cargo test --release -- --ignored --nocapture` runs this table
+`length × peak rate ≤ 2⁴⁶`. `cargo test --release -- --ignored --nocapture` runs this table
 and the tournament tree against `BinaryHeap`.
 
 ## Shuffle
@@ -167,7 +167,7 @@ tried and rejected, is in [docs/optimization-notes.md](docs/optimization-notes.m
 | `src/perm.rs` | seeded permutations of `0..n` and context derivation |
 | `src/interleave/` | the mix: `mod.rs` model and construction, `iter.rs` seek and walk, `profile.rs` rate profiles and their integrals, `tournament.rs` loser tree, `sampling.rs` schedules, `tests.rs` merge against brute force, exact seeks, balance and schedule bounds |
 | `src/tests.rs` | random configurations against a materializing reference evaluator |
-| `tests/golden.rs`, `tests/api.rs` | pinned orders and the public surface, as a downstream crate sees them |
+| `tests/golden.rs`, `tests/api.rs`, `tests/cost.rs` | pinned orders, the public surface as a downstream crate sees it, and the cost model (allocation counts of seeks, `count` and `last`, shards of nested mixes) |
 | `scripts/bench_campaign.py` | pinned, repeated benchmark runs tabulated across labelled steps (repository only) |
 
 Run `cargo run --release --example demo` for a small schedule, `--example bench` for the table, and
