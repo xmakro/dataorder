@@ -885,6 +885,29 @@ fn edge_cases() {
     let shared = Order::new(Seq::concat([Seq::source(&lens[0]), Seq::source(&lens[1]), Seq::source(&lens[0]).shuffle(1)])).unwrap();
     assert_eq!(shared.len(), 13);
     assert_eq!(shared.sources().len(), 3);
+    // Which source an element came from, also when sources compare equal.
+    let which: Vec<usize> = shared.iter(..).map(|(s, _)| shared.source_index(s)).collect();
+    assert_eq!(which, [vec![0; 5], vec![1; 3], vec![2; 5]].concat());
+    let equal = Order::new(Seq::mix([src(1, 4), src(1, 4), src(1, 2)])).unwrap();
+    let which: Vec<usize> = equal.iter(..).map(|(s, _)| equal.source_index(s)).collect();
+    assert_eq!(which, [0, 1, 0, 1, 2, 0, 1, 0, 1, 2]);
+    assert_eq!(equal.sources().iter().map(|s| equal.source_index(s)).collect::<Vec<_>>(), [0, 1, 2]);
+    struct Unit;
+    impl Source for Unit {
+        fn len(&self) -> usize {
+            2
+        }
+    }
+    let units = Order::new(Seq::concat([Seq::source(Unit), Seq::source(Unit)])).unwrap();
+    assert!(units.iter(..).all(|(s, _)| units.source_index(s) == 0));
+}
+
+#[test]
+#[should_panic(expected = "the source is not one of this order's")]
+fn source_index_of_a_foreign_source_panics() {
+    let order = Order::new(src(0, 5)).unwrap();
+    let other = Src { id: 0, len: 5 };
+    let _ = order.source_index(&other);
 }
 
 #[test]

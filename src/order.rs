@@ -188,6 +188,35 @@ impl<T> Order<T> {
         self.sources
     }
 
+    /// The index in [`sources`](Order::sources) of a source this order yielded a reference
+    /// to: which one an element came from, also when sources compare equal. Constant time,
+    /// from the reference's place among the sources. For a zero-sized source type every
+    /// reference is the same one, and the answer is 0.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::mix([Seq::source(3), Seq::source(3)]))?;
+    /// let parts: Vec<usize> = order.iter(..).map(|(s, _)| order.source_index(s)).collect();
+    /// assert_eq!(parts, [0, 1, 0, 1, 0, 1]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    ///
+    /// # Panics
+    /// If `source` is not a reference into this order's sources.
+    #[must_use]
+    pub fn source_index(&self, source: &T) -> usize {
+        let size = std::mem::size_of::<T>();
+        if size == 0 {
+            return 0;
+        }
+        let (base, at) = (self.sources.as_ptr() as usize, std::ptr::from_ref(source) as usize);
+        assert!(
+            at >= base && at < base + size * self.sources.len() && (at - base).is_multiple_of(size),
+            "dataorder: the source is not one of this order's"
+        );
+        (at - base) / size
+    }
+
     /// The element at `pos`: the source and the index in it.
     ///
     /// Constant work per node on the path, except that a [`Seq::Mix`] on the path costs a

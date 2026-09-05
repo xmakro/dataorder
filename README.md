@@ -43,9 +43,10 @@ handles become loaded datasets), `.check()` (validate and get the length without
 order). `Order::with_seed(seq, seed)` and `order.set_seed(seed)` reseed every shuffle at once;
 a cursor is repositioned with `seek(pos)` and re-ranged with `set_range(range)`. A `Seq` is
 plain data (clone, compare, hash; the `serde` feature derives `Serialize` and `Deserialize`);
-building the order consumes it, and the order owns the sources, yields references to them and
-gives them back with `into_sources`. A bare `usize` is a source too, when only the order
-matters, as are slices, arrays and vectors.
+building the order consumes it, and the order owns the sources, yields references to them
+(`order.source_index(&s)` says which one, also when sources compare equal) and gives them back
+with `into_sources`. A bare `usize` is a source too, when only the order matters, as are
+slices, arrays and vectors; `dataorder::salt` and `salt_path` turn a name or a path into a salt.
 
 The precise semantics of every node, what compilation rejects and folds, and the stability
 policy are in the [crate documentation](https://docs.rs/dataorder). In short: every node maps its

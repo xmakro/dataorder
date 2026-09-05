@@ -1,6 +1,7 @@
 //! The trait a source must implement: a length. The order never reads an element; it
 //! yields the source and an index, and the caller reads however it likes.
 
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,14 +39,15 @@ pub trait Source {
     /// on its seed, on the order's seed and repetition, and on the salts and lengths of the
     /// non-empty sources under it: two sources of one length and salt shuffled with one
     /// seed get the same permutation, different salts give unrelated ones. Derive it from
-    /// the dataset's identity, its path say, with [`crate::salt`]. The default is 0.
+    /// the dataset's identity, its path say, with [`crate::salt`] or [`crate::salt_path`].
+    /// The default is 0.
     fn salt(&self) -> u64 {
         0
     }
 }
 
-/// A salt for [`Source::salt`] from any bytes, a path for instance: FNV-1a, which is part
-/// of the orders and therefore never changes.
+/// A salt for [`Source::salt`] from any bytes, a name for instance (for a path, see
+/// [`salt_path`]): FNV-1a, which is part of the orders and therefore never changes.
 ///
 /// ```
 /// assert_eq!(dataorder::salt("web.bin"), dataorder::salt(b"web.bin"));
@@ -54,6 +56,21 @@ pub trait Source {
 #[must_use]
 pub fn salt(bytes: impl AsRef<[u8]>) -> u64 {
     bytes.as_ref().iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// A salt for [`Source::salt`] from a path: [`salt`] over the path's bytes as the platform
+/// encodes them (`OsStr::as_encoded_bytes`), which for a path of valid Unicode is its UTF-8
+/// on every platform, so such a path salts alike wherever it is spelled alike (the
+/// separator is part of the spelling: `web/1.bin` is not `web\1.bin`).
+///
+/// ```
+/// use std::path::{Path, PathBuf};
+/// assert_eq!(dataorder::salt_path(Path::new("web.bin")), dataorder::salt("web.bin"));
+/// assert_eq!(dataorder::salt_path(PathBuf::from("web.bin")), dataorder::salt_path("web.bin"));
+/// ```
+#[must_use]
+pub fn salt_path(path: impl AsRef<Path>) -> u64 {
+    salt(path.as_ref().as_os_str().as_encoded_bytes())
 }
 
 impl Source for usize {

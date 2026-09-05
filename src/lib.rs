@@ -159,7 +159,7 @@ pub use error::{Error, ErrorKind};
 pub use interleave::Sampling;
 pub use order::Order;
 pub use seq::{MixPart, Seq, WeightedPart};
-pub use source::{Source, salt};
+pub use source::{Source, salt, salt_path};
 
 /// The bits of a float with `-0.0` taken as `0.0`: what equality and hashing of schedules
 /// and weights compare.
