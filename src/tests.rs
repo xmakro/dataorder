@@ -485,7 +485,10 @@ fn errors() {
         Order::new(over1).unwrap_err(),
         at(ErrorKind::InvalidSampling { sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } }, &[0])
     );
-    let steep = Seq::concat([a.clone(), Seq::mix_with([(a.clone(), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.999))])]);
+    let steep = Seq::concat([
+        a.clone(),
+        Seq::mix_with([(a.clone(), Sampling::Uniform), (src(1, 1 << 30).repeat(1 << 16), Sampling::delayed(0.999))]),
+    ]);
     let err = Order::new(steep).unwrap_err();
     assert!(matches!(err.kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong), "{err}");
     assert_eq!(err.path(), if err.kind() == &ErrorKind::TooSteep { &[1, 1][..] } else { &[1][..] });

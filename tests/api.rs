@@ -115,7 +115,8 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(opened, Err(12));
     assert_eq!(lens.try_map(|n| Ok::<_, ()>(n / 2)).unwrap().check(), Ok(10));
     // Salts pass through pointers; slices, arrays and vectors are sources of their elements.
-    assert_eq!(Box::new(&*shared).salt(), dataorder::salt("s"));
+    let boxed: Box<&Shard> = Box::new(&shared);
+    assert_eq!(boxed.salt(), dataorder::salt("s"));
     assert_eq!((&&shared).salt(), shared.salt());
     let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle(1)).unwrap();
     let letters: String = order.iter(..).map(|(v, i)| v[i]).collect();
