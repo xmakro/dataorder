@@ -718,9 +718,21 @@ fn weighted_shares_sum_and_round() {
     assert_eq!(weighted_shares(0, &[0.0, 0.0]).unwrap(), [0, 0]);
     // Many parts with near-integer shares at the mix limit: the sum still comes out exact.
     let w: Vec<f64> = (0..300).map(|i| 1.0 + 1e-9 * (i % 7) as f64).collect();
-    for total in [(1u64 << 46) - 1, 1 << 46, 123_456_789_012_345] {
+    for total in [(1u64 << 46) - 1, 1 << 46, 12_345_678_901_234] {
         assert_eq!(weighted_shares(total, &w).unwrap().iter().sum::<u64>(), total);
     }
+    // Finite weights whose sum overflows, subnormal weights, and extreme ratios.
+    assert_eq!(weighted_shares(100, &[f64::MAX, f64::MAX]).unwrap(), [50, 50]);
+    assert_eq!(weighted_shares(100, &[1e308, 1e308, 1.0]).unwrap(), [50, 50, 0]);
+    assert_eq!(weighted_shares(10, &[f64::MAX; 3]).unwrap(), [4, 3, 3]);
+    assert_eq!(weighted_shares(100, &[5e-324, 5e-324]).unwrap(), [50, 50]);
+    assert_eq!(weighted_shares(100, &[1e300, 1e-300]).unwrap(), [100, 0]);
+    assert_eq!(Seq::weighted(100, [(src(0, 10), f64::MAX), (src(1, 10), f64::MAX)]).check(), Ok(100));
+    // A total beyond the mix limit is rejected before any rounding could go wrong.
+    assert_eq!(weighted_shares((1 << 46) + 1, &[1.0]).unwrap_err(), ErrorKind::MixTooLong);
+    assert_eq!(weighted_shares(u64::MAX, &[1.0, 1.0]).unwrap_err(), ErrorKind::MixTooLong);
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(Seq::weighted((1usize << 60) + 5, [(src(0, 10), 1.0), (src(1, 10), 1.0)]).check().unwrap_err(), root(ErrorKind::MixTooLong));
 }
 
 /// A weighted mix has the composition of its weights, repeats short parts (reshuffled) and

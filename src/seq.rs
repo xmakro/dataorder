@@ -44,7 +44,8 @@ pub enum Seq<T> {
     /// rounding up, so the counts sum to `total`), repeated as often as needed (reshuffling
     /// any shuffle inside for each repetition) and cut to that count, then mixed like
     /// [`Mix`](Seq::Mix) with the parts' schedules. Weights must be finite and nonnegative
-    /// with a positive sum, and a part with a positive share must have elements.
+    /// with a positive sum, a part with a positive share must have elements, and `total` is
+    /// limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN) like any mix.
     Weighted {
         /// Length of the order.
         total: usize,

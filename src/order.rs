@@ -2,7 +2,7 @@
 //! indices and shuffle shapes, and random access by a stateless descent ([`get`]).
 
 use crate::cursor::Cursor;
-use crate::interleave::{Interleave, Sampling};
+use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
 use crate::seq::WeightedPart;
 use crate::{Error, ErrorKind, Seq, Source};
@@ -425,18 +425,26 @@ impl<T: Source> Compiler<T> {
 /// exact shares `wᵢ / Σw · total`, the remainder going one each to the parts with the largest
 /// fractional shares (lowest index first on ties). Rounding could make the floors sum to
 /// one more than `total` in contrived cases; then the parts with the smallest fractions
-/// give one back.
+/// give one back. A total beyond [`MAX_TOTAL_LEN`] is rejected first, so that `total` and
+/// every share are exact in `f64` and the fix-ups above suffice.
 pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, ErrorKind> {
     for (i, &w) in weights.iter().enumerate() {
         if !(w.is_finite() && w >= 0.0) {
             return Err(ErrorKind::InvalidWeight { part: i, weight: w });
         }
     }
+    if total > MAX_TOTAL_LEN {
+        return Err(ErrorKind::MixTooLong);
+    }
     if total == 0 {
         return Ok(vec![0; weights.len()]);
     }
-    let sum: f64 = weights.iter().sum();
-    // The weights are finite and nonnegative here, so the sum is too (no NaN).
+    // Finite weights can still sum to infinity. Then they are scaled by a power of two first,
+    // which is exact for every weight large enough to get a share and leaves every quotient
+    // as it would be without overflow.
+    let scale = if weights.iter().sum::<f64>().is_finite() { 1.0 } else { f64::from_bits((1023 - 600) << 52) };
+    let sum: f64 = weights.iter().map(|w| w * scale).sum();
+    // The scaled weights are finite and nonnegative, so the sum is too (no NaN).
     if sum <= 0.0 {
         return Err(ErrorKind::ZeroWeights);
     }
@@ -444,7 +452,7 @@ pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, E
     let mut fractions = Vec::with_capacity(weights.len());
     let mut given = 0u64;
     for (i, &w) in weights.iter().enumerate() {
-        let exact = w / sum * total as f64;
+        let exact = w * scale / sum * total as f64;
         let floor = exact.floor();
         let share = (floor as u64).min(total);
         shares.push(share);
