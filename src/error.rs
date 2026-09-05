@@ -46,9 +46,12 @@ impl fmt::Display for Error {
         if self.path.is_empty() {
             write!(f, " (at the root)")
         } else {
-            write!(f, " (at node")?;
-            for i in &self.path {
-                write!(f, "/{i}")?;
+            write!(f, " (at node ")?;
+            for (k, i) in self.path.iter().enumerate() {
+                if k > 0 {
+                    write!(f, "/")?;
+                }
+                write!(f, "{i}")?;
             }
             write!(f, ")")
         }

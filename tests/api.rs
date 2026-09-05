@@ -68,7 +68,7 @@ fn errors_name_kind_and_path() {
     };
     assert_eq!(described, "skip 5 of 4");
     assert_eq!(err.path(), [1, 1]);
-    assert_eq!(err.to_string(), "cannot skip 5 of 4 positions (at node/1/1)");
+    assert_eq!(err.to_string(), "cannot skip 5 of 4 positions (at node 1/1)");
     let _: &dyn std::error::Error = &err;
     let kind = err.into_kind();
     assert_eq!(kind, ErrorKind::SkipOutOfRange { n: 5, len: 4 });
