@@ -1,18 +1,18 @@
-//! Seeded permutations of `0..n` in O(1) per element on average, without materializing them.
+//! Seeded permutations of `0..n`, computed without storing an index array.
 //!
-//! A permutation of `0..n` is a keyed bijection on the `k`-bit numbers, `2^(k-1) < n ≤ 2^k`,
-//! restricted to `0..n` by cycle walking: a value that lands at or above `n` is mapped again
-//! until one below `n` comes out. That is a bijection on `0..n` because the underlying map
-//! is one on the superset. Across all inputs its average cost is at most `2^k / n < 2`
-//! steps; a particular input can walk as many as `2^k - n + 1` steps.
+//! First permute a power-of-two domain containing `0..n`. If the result is outside
+//! `0..n`, apply the permutation again until it falls inside. This is cycle walking:
+//! it preserves a bijection because each cycle is restricted to its in-range values.
+//! For `n > 1`, choose `k` so `2^(k-1) < n ≤ 2^k`. Across all inputs, cycle walking
+//! takes at most `2^k / n < 2` steps on average. A single input can take as many as
+//! `2^k - n + 1` steps.
 //!
 //! The bijection is a six-round Feistel network on the two halves of the `k` bits (the
 //! right half one bit wider when `k` is odd; the halves trade widths every round). Each
 //! round adds its independently derived key to one half, applies the full `SplitMix64`
 //! finalizer and takes the low bits needed by the other half. Mixing before truncation
-//! avoids the arithmetic patterns that a single multiply-and-truncate round can retain
-//! even after seven rounds. Six rounds give margin beyond the four that passed the
-//! statistical probes used during development. There is no security claim.
+//! avoids patterns retained by simpler multiply-and-truncate rounds. Six rounds give
+//! margin beyond the four that passed the statistical probes used during development.
 //!
 //! The tests cover bijectivity, small-domain coverage over seeds, position/image joint
 //! distributions, serial and positional correlations, fixed points and consecutive-image
@@ -20,9 +20,9 @@
 //! seeds and lengths, including powers of two and lengths on either side. Passing these
 //! tests is evidence of statistical quality, not a guarantee for every seed and length.
 //!
-//! A seed, context and source salt are hashed into one 64-bit word, from which the six
-//! round keys are derived. A permutation is therefore selected by 64 bits in effect,
-//! although a [`Key`] holds 384; seeds provide reproducibility, not cryptographic security.
+//! A seed, repetition context and source salt are combined into one 64-bit word,
+//! which determines all six round keys. A [`Key`] stores 384 bits, but has only
+//! 64 bits of independent input. This is for reproducible ordering, not cryptography.
 //!
 //! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small function
 //! and the permutation is most of it.
@@ -53,7 +53,7 @@ pub(crate) struct Key {
 }
 
 impl Key {
-    /// Placeholder for cursors that have not been seeked yet.
+    /// Placeholder for cursors that have not been positioned yet.
     pub(crate) const UNSET: Self = Self { rk: [0; 6] };
 }
 
@@ -82,22 +82,18 @@ pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
     k
 }
 
-/// The salt of a shuffle: a fold over the sources under it that have elements, in order of
-/// appearance, of their salts and lengths (an empty source, one in a part that is empty as
-/// a whole, or one in a part of a concatenation that a slice cuts away, contributes nothing
-/// to the sequence and counts for nothing here). Two
-/// shuffles over sources of the same salts and lengths, in the same order, permute alike;
-/// any other difference in what is shuffled decorrelates them.
+/// Combines the salts and original lengths of retained sources in traversal order.
+/// The compiler removes empty subtrees and excluded concat parts before collecting
+/// these inputs. Equal input lists produce equal salts; other lists are hashed to
+/// distinguish shuffles over different datasets.
 pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64 {
     sources.into_iter().fold(0, |h, (salt, len)| mix64(h ^ mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ len.wrapping_mul(PHI)))
 }
 
-/// Context of repetition `epoch` of a repeat nested `depth` repeats deep, inside `ctx`. The
-/// first repetition keeps its context; every other repetition gets its own, so that the
-/// shuffles inside reshuffle. Adding an outer repeat also increases nested repeat depths,
-/// which can change the first repetition if it contains repeats. The depth distinguishes
-/// an inner repeat’s second repetition inside the first of the outer from its first
-/// repetition inside the second of the outer.
+/// Derives a shuffle context from the enclosing context, epoch and repeat depth.
+/// Epoch 0 keeps `ctx`; later epochs mix in their index and depth. Depth distinguishes
+/// an inner repeat's second epoch from an outer repeat's second epoch. Adding an
+/// outer repeat therefore also changes later epochs of repeats nested inside it.
 #[inline]
 pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, depth: u32) -> u64 {
     if epoch == 0 {

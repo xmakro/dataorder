@@ -484,7 +484,7 @@ fn empty_sequences_do_not_affect_the_order() {
     }
 }
 
-/// A seeked-again iterator is the same as a fresh one.
+/// Repositioning an iterator gives the same elements as creating a fresh one.
 #[test]
 fn reseeking_matches_fresh_iterators() {
     let mut rng = Rng(0x5EEC);

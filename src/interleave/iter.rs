@@ -1,14 +1,14 @@
-//! Iteration over a range of the joint sequence. [`Iter::seek`] positions at the range's
-//! start; [`advance`] then takes the next element from a tournament tree over the sequences'
-//! heads. The `#[inline(always)]` attributes are measured: they keep the whole step inside
-//! the cursor's mix step, which is worth about 3 ns per element.
+//! Exact seeks and sequential iteration over a mix.
+//! [`Iter::seek`] counts elements before the target, builds the remaining heads and
+//! replays a bounded number of steps. [`advance`] emits the next head. Explicit
+//! inlining keeps this small step inside the outer cursor's mix step.
 
 use super::Interleave;
 use super::tournament::TournamentTree;
 use std::ops::Range;
 
-/// Iterator returned by [`Interleave::iter`]; yields `(sequence, index_in_sequence)`. It
-/// can be [seeked](Iter::seek) again and reuses its buffers when it is.
+/// Iterator returned by [`Interleave::iter`]; yields `(part, index_within_part)`.
+/// Further calls to [`seek`](Iter::seek) reuse its buffers.
 #[derive(Clone, Debug)]
 pub(crate) struct Iter<'a> {
     il: &'a Interleave,
@@ -26,9 +26,9 @@ impl<'a> Iter<'a> {
         iter
     }
 
-    /// Repositions at `range` (already validated), reusing every allocation: the seek
-    /// counts, per sequence, the elements before the start, rebuilds the tree over the heads
-    /// and steps through the few positions the counts fell short by.
+    /// Repositions at an already validated range, reusing allocated buffers.
+    /// Counts elements before the start, rebuilds the tournament over the remaining
+    /// heads, then replays the small gap left by the counts.
     pub(crate) fn seek(&mut self, range: Range<u64>) {
         let (a, remaining) = (range.start, range.end - range.start);
         self.remaining = remaining;
@@ -85,11 +85,9 @@ struct Slot {
     seq: u32,
     /// Index of the element within the sequence.
     j: u64,
-    /// Segment of the sequence's rate profile that this element's key came from, the
-    /// starting point for locating the next key (see [`Profile::quantile`](super::profile::Profile::quantile)).
-    /// A `u32` here keeps the slot at 24 bytes; the hint is widened to `usize` for the key
-    /// computation and narrowed again, which is free, whereas a `u32` hint throughout was
-    /// measured 0.6 ns per element slower on mixes of 100 parts (2.3 ns on nested ones).
+    /// Cached profile segment for locating the next key; see
+    /// [`Profile::quantile`](super::profile::Profile::quantile).
+    /// Stored as `u32` to keep the slot at 24 bytes and widened to `usize` for lookup.
     seg: u32,
     /// Key of the element after this one, computed ahead of time so that replacing this
     /// element in the tree does not wait for the arithmetic; NaN for the last element
@@ -97,9 +95,9 @@ struct Slot {
     next_key: f64,
 }
 
-/// Per sequence, how many of its elements lie among the first `a` of the joint sequence,
-/// except that the counts may fall short by a few elements in total (never overshoot).
-/// Writes the counts into `counts` and returns their sum.
+/// Writes per-part prefix counts whose sum is at most `a`, and returns that sum.
+/// The counts describe a prefix of the merged order and leave at most `2k`
+/// elements to replay, where `k` is the number of parts.
 ///
 /// Try the analytic progress and one correction first. If rounding of a profile makes
 /// those guesses poor, bisect progress instead; its nonnegative float bits are ordered,
@@ -197,11 +195,9 @@ fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: usize) -> Slot {
 
 /// Takes the tree's minimum and replaces it with the sequence's next element.
 ///
-/// The next element's key was computed one step ahead, so the replay of the tree does not
-/// wait for that arithmetic; the key after it is computed off the critical path, in the
-/// shadow of the tree walk. Computing it here instead costs about 12 ns per element
-/// (27 vs 14 ns at k = 100), because the division and square root then sit on the serial
-/// chain of every element.
+/// The replacement key was computed one step ahead. The tree can compare it
+/// without waiting for division or square root; computing the following key can
+/// overlap with the tree update.
 #[inline(always)]
 fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, u64) {
     let (_, &Slot { seq, j, seg, next_key }) = tree.min().expect("interleave: iterator exhausted");

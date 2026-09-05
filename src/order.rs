@@ -1,5 +1,8 @@
-//! The compiled order: a tree of nodes with precomputed lengths, prefix sums, interleave
-//! indices and shuffle shapes, and random access by a stateless descent ([`get`]).
+//! Validation, compilation and random access.
+//!
+//! The compiler separates source handles from the configuration, then builds a tree
+//! with lengths, concat offsets, interleave profiles and shuffle shapes. [`get`]
+//! follows that tree to resolve a position without keeping iteration state.
 
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
@@ -72,11 +75,15 @@ impl Node {
     }
 }
 
-/// A compiled [`Seq`]: its length, random access by [`Order::get`] and seekable iteration
-/// by [`Order::iter`]. Owns the sources; elements are `(&source, index)`. Lengths and
-/// positions are `usize` at the interface and 64-bit inside, so an intermediate node may
-/// be longer than the address space as long as the order itself is not. `Debug` prints the
-/// length, the seed and the sources, not the compiled tree.
+/// A validated sequence with random access and seekable iteration.
+///
+/// Build one from a [`Seq`] with [`Order::new`]. It owns the source handles and
+/// returns `(&source, index_within_source)` pairs through [`get`](Order::get) and
+/// [`iter`](Order::iter). It stores the compiled structure, not the output elements.
+///
+/// Lengths and positions are `usize` in the API and `u64` internally. On a 32-bit
+/// target, intermediate nodes may exceed `usize::MAX`, but the final order must fit.
+/// `Debug` displays the length, seed and sources.
 #[derive(Clone)]
 pub struct Order<T> {
     pub(crate) root: Node,
@@ -86,8 +93,9 @@ pub struct Order<T> {
 }
 
 impl<T: Source> Order<T> {
-    /// The order of `seq` with seed 0: validates it and precomputes what iteration needs.
-    /// Consumes it; clone it first to keep it, or validate it with [`Seq::check`] first.
+    /// Validates and compiles `seq` with an order seed of 0.
+    /// Consumes the configuration and takes ownership of its sources. Clone the
+    /// configuration to keep a copy, or use [`Seq::check`] to validate it by reference.
     ///
     /// ```
     /// use dataorder::{ErrorKind, Order, Seq};
@@ -106,9 +114,10 @@ impl<T: Source> Order<T> {
         Self::with_seed(seq, 0)
     }
 
-    /// The order of `seq` with the given `seed`, which reseeds every shuffle in it at once;
-    /// shuffles keep their relative distinctness from their own seeds. An existing order is
-    /// reseeded for free with [`Order::set_seed`].
+    /// Validates and compiles `seq` with the given order seed.
+    /// This seed is combined with each shuffle's own seed; it does not add shuffling
+    /// to unshuffled sequences. Use [`Order::set_seed`] to reseed an existing order
+    /// without rebuilding it.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -151,9 +160,9 @@ impl<T> Order<T> {
         self.ctx
     }
 
-    /// Reseeds every shuffle at once, as [`Order::with_seed`] does, without rebuilding
-    /// anything: the seed enters only the keys derived while iterating. A clone of the
-    /// order keeps its seed.
+    /// Changes the seed used by all shuffles, without rebuilding the order.
+    /// Takes constant time: shuffle keys are derived during access and iteration.
+    /// Previously cloned orders keep their own seeds.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -168,30 +177,31 @@ impl<T> Order<T> {
         self.ctx = seed;
     }
 
-    /// The sources, in order of appearance in the configuration.
+    /// Source handles in order of appearance in the original configuration.
+    /// Includes sources whose nodes were removed during compilation.
     #[must_use]
     pub fn sources(&self) -> &[T] {
         &self.sources
     }
 
-    /// The sources, mutably. The order read their lengths and salts when it was built and
-    /// does not look again: a source that changes length yields indices past its new end.
-    /// For opening handles in place, say.
+    /// Mutable access to source handles, for example to open a dataset in place.
+    /// The order keeps the lengths and salts recorded at construction. Keep source
+    /// lengths stable so that the stored order and returned indices remain valid.
     #[must_use]
     pub fn sources_mut(&mut self) -> &mut [T] {
         &mut self.sources
     }
 
-    /// The sources, in order of appearance in the configuration, consuming the order.
+    /// Consumes the order and returns its source handles in configuration order.
     #[must_use]
     pub fn into_sources(self) -> Vec<T> {
         self.sources
     }
 
-    /// The index in [`sources`](Order::sources) of a source this order yielded a reference
-    /// to: which one an element came from, also when sources compare equal. Constant time,
-    /// from the reference's place among the sources. For a zero-sized source type every
-    /// reference is the same one, and the answer is 0.
+    /// Returns a source's index in [`sources`](Order::sources).
+    /// Uses the reference's location, so it takes constant time and distinguishes
+    /// sources even when their values compare equal. For zero-sized source types,
+    /// references cannot be distinguished and this always returns 0.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -202,7 +212,7 @@ impl<T> Order<T> {
     /// ```
     ///
     /// # Panics
-    /// If `source` is not a reference into this order's sources.
+    /// If `T` is not zero-sized and `source` is not a reference into this order's sources.
     #[must_use]
     pub fn source_index(&self, source: &T) -> usize {
         let size = std::mem::size_of::<T>();
@@ -217,13 +227,13 @@ impl<T> Order<T> {
         (at - base) / size
     }
 
-    /// The element at `pos`: the source and the index in it.
+    /// Returns the source and source index at order position `pos`.
     ///
     /// Walks the path to a source. A concat searches its offsets in `O(log k)`; a mix
     /// seeks the interleave and allocates (see the crate's [cost model](crate#cost)), and
     /// a shuffle cycle-walks a permutation at constant average cost per position.
-    /// For consecutive positions use [`Order::iter`]; for many scattered positions, a cursor
-    /// and [`Cursor::seek`], which reuses the cursor's allocations.
+    /// Use [`Order::iter`] for consecutive positions. For many scattered positions,
+    /// reuse a cursor with [`Cursor::seek`] to reuse its allocations.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -235,8 +245,8 @@ impl<T> Order<T> {
     /// ```
     ///
     /// # Panics
-    /// If `pos >= len()`, as indexing does; there is no fallible form, so check
-    /// [`len`](Order::len) first where a position may be out of range.
+    /// If `pos >= self.len()`. Check [`len`](Order::len) first when the position
+    /// might be out of range.
     #[must_use]
     pub fn get(&self, pos: usize) -> (&T, usize) {
         assert!(pos < self.len(), "dataorder: position {pos} out of range");
@@ -244,15 +254,15 @@ impl<T> Order<T> {
         (&self.sources[s as usize], i as usize)
     }
 
-    /// Iterates the positions in `range` in order; `iter(a..b)` yields exactly the elements
-    /// `get(a)..get(b)`, and `iter(..)` the whole order (as does `&order` in a `for` loop).
+    /// Returns a cursor over the positions in `range`.
+    /// `iter(a..b)` yields `get(p)` for each `p` in `a..b`; the end is exclusive.
+    /// `iter(..)` visits the whole order, as does `for item in &order`.
     ///
-    /// The first draw builds and seeks the cursor tree. Each entered mix reserves a slot
-    /// of about 300 bytes per part, and builds each part's cursor when it first draws from
-    /// it. Empty ranges and `count` do not build that tree. Walking is then a few
-    /// nanoseconds per element, so make
-    /// cursors for long ranges rather than many short ones, and [`seek`](Cursor::seek) or
-    /// [`set_range`](Cursor::set_range) a cursor rather than making a new one.
+    /// Cursor state is allocated on the first draw. Each entered mix reserves
+    /// space for its parts, then initializes child cursors as it draws from them.
+    /// Empty ranges and `count()` allocate nothing. Prefer reusing a cursor with
+    /// [`seek`](Cursor::seek) or [`set_range`](Cursor::set_range) when visiting many
+    /// ranges, especially over large mixes.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

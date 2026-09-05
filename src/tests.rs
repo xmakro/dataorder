@@ -609,7 +609,7 @@ fn cycles() {
     let Node::Mix { children, .. } = root(Seq::weighted(300, [(x(), 2.0), (src(1, 1000).shuffle(4), 1.0)])) else { panic!() };
     assert!(matches!(children[0], Node::Repeat { child_len: 100, len: 200, .. }));
     assert!(matches!(children[1], Node::Slice { start: 0, len: 100, .. }));
-    // An order that never runs out.
+    // The longest order representable by the public API; still finite.
     let endless = Order::new(x().cycle(usize::MAX)).unwrap();
     assert_eq!(endless.len(), usize::MAX);
     let last = usize::MAX - 1;

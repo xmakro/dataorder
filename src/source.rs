@@ -1,20 +1,16 @@
-//! The trait a source must implement: a length. The order never reads an element; it
-//! yields the source and an index, and the caller reads however it likes.
+//! Dataset lengths and stable identities. An order returns a source and an index;
+//! the caller decides how to load the corresponding record.
 
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// A source of elements: a length, and a [`salt`](Source::salt) that tells it apart from
-/// other sources of the same length when it is shuffled. Implement it for your dataset
-/// handle and put the handle into [`Seq::Source`](crate::Seq::Source); the order yields
-/// `(&handle, index)`. A bare `usize` is a source too (salt 0), handy when only the order
-/// matters, as are slices, arrays and vectors of anything. `usize` is the only integer that
-/// is a source, and stays so: `Seq::source(10)` infers `usize` only because of that, and a
-/// second integer impl would break every such call.
+/// A dataset described by its length and an optional shuffle salt.
 ///
-/// The order reads the length and the salt once, when it is built; a source whose length
-/// changes afterwards yields indices past its new end.
+/// Implement this trait for your dataset handle, then pass it to
+/// [`Seq::source`](crate::Seq::source). The order yields `(&handle, index)` without
+/// reading any records. [`salt`](Source::salt) lets datasets of the same length
+/// have distinct shuffle inputs.
 ///
 /// ```
 /// use dataorder::Source;
@@ -26,6 +22,14 @@ use std::sync::Arc;
 ///     fn salt(&self) -> u64 { dataorder::salt(&self.path) }
 /// }
 /// ```
+///
+/// Slices, arrays and vectors implement this trait with salt 0. A `usize` also
+/// represents a source of that length, which is useful when only the order matters.
+/// References, `Box`, `Rc` and `Arc` forward to the underlying source.
+///
+/// The order reads each source's length and salt at construction and does not
+/// refresh them. Keep lengths stable: shrinking a source can make returned indices
+/// invalid, and growing it does not add positions to the order.
 pub trait Source {
     /// Number of elements.
     fn len(&self) -> usize;
@@ -35,19 +39,19 @@ pub trait Source {
         self.len() == 0
     }
 
-    /// Distinguishes this source from others of its length. A shuffle's permutation depends
-    /// on its seed, on the order's seed and repetition, and on the salts and lengths of the
-    /// non-empty sources under it: two sources of one length and salt shuffled with one
-    /// seed get the same permutation, different salts give unrelated ones. Derive it from
-    /// the dataset's identity, its path say, with [`crate::salt`] or [`crate::salt_path`].
-    /// The default is 0.
+    /// A stable dataset identity used when deriving shuffle keys. Defaults to 0.
+    ///
+    /// Sources with the same length and salt shuffle alike under the same seeds
+    /// and repetition context. Derive a salt from a dataset name with [`crate::salt`]
+    /// or from its path with [`crate::salt_path`].
     fn salt(&self) -> u64 {
         0
     }
 }
 
-/// A salt for [`Source::salt`] from any bytes, a name for instance (for a path, see
-/// [`salt_path`]): FNV-1a, which is part of the orders and therefore never changes.
+/// Computes a stable [`Source::salt`] from bytes, such as a dataset name.
+/// Uses FNV-1a; changing the hash would change orders and is covered by the crate's
+/// stability policy. For paths, use [`salt_path`].
 ///
 /// ```
 /// assert_eq!(dataorder::salt("web.bin"), dataorder::salt(b"web.bin"));
@@ -58,10 +62,12 @@ pub fn salt(bytes: impl AsRef<[u8]>) -> u64 {
     bytes.as_ref().iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
 }
 
-/// A salt for [`Source::salt`] from a path: [`salt`] over the path's bytes as the platform
-/// encodes them (`OsStr::as_encoded_bytes`), which for a path of valid Unicode is its UTF-8
-/// on every platform, so such a path salts alike wherever it is spelled alike (the
-/// separator is part of the spelling: `web/1.bin` is not `web\1.bin`).
+/// Computes a stable [`Source::salt`] from a path's encoded bytes.
+///
+/// Valid Unicode paths use UTF-8 on every platform, so identical spellings give
+/// identical salts. Paths are not normalized: `web/1.bin` and `web\1.bin` differ.
+/// Non-Unicode paths use the platform's [`as_encoded_bytes`](std::ffi::OsStr::as_encoded_bytes)
+/// representation and need not agree across platforms.
 ///
 /// ```
 /// use std::path::{Path, PathBuf};
@@ -73,6 +79,7 @@ pub fn salt_path(path: impl AsRef<Path>) -> u64 {
     salt(path.as_ref().as_os_str().as_encoded_bytes())
 }
 
+// Keep usize as the only integer implementation so Seq::source(10) infers usize.
 impl Source for usize {
     fn len(&self) -> usize {
         *self

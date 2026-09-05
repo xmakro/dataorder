@@ -1,169 +1,216 @@
-//! Deterministic, seekable data order for training, without materializing anything.
+//! Deterministic, seekable dataset ordering for training.
 //!
-//! A [`Seq`] is a tree: [`Source`](Seq::Source) leaves (anything that is a [`Source`]: a
-//! length) combined by [`Concat`](Seq::Concat), [`Mix`](Seq::Mix) (balanced,
-//! order-preserving interleaving with per-part sampling schedules, see [`Sampling`]) and
-//! [`Weighted`](Seq::Weighted) (a mix in given proportions, repeating and cutting the parts)
-//! and transformed by [`Shuffle`](Seq::Shuffle), [`Repeat`](Seq::Repeat),
-//! [`Cycle`](Seq::Cycle), [`Skip`](Seq::Skip), [`Take`](Seq::Take) and
-//! [`Stride`](Seq::Stride). [`Order::new`] validates it and
-//! precomputes what iteration needs; the elements, `(&source, index in the source)`, are
-//! never materialized: [`Order::get`] computes any position and [`Order::iter`] walks any
-//! range.
+//! `dataorder` decides which record to read at each position. It returns a source and
+//! an index within that source, leaving record loading to you. The full list of
+//! positions is never stored.
+//!
+//! Three types make up the main API:
+//!
+//! - [`Source`] describes a dataset by its length and an optional shuffle salt.
+//! - [`Seq`] describes how to combine and transform sources.
+//! - [`Order`] validates a `Seq` and provides random access and iteration.
+//!
+//! # Example
+//!
+//! A `usize` can represent a source when only its length matters:
 //!
 //! ```
-//! use dataorder::{Order, Sampling, Seq, Source};
+//! use dataorder::{Order, Seq};
 //!
-//! struct Shard { path: &'static str, len: usize }
-//! impl Source for Shard {
-//!     fn len(&self) -> usize { self.len }
-//!     fn salt(&self) -> u64 { dataorder::salt(self.path) }
-//! }
-//!
-//! // Worker 0 of 8: each part is sharded, then the shards are mixed (see Cost).
-//! let seq = Seq::mix_with([
-//!     (Seq::source(Shard { path: "web.bin", len: 1_000_000 }).shuffle(1).repeat(3).shard(8, 0), Sampling::Uniform),
-//!     (Seq::source(Shard { path: "code.bin", len: 200_000 }).shuffle(2).shard(8, 0), Sampling::delayed(0.5)),
-//! ]);
+//! // Shuffle 1,000 records and repeat for two epochs.
+//! let seq = Seq::source(1000).shuffle(42).repeat(2);
 //! let order = Order::new(seq)?;
-//! for (shard, index) in order.iter(1000..1010) {
-//!     println!("element {index} of {}", shard.path);
-//! }
-//! let (shard, index) = order.get(1005);
-//! assert_eq!(order.iter(1000..1010).nth(5).map(|(s, i)| (s.path, i)), Some((shard.path, index)));
+//! assert_eq!(order.len(), 2000);
+//!
+//! // Start anywhere, without replaying the earlier positions.
+//! let mut cursor = order.iter(1200..1210);
+//! let (source, index) = cursor.next().unwrap();
+//! assert_eq!(*source, 1000);
+//! assert!(index < 1000);
+//! assert_eq!((source, index), order.get(1200));
 //! # Ok::<(), dataorder::Error>(())
 //! ```
 //!
-//! A `Seq` is plain data: clone it, compare and hash it, serialize it (see
-//! [feature flags](#feature-flags)), and [`Seq::map`] its sources from handles to loaded
-//! datasets while keeping the structure. A bare `usize` is a source too, when only the order
-//! matters. Lengths and positions are `usize`; inside, the arithmetic is 64-bit, so on a
-//! 32-bit target an intermediate node may exceed the address space as long as the order
-//! itself does not.
+//! Position 1,200 belongs to the *order*; the returned index belongs to the original
+//! source. [`Order::iter`] returns the same pairs as calling [`Order::get`] at each
+//! position in its range, regardless of previous iteration or seeks.
+//!
+//! Implement [`Source`] for your dataset handles, or use slices, arrays or vectors.
+//! `Order` owns its sources and yields references to them. A `Seq` can be cloned,
+//! compared, hashed, [mapped to another source type](Seq::map) and optionally
+//! [serialized](#feature-flags).
 //!
 //! # Semantics
 //!
-//! Every element has a position in the sequence of its node; a node maps its positions to
-//! positions of its children:
+//! Each node maps its positions to positions in its children. In this table, `n` is
+//! the child's length and `p` is a position within the node.
 //!
-//! | node | length | position `p` maps to |
-//! |---|---|---|
-//! | `Source(t)` | `t.len()` | element `p` of `t` |
-//! | `Concat(parts)` | sum | the part containing `p`, at `p` minus the part's offset |
-//! | `Mix(parts)` | sum | what the interleave of the parts' lengths puts at `p` |
-//! | `Weighted { total, parts }` | `total` | the mix of each part repeated and cut to `round(wᵢ/Σw · total)` |
-//! | `Shuffle { seed, inner }` | `n` | `perm_seed(p)` of `inner` |
-//! | `Repeat { times, inner }` | `times·n` | `p mod n` of `inner`, in the context of epoch `p div n` |
-//! | `Cycle { len, inner }` | `len` | `p mod n` of `inner`, in the context of epoch `p div n` |
-//! | `Skip { n, inner }` | `len − n` | `n + p` of `inner` |
-//! | `Take { n, inner }` | `n` | `p` of `inner` |
-//! | `Stride { step, offset, inner }` | `⌈(n − offset) / step⌉`, or 0 | `offset + p·step` of `inner` |
+//! | Node | Length | Meaning |
+//! | --- | --- | --- |
+//! | [`Source`](Seq::Source) | Source length | Index `p` of the source |
+//! | [`Concat`](Seq::Concat) | Sum of part lengths | Parts read one after another |
+//! | [`Mix`](Seq::Mix) | Sum of part lengths | Parts interleaved, preserving each part's order |
+//! | [`Weighted`](Seq::Weighted) | `total` | Parts repeated or truncated to their weighted counts, then mixed |
+//! | [`Shuffle`](Seq::Shuffle) | `n` | A seeded permutation of the child's positions |
+//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in epoch `p / n` |
+//! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
+//! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
+//! | [`Take`](Seq::Take) | `take` | Child position `p` |
+//! | [`Stride`](Seq::Stride) | Number of selected positions | Child position `offset + p × step` |
 //!
-//! Shuffles are seeded permutations of `0..n` (a keyed six-round Feistel network with
-//! cycle walking, see `src/perm.rs`): O(1) per element on average, no state. A shuffle's permutation depends
-//! on its `seed`, on the order's seed, on the *context*, which every `Repeat` of more than
-//! one repetition on the path above derives afresh for each repetition after its first,
-//! and on the sources under it that have elements, their [salts](Source::salt) and lengths
-//! in order of appearance (an empty source, a part that is empty as a whole, or a part of a
-//! concatenation that a skip or take above cuts away entirely, does not count; a stride, or
-//! a slice of anything but a concatenation, does not cut parts away). So
-//! `x.shuffle(s).repeat(3)` is `x.shuffle(s)` followed by two other orders
-//! of `x`, `Seq::concat([x.shuffle(s), x.shuffle(s)])` repeats one order, `x.repeat(1)` is
-//! `x`, and `Seq::mix([a.shuffle(s), b.shuffle(s)])` orders `a` and `b` alike only when
-//! they have the same length and salt: give sources a salt, or shuffles their own seeds.
-//! Everything is deterministic in the configuration and the order's seed, and `iter(a..b)`
-//! yields exactly `get(a)..get(b)` whatever was iterated before.
+//! A plain mix uses every element of every part once. A weighted mix assigns integer
+//! counts in proportion to the weights, using exact largest-remainder rounding so
+//! they sum to `total`; see [`Seq::Weighted`]. Neither mix changes the order *within*
+//! a part unless that part contains a shuffle.
 //!
-//! Repeat contexts also depend on nesting depth. Wrapping a sequence in a repeat of more
-//! than one epoch moves its inner repeats one level deeper, changing their later epochs
-//! even in the outer repeat's first epoch. Extending a nested sequence with `repeat`, or
-//! with a `cycle` or weighted share that needs another epoch, can therefore change its
-//! existing prefix. A single repetition, or a cycle within the existing length, preserves it.
+//! [`Sampling`] controls when a part's elements appear. Schedules belong to their mix:
+//! repeating a mix restarts its schedules each epoch. To schedule over several epochs,
+//! repeat the parts and mix them once. [`Seq::shard`] partitions the resulting positions
+//! among workers; its documentation explains the cost and the difference between
+//! sharding a mix and sharding its parts.
 //!
-//! Compilation rejects skips and takes past the end, cycles of an empty sequence, zero
-//! strides, orders longer than `usize::MAX` (and intermediate lengths beyond 64 bits),
-//! invalid, numerically unrepresentable or overcommitted schedules (the scheduled parts of a mix needing more than the
-//! whole draw rate somewhere, beyond a tolerance of 10⁻⁹ for rounding), invalid weights,
-//! mixes longer than [`MAX_MIX_LEN`] and nesting deeper than
-//! [`MAX_DEPTH`]; the [`Error`] names the kind of problem and the path of the node. Two
-//! builders panic instead, on mistakes no configuration can express (see [`Seq`]).
-//! Compilation folds what is exact: nested concats flatten, empty parts vanish (an empty
-//! part of a mix does not affect the order of the others, nor does an empty source or part
-//! the shuffles above it), skips and takes merge into sources, slices and strides and narrow
-//! a concatenation to the parts they touch, nested strides merge, a mix with a single
-//! non-empty part is that part, a shuffle of at most one element is that element, a single
-//! repetition is the sequence, and a cycle within one repetition is a take.
+//! # Shuffles and repetitions
 //!
-//! A schedule is relative to the mix it belongs to, so `mix.repeat(n)` restarts every
-//! schedule in each repetition; to schedule over a whole run of several epochs, repeat the
-//! parts and mix them once, as the example above does.
+//! A shuffle visits every child position exactly once. Its permutation depends on:
+//!
+//! - The shuffle's seed and the order's seed.
+//! - The repetition context, derived from enclosing repeats and their nesting depths.
+//! - The salts and original lengths of sources retained under the shuffle, in order
+//!   of appearance.
+//!
+//! Give datasets stable [`Source::salt`] values to distinguish their shuffles when
+//! their lengths and seeds match. [`Order::set_seed`] changes the seed for all shuffles
+//! without rebuilding the order. Shuffles use a six-round Feistel permutation with
+//! cycle walking; they are intended for reproducible ordering, not cryptography.
+//!
+//! `x.shuffle(seed).repeat(3)` selects a shuffle for each epoch. The first epoch keeps
+//! its original context. In contrast, concatenating three copies of `x.shuffle(seed)`
+//! repeats the same order. Repetition alone does not add a shuffle.
+//!
+//! Nested repeats need care: adding an outer repeat with more than one epoch increases
+//! the depth of inner repeats. Their later epochs can then change even during the
+//! outer repeat's first epoch. Extending a sequence with `cycle` or a weighted share
+//! has the same effect if it introduces another epoch. A single repetition, or a cycle
+//! within the existing length, preserves the prefix.
+//!
+//! Empty sources and subtrees do not contribute to a shuffle's salt. A skip or take
+//! also removes concatenation parts that it excludes entirely. Other combinations,
+//! such as a stride over a concatenation or a slice of a mix, can retain sources even
+//! when the selected positions do not reach them.
+//!
+//! # Validation and limits
+//!
+//! [`Order::new`] returns an [`Error`] with a kind and a path to the invalid node.
+//! [`Seq::check`] performs the same validation without consuming the configuration.
+//! This includes parts that would contribute no elements, such as the child of
+//! `repeat(0)`.
+//!
+//! Skips and takes must stay within the child sequence. Strides must have a nonzero
+//! step, and an empty sequence cannot be cycled to a positive length. Weights must be
+//! finite and nonnegative. Schedules must have valid parameters and fit within the
+//! mix's available draw rate; see [`Sampling`] and [`ErrorKind`] for the full rules.
+//!
+//! Lengths and positions use `usize` in the public API and `u64` internally. The final
+//! order must fit in `usize`; on a 32-bit target, intermediate nodes may be longer.
+//! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
+//! [`MAX_DEPTH`]. [`Seq`] documents stack use and the builder arguments that panic
+//! instead of returning a validation error.
+//!
+//! Compilation simplifies nodes without changing their order. It flattens nested
+//! concatenations, removes empty parts, merges nested strides, and folds skips and
+//! takes into sources or slices where possible. A mix with one non-empty part becomes
+//! that part; a shuffle of at most one element and a single repetition need no wrapper.
+//! A cycle that fits within one epoch becomes a take. Source handles remain available
+//! through [`Order::sources`], including those whose nodes were removed.
 //!
 //! # Cost
 //!
-//! Compilation uses storage proportional to the configuration. Flattening concats,
-//! deriving shuffle salts and deepening repeats can revisit subtrees; scheduled mixes
-//! additionally sort their breakpoints, and weighted mixes sort their remainders.
-//! [`Order::get`] walks the path from the root to a source. A `Concat` searches its part
-//! offsets in `O(log k)`; a `Shuffle` derives a key and cycle-walks a permutation (constant
-//! cost on average, not a worst-case bound for one position). A `Mix` seeks its interleave:
-//! normally `O(k log(S + 1) + k log(k + 1))` for `k` non-empty parts and `S` distinct
-//! schedule breakpoints. Counting costs the first term; replaying at most `2k` tournament
-//! steps costs the second. Poor analytic guesses use a bounded fallback: at most 63
-//! bisections of progress, each counting with at most 46 bisections per part. Equal keys
-//! are consumed by counts, so even a long tie does not require a linear walk.
-//! [`Order::iter`] builds and seeks its cursor on the first draw and then walks: a `Mix`
-//! costs `⌈log2 k⌉` comparisons per element plus one key computation, dropping to zero
-//! comparisons once only one part remains. A `Shuffle` costs one permutation plus a
-//! [`Order::get`]-style descent into its child (so a shuffle *over*
-//! a mix pays the interleave seek per element; shuffle the parts, not the mix), a `Stride`
-//! skips `step − 1` elements of its child (a mix steps its interleave, or re-seeks it when
-//! that is cheaper, and its parts skip along, a nested mix stepping its own interleave), so
-//! sharding a mix across `count` workers costs up to `count` times its interleaving in total
-//! (sharding the parts instead can help, subject to each worker's schedule feasibility;
-//! see [`Seq::shard`]). `Concat`, `Repeat`, `Skip` and `Take` add a
-//! few instructions. Entering the cursor tree allocates state for the visited nodes;
-//! empty ranges and `count` allocate nothing. [`Cursor::seek`] and [`Iterator::nth`] reuse
-//! those buffers, including after cloning. The README has measured numbers.
+//! Storage depends on the configuration and cursor state, not on the number of output
+//! elements. Compilation can revisit subtrees when flattening concatenations, deriving
+//! shuffle salts or adjusting repeat depths. Scheduled mixes sort breakpoints; weighted
+//! mixes sort remainders.
+//!
+//! For random access, [`Order::get`] follows the path from the root to a source:
+//!
+//! | Node | Work at that node |
+//! | --- | --- |
+//! | Concat | `O(log k)` search over `k` part offsets |
+//! | Shuffle | Constant average permutation cost; an individual position can take longer |
+//! | Mix | A seek over its parts, with the cost described below |
+//! | Repeat, slice, stride | Position arithmetic |
+//!
+//! For a mix with `k` non-empty parts and `S` distinct schedule breakpoints, a seek
+//! normally costs `O(k log(S + 1) + k log(k + 1))`. It counts elements before a target
+//! progress, then replays at most `2k` tournament steps. Poor numerical estimates use
+//! bounded searches: at most 63 progress bisections, with at most 46 index bisections
+//! per part for each count. Equal keys are handled by counts, so even long ties do
+//! not require a linear walk.
+//!
+//! Sequential iteration keeps cursor state. A mix uses `⌈log2 k⌉` tournament comparisons
+//! per element plus one key computation, with no comparisons once one part remains.
+//! A shuffle reads scattered child positions, so **shuffling a mix pays for a mix seek
+//! per element**. Shuffle the parts before mixing when that is the order you need.
+//!
+//! A stride skips unselected child positions. Mixes advance their interleave for short
+//! skips and seek for longer ones. Sharding a mix across `count` workers can therefore
+//! multiply the total interleaving work by up to `count`; see [`Seq::shard`].
+//!
+//! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
+//! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
+//! buffers, including in a cloned cursor, though entering a new child can allocate.
+//! For commands and historical timings, see the
+//! [benchmark guide](https://github.com/xmakro/dataorder/blob/main/docs/benchmarks.md).
 //!
 //! # Feature flags
 //!
-//! - `serde`: derives `Serialize` and `Deserialize` for [`Seq`], [`MixPart`],
-//!   [`WeightedPart`] and [`Sampling`] (pulls in `serde` with `derive`). The format is
-//!   serde's derived representation with the variant and field names as written here,
-//!   `{"Shuffle":{"seed":1,"inner":{"Source":50}}}` for instance; unknown fields are
-//!   rejected in every variant. It is stable under the same policy as the orders: a change
-//!   to it is a breaking change. Only configurations [`Order::new`] accepts round-trip:
-//!   `serde_json` writes an infinite or NaN weight or schedule parameter as `null`, which
-//!   does not read back. When using JSON, consumers must enable `serde_json`'s
-//!   `float_roundtrip` feature: `serde_json = { version = "1", features = ["float_roundtrip"] }`.
-//!   Its default parser can change a weight or breakpoint by one ULP, changing equality
-//!   and potentially the order. The `dataorder/serde` feature does not enable a JSON
-//!   parser on the consumer's behalf. Two more caveats: lengths and counts are `usize`, so a
-//!   configuration written on a 64-bit machine need not read back on a 32-bit one; and
-//!   `serde_json`'s default recursion limit of 128 counts JSON objects and arrays, so the
-//!   supported `Seq` depth depends on its variants. Chains over a source first exceed it
-//!   at depth 65 for `Take`, 44 for `Mix`, and 33 for `Weighted`, all below [`MAX_DEPTH`].
-//!   `Deserializer::disable_recursion_limit`, behind its `unbounded_depth` feature, lifts
-//!   that limit; deserialization still uses the stack (see [`Seq`]'s depth caveats).
+//! The optional `serde` feature derives `Serialize` and `Deserialize` for [`Seq`],
+//! [`MixPart`], [`WeightedPart`] and [`Sampling`]. It uses serde's derived representation,
+//! with the documented variant and field names. For example:
+//!
+//! ```json
+//! {"Shuffle":{"seed":1,"inner":{"Source":50}}}
+//! ```
+//!
+//! Unknown fields are rejected. Changes to this format follow the [stability policy](#stability).
+//! The source type must also support serialization and deserialization.
+//!
+//! For JSON, enable `float_roundtrip` on your own `serde_json` dependency:
+//!
+//! ```toml
+//! [dependencies]
+//! dataorder = { version = "0.1", features = ["serde"] }
+//! serde_json = { version = "1", features = ["float_roundtrip"] }
+//! ```
+//!
+//! Without it, parsing can change a weight or breakpoint by one representable `f64`
+//! step, affecting equality and possibly the order. `dataorder/serde` does not enable
+//! this JSON parser feature. Also keep these limits in mind:
+//!
+//! - NaN and infinite parameters are invalid configurations. `serde_json` writes them
+//!   as `null`, which does not deserialize back into an `f64`.
+//! - Lengths and counts are `usize`; a configuration written on a 64-bit machine may
+//!   not fit on a 32-bit machine.
+//! - `serde_json`'s default recursion limit is 128 JSON objects or arrays. Chains over
+//!   a source exceed it at `Seq` depth 65 for `Take`, 44 for `Mix`, and 33 for `Weighted`,
+//!   before reaching [`MAX_DEPTH`]. Its `unbounded_depth` feature and
+//!   `Deserializer::disable_recursion_limit` lift that limit, but deserialization still
+//!   uses the stack. See [`Seq`]'s depth notes.
 //!
 //! # Stability
 //!
-//! An order is a pure function of the configuration and the seed: the same `Seq` and seed
-//! give the same elements on every platform and in every release that does not say
-//! otherwise. The arithmetic is IEEE 754 binary64, correctly rounded and without fused
-//! operations (Rust never contracts them), so it agrees on every target whose `f64` is
-//! hardware or software binary64; the x87-only `i586` targets, which compute in extended
-//! precision, are excluded. A release that changes any order, or the serialized form of a
-//! configuration, is a breaking change (a new minor version while the crate is 0.x).
-//! Golden tests in `tests/golden.rs` pin fingerprints of a dozen
-//! orders through the public API, and CI runs them on 64-bit and 32-bit x86 and on 64-bit
-//! ARM.
+//! The same configuration, source lengths and salts, and seed produce the same order
+//! on supported platforms. A release that changes an order or the serialized
+//! configuration format is a breaking change: a new minor version while the crate is 0.x.
+//!
+//! Calculations use IEEE 754 binary64 without fused operations. Targets with hardware
+//! or software binary64 agree; x87-only `i586` targets using extended precision are
+//! excluded. Golden tests pin order fingerprints through the public API, and CI checks
+//! 64-bit and 32-bit x86 and 64-bit ARM.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, unreachable_pub, clippy::doc_markdown, clippy::redundant_clone, clippy::use_self)]
-// No `mul_add`, however clippy's pedantic group may put it: a fused multiply-add rounds
-// differently from a multiply and an add, and the orders are promised to be the same on
-// every target.
+// Keep separate multiply and add operations: fusing them changes rounding and can
+// change the order. Clippy must not suggest `mul_add` here.
 #![allow(clippy::suboptimal_flops)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -186,16 +233,17 @@ pub use order::Order;
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::{Source, salt, salt_path};
 
-/// The bits of a float with `-0.0` taken as `0.0`: what equality and hashing of schedules
-/// and weights compare.
+/// Float bits for equality and hashing, treating `-0.0` and `0.0` as equal.
 pub(crate) fn float_bits(x: f64) -> u64 {
     (x + 0.0).to_bits()
 }
 
-/// Deepest nesting [`Order::new`] accepts, the root counting as level 1: a chain of
-/// `MAX_DEPTH` nested transforms over a source is one level too many. Compilation recurses
-/// once per level, and this keeps it well inside the default stack of a thread; a deeper
-/// configuration is rejected without recursing into the rest of it (see [`Seq`]).
+/// Maximum configuration depth accepted by [`Order::new`], counting the root as level 1.
+///
+/// A source alone has depth 1. Each enclosing transform adds a level, so a source
+/// with `MAX_DEPTH` transforms is too deep. The limit bounds recursive compilation;
+/// deeper configurations are rejected without recursing into the remaining tree.
+/// See [`Seq`] for stack use in other operations.
 ///
 /// ```
 /// use dataorder::{ErrorKind, MAX_DEPTH, Seq};
@@ -205,10 +253,12 @@ pub(crate) fn float_bits(x: f64) -> u64 {
 /// ```
 pub const MAX_DEPTH: u32 = 256;
 
-/// Longest mix [`Order::new`] accepts: 2⁴⁶ elements. It keeps the gap between consecutive
-/// keys of one part far above floating-point rounding and every count exact in `f64`. A
-/// scheduled part must likewise satisfy `length × peak rate ≤ MAX_MIX_LEN`. Longer orders
-/// are possible by repeating, concatenating or striding mixes.
+/// Maximum mix length accepted by [`Order::new`]: 2⁴⁶ elements.
+///
+/// This limit leaves room for floating-point rounding between a part's consecutive
+/// keys and keeps counts exactly representable in `f64`. Scheduled parts must also
+/// satisfy `length × peak rate ≤ MAX_MIX_LEN`. Repeating or concatenating valid
+/// mixes can produce longer orders.
 ///
 /// ```
 /// use dataorder::{ErrorKind, MAX_MIX_LEN, Seq};

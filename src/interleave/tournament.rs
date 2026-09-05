@@ -1,16 +1,16 @@
 //! A tournament ("loser") tree for k-way merging.
 //!
-//! `k` leaves each hold a key and a value. The tree answers "which leaf has the smallest
-//! key" in O(1) and, after the winner's key changes, restores that answer with exactly
-//! `⌈log2 k⌉` comparisons: the new key is played up the winner's path, at every node
-//! against the loser stored there, and the loser of each match stays behind. That is what
-//! makes it cheaper than a binary heap for a merge, where only the minimum ever changes.
+//! Each of `k` leaves holds a key and a value. The root identifies the smallest key
+//! in O(1). When that winner changes, it competes against the stored loser at each
+//! node on its path to the root. The new winner continues upward; each loser stays
+//! behind. This takes `⌈log2 k⌉` comparisons. Once only one live leaf remains, the
+//! tree skips comparisons entirely.
 //!
 //! Ties are broken by leaf index (lower wins). Keys are `f64` and must be finite; a removed
 //! leaf is given `+∞` internally so that it loses every match.
 //!
-//! The `#[inline(always)]` attributes are measured, not decorative: left to LLVM, the replay
-//! stayed out of line in the cursor's mix step and the walk lost about 3 ns per element.
+//! Explicit inlining keeps the update inside the outer cursor's mix step, avoiding
+//! a function call for every element.
 
 use std::hint::select_unpredictable;
 
@@ -33,14 +33,12 @@ fn float(bits: u64) -> f64 {
 /// A tournament tree over `k` leaves with `f64` keys and values of type `V`.
 #[derive(Debug)]
 pub(crate) struct TournamentTree<V> {
-    /// Nodes in heap layout over `n` leaves, `n` the smallest power of two `≥ k` (the
-    /// padding leaves hold `+∞` and never win): internal node `m` (`1 ≤ m < n`) has
-    /// children `2m` and `2m+1`, leaf `i` is node `n + i`. `nodes[m]` holds the key and
-    /// leaf index of the loser of the match at `m`; `nodes[0]` holds the overall winner.
-    /// Every leaf sits in exactly one node, so the keys live here and nowhere else. With
-    /// `n` a power of two every leaf has the same depth, so a replay always runs exactly
-    /// `log2 n` steps and the loop never mispredicts; with leaves at two depths the exit
-    /// branch mispredicts often enough to double the cost per operation at `k = 100`.
+    /// Losers in heap layout, with the overall winner in `nodes[0]`.
+    /// For `n` leaves (rounded up to a power of two), internal node `m` has children
+    /// `2m` and `2m+1`; leaf `i` starts at `n+i`. Each leaf's key and index end up
+    /// in exactly one node. Padding leaves use `+∞` and cannot beat a live leaf.
+    /// Equal leaf depths give updates a fixed `log2 n` loop length, making the
+    /// exit branch predictable.
     nodes: Vec<Entry>,
     values: Vec<V>,
     live: usize,
@@ -224,10 +222,9 @@ impl<V> TournamentTree<V> {
     }
 }
 
-/// `(loser, winner)` of the match between the candidate and the stored loser: the two trade
-/// places when the stored one wins. The outcome is unpredictable in a merge, so this asks for
-/// conditional moves rather than a branch (LLVM has been seen to turn a plain `if` into one,
-/// and a masked trade lengthens the dependency chain by about 3 ns per element at `k = 100`).
+/// Returns `(loser, winner)` for the candidate and the stored loser.
+/// Written to encourage conditional moves: the outcome is unpredictable in a merge,
+/// so a branch is expensive, while masked swaps add a longer dependency chain.
 #[inline(always)]
 fn trade(stored_wins: bool, cand: Entry, stored: Entry) -> (Entry, Entry) {
     (select_unpredictable(stored_wins, cand, stored), select_unpredictable(stored_wins, stored, cand))

@@ -1,12 +1,12 @@
-//! The errors of [`Order::new`](crate::Order::new).
+//! Configuration errors, including their location in the sequence tree.
 
 use crate::Sampling;
 use crate::interleave::{MAX_TOTAL_LEN, SamplingError};
 use std::fmt;
 
-/// Why and where [`Order::new`](crate::Order::new) rejected a configuration: the
-/// [`kind`](Error::kind) of the problem and the [`path`](Error::path) of the node it was
-/// found at.
+/// A configuration error from [`Order::new`](crate::Order::new) or [`Seq::check`](crate::Seq::check).
+/// [`kind`](Error::kind) describes the problem; [`path`](Error::path) identifies
+/// the node where it was found.
 ///
 /// ```
 /// use dataorder::{ErrorKind, Seq};
@@ -32,16 +32,18 @@ impl Error {
         &self.kind
     }
 
-    /// Where: the indices of the children followed from the root of the
-    /// [`Seq`](crate::Seq) to the node the problem was found at (the part index under a
-    /// `Concat`, `Mix` or `Weighted`, `0` under a node with one child). Empty for the root.
-    /// A schedule or weight problem is found at the part it belongs to.
+    /// Child indices leading from the root to the invalid node.
+    ///
+    /// Each index selects a part of a `Concat`, `Mix` or `Weighted` node, or is 0
+    /// for a node with one child. An empty path means the root. Invalid schedule
+    /// parameters and weights point to their part; errors for the mix as a whole,
+    /// such as overcommitment, point to the mix.
     #[must_use]
     pub fn path(&self) -> &[usize] {
         &self.path
     }
 
-    /// The kind, discarding the path.
+    /// Consumes the error and returns its kind, discarding the path.
     #[must_use]
     pub fn into_kind(self) -> ErrorKind {
         self.kind
@@ -68,7 +70,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// What [`Order::new`](crate::Order::new) found wrong with a configuration.
+/// The reason a configuration failed validation.
 ///
 /// ```
 /// use dataorder::{ErrorKind, Sampling, Seq};
@@ -98,8 +100,8 @@ pub enum ErrorKind {
     },
     /// A stride with `step == 0`.
     ZeroStep,
-    /// The order is longer than `usize::MAX`. An intermediate node may be, the order itself
-    /// may not.
+    /// The final order is longer than `usize::MAX`. Only intermediate nodes may
+    /// exceed that limit.
     OrderTooLong {
         /// Length of the order.
         len: u64,
@@ -126,12 +128,11 @@ pub enum ErrorKind {
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep,
-    /// The scheduled parts of a mix need `demand` (> 1) times the whole draw rate at some
-    /// progress, leaving nothing for the uniform parts there. A demand within 10⁻⁹ of 1 is
-    /// accepted, for rounding: a hand-over that needs exactly the whole rate is valid.
+    /// Scheduled parts require more than the mix's available draw rate at some progress.
+    /// `demand` is their combined rate as a fraction of the whole: 1.2 means 120%.
+    /// Excess demand up to 10⁻⁹ is accepted to allow for numerical rounding.
     Overcommitted {
-        /// The scheduled parts' rates, summed, at their peak, as a fraction of the whole
-        /// draw rate.
+        /// Peak combined rate of the scheduled parts, relative to the mix's draw rate.
         demand: f64,
     },
     /// The weight of a weighted mix part is negative or not finite.

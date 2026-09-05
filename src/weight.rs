@@ -1,8 +1,13 @@
-//! Exact largest-remainder apportionment of finite, nonnegative binary64 weights.
+//! Exact integer element counts from relative weights.
+//!
+//! Round each part's quota down, then assign the remaining elements to the largest
+//! fractional remainders, breaking ties by part index. Floating-point division can
+//! misorder close remainders, so quotas are computed from the exact binary weights.
 //!
 //! Each weight is an integer significand times a power of two. Most configurations fit
-//! in `u128` after a common power of two is removed. The fallback retains the full exponent
-//! range in a small fixed-width integer, without a dependency or a wide integer per part.
+//! in `u128` after a common power of two is removed. The fallback uses a fixed-width
+//! integer large enough for the full exponent range. It recomputes wide remainders
+//! when comparing parts, avoiding a wide integer allocation for each part.
 
 use std::cmp::Ordering;
 

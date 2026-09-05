@@ -1,16 +1,13 @@
-//! Draw-rate profiles and their integrals. A profile is a sequence of segments covering
-//! `[0, 1]` on each of which the rate changes linearly; consecutive segments may meet at
-//! different rates (a jump). That is exactly what a [`Sampling`](super::Sampling) describes,
-//! and it is also the shape of the uniform sequences' rate, one minus the scheduled rates.
-//! The integral of a profile is the share function, the fraction of a sequence drawn by a
-//! given progress; `quantile` inverts it and is what every element's key comes from. It is
-//! monotone even under floating-point rounding, which the exact-seek guarantee relies on.
-//! `quantile` is `#[inline(always)]` for the same measured reason as the tournament tree:
-//! it is the key computation of every element of a walk.
+//! Draw-rate profiles, cumulative shares and inverse lookup.
 //!
-//! No fused multiply-add anywhere here (nor elsewhere in the crate): the orders are promised
-//! to be the same on every target, and `mul_add` rounds differently from a multiply and an
-//! add.
+//! A profile consists of linear rate segments over `[0, 1]`, with jumps allowed
+//! between segments. Integrating the rate gives the fraction of a part drawn by
+//! each progress value. `quantile` inverts that share to compute an element's key.
+//! Its result must stay monotone under rounding for exact seeks to work.
+//! It is explicitly inlined because every iteration step computes a key.
+//!
+//! Keep multiply and add separate: `mul_add` changes rounding and would change
+//! the reproducible orders promised by the crate.
 
 use crate::sum::{Compensated, Expansion};
 
@@ -18,22 +15,17 @@ use crate::sum::{Compensated, Expansion};
 #[derive(Clone, Debug)]
 pub(crate) struct Profile {
     segs: Vec<Segment>,
-    /// `segs[m].start` and `segs[m].share`, contiguous, for the binary searches of [`share`]
-    /// and [`quantile`]: the uniform profile has a segment per distinct breakpoint of the
-    /// scheduled profiles, thousands of them in a mix with many distinct schedules, and a
-    /// search over the 72-byte segments would touch as many cache lines.
-    ///
-    /// [`share`]: Profile::share
-    /// [`quantile`]: Profile::quantile
+    /// Contiguous copies of segment starts and shares for binary search.
+    /// A uniform profile can have thousands of segments; searching these arrays
+    /// touches fewer cache lines than searching full segment records.
     starts: Vec<f64>,
     shares: Vec<f64>,
 }
 
-/// On `[start, end]` the rate goes linearly from `r0` to `r1`; `share` is the integral of
-/// the profile up to `start`, and `c = (r1 − r0) / (2·(end − start))` the coefficient of
-/// `x²` in the share, kept so that keys need no division. A constant rate (`c = 0`) also
-/// keeps `inv_r0 = 1/r0` so that its keys need neither division nor square root; a rising
-/// one uses a cancellation-free inverse and every segment keeps `c4 = 4c`.
+/// A linear rate from `r0` to `r1` over `[start, end]`.
+/// `share` is the integral up to `start`. Within the segment, at offset `x`, the
+/// additional share is `r0*x + c*x²`, where `c = (r1-r0) / (2*(end-start))`.
+/// Cached coefficients and reciprocals reduce work when inverting that expression.
 #[derive(Clone, Copy, Debug)]
 struct Segment {
     start: f64,
@@ -49,8 +41,9 @@ struct Segment {
 }
 
 impl Profile {
-    /// From consecutive `(start, end, r0, r1)` segments covering `[0, 1]` (empty ones are
-    /// dropped); the shares are accumulated by the trapezoid rule, which is exact here.
+    /// Builds consecutive `(start, end, r0, r1)` segments covering `[0, 1]`.
+    /// Empty segments are dropped. Shares use the trapezoid rule, which integrates
+    /// linear rates exactly apart from floating-point rounding.
     fn from_rates(rates: impl IntoIterator<Item = (f64, f64, f64, f64)>) -> Self {
         let mut share = 0.0;
         let mut segs = Vec::new();
@@ -84,19 +77,17 @@ impl Profile {
         Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)])
     }
 
-    /// The uniform sequences' profile `(1 − Σ ρ_i·rate_i) / u` for the scheduled profiles
-    /// with their element fractions `ρ_i`, `u` being the uniform fraction of all elements,
-    /// and the peak of `Σ ρ_i·rate_i` over all progress (above 1, the configuration is
-    /// overcommitted). With `u = 0` the profile is a placeholder (nothing reads it).
+    /// Returns the uniform profile and the scheduled parts' peak combined demand.
+    /// For scheduled fractions `rho_i` and uniform fraction `u`, the uniform rate is
+    /// `(1 - sum(rho_i * rate_i)) / u`, clamped to zero. With `u = 0`, no elements
+    /// use the returned profile. A peak demand above 1 indicates overcommitment.
     ///
-    /// A sweep over the segment starts of all scheduled profiles: between two of them every
-    /// rate is linear, so the summed rate is too and follows from its value and slope at the
-    /// last start. The running slope has every segment's slope added at its start and taken
-    /// away where the next one begins, and the running value is stepped along it. An
-    /// expansion retains slopes at every magnitude until removal (two floats alone lose
-    /// a third, much smaller slope); the running value uses a compensated sum. That is
-    /// `O(s log s)` for `s` scheduled profiles where evaluating every profile at every start
-    /// is `O(s²)`, and as accurate as that (about `s` roundings per value either way).
+    /// Sweep the scheduled segment boundaries in order. Between boundaries, the
+    /// total rate is linear, so only its current value and slope need updating.
+    /// Adding and removing slopes uses an expansion to retain contributions across
+    /// widely different magnitudes; the rate value uses a compensated sum.
+    /// Sorting the boundaries costs `O(s log s)` for `s` scheduled profiles, compared
+    /// with `O(s²)` when evaluating every profile at every boundary.
     pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> (Self, f64) {
         // Remove the old contribution and add the new one separately: forming their
         // difference first can round away a small new slope before compensation sees it.
@@ -161,12 +152,10 @@ impl Profile {
         s.share + x * (s.r0 + s.c * x)
     }
 
-    /// The smallest `t` whose share is at least `y`. `hint` is the segment to try first and
-    /// is updated: consecutive keys of a sequence mostly stay on one segment or move on to
-    /// the next, and a seek starts every sequence at segment 0, so the hint is walked a few
-    /// segments (cheaper than a search on the profiles of a few segments a schedule has)
-    /// and searched beyond that (the uniform profile of a mix with many distinct schedules
-    /// has thousands), which makes a seek `O(log S)` per part in the number `S` of segments.
+    /// Inverts share `y` to progress `t`, using the left endpoint of a flat interval.
+    /// Updates `hint` to the selected segment. Consecutive elements usually stay in
+    /// the same segment or enter the next, so lookup first walks a few nearby
+    /// segments. A binary search handles larger jumps in `O(log S)` for `S` segments.
     ///
     /// Nondecreasing in `y` even under rounding: the segment index is monotone because
     /// shares are and the result is clamped to its segment. Constant and falling segments
@@ -178,7 +167,7 @@ impl Profile {
         // segment at zero). Equality belongs to the preceding segment, so a flat share
         // interval is inverted at its left endpoint, including with a hint beyond it.
         let mut m = *hint;
-        // A few schedules' worth of segments: within it the walk is what it always was.
+        // Bound the local walk so a stale hint cannot make a seek linear in segment count.
         let mut budget = 16;
         loop {
             if m + 1 < self.segs.len() && y > self.segs[m + 1].share {

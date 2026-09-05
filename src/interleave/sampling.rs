@@ -1,56 +1,101 @@
-//! The public schedule type and the errors of `Interleave::with_sampling`.
+//! Public sampling schedules and internal schedule validation errors.
 
 use super::MAX_TOTAL_LEN;
 use crate::float_bits;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-/// How a sequence's elements are spread over the joint sequence. Equality and hashing
-/// compare the parameters bit for bit (with `-0.0` taken as `0.0`); the default is
-/// [`Uniform`](Sampling::Uniform).
-/// [`Order::new`](crate::Order::new) also rejects a non-empty schedule whose derived
-/// coefficients overflow floating-point range. Extremely narrow transitions can do this
-/// even with finite parameters; use equal adjacent breakpoints for an abrupt transition.
+/// Controls when a part's elements appear in a mix.
+///
+/// A part's length determines how many elements it contributes; its schedule
+/// spreads those elements over the mix. Progress runs from 0 at the start to 1 at
+/// the end. For example, `delayed(0.5)` places a part around the second half.
+/// Schedules describe ideal progress: rounding to individual positions can move
+/// elements slightly across a breakpoint.
+///
+/// | Schedule | Draw rate |
+/// | --- | --- |
+/// | [`Uniform`](Self::Uniform) (default) | Fills the space left by scheduled parts |
+/// | [`delayed(at)`](Self::delayed) | Starts at `at`, then stays constant |
+/// | [`ramp(start, full)`](Self::ramp) | Rises from zero, then stays constant |
+/// | [`until(at)`](Self::until) | Starts constant, then stops at `at` |
+/// | [`fading(fade, off)`](Self::fading) | Starts constant, then falls to zero |
+/// | [`trapezoid(start, full, fade, off)`](Self::trapezoid) | Rises, stays constant, then falls |
+///
+/// Uniform parts keep a constant rate relative to each other, in proportion to
+/// their lengths. Their combined rate changes to fill the space left by scheduled
+/// parts. A schedule belongs to its mix: repeating that mix restarts the schedule.
 ///
 /// ```
 /// use dataorder::{Order, Sampling, Seq};
 /// let seq = Seq::mix_with([
 ///     (Seq::source(600), Sampling::Uniform),
-///     (Seq::source(200), Sampling::until(0.5)),   // in the first half only
-///     (Seq::source(100), Sampling::delayed(0.5)), // in the second half only
+///     (Seq::source(200), Sampling::until(0.5)),   // Phase out around halfway.
+///     (Seq::source(100), Sampling::delayed(0.5)), // Introduce around halfway.
 /// ]);
 /// let order = Order::new(seq)?;
-/// let positions = |source: usize| order.iter(..).enumerate().filter(|&(_, (&s, _))| s == source).map(|(p, _)| p).collect::<Vec<_>>();
+/// let positions = |source: usize| {
+///     order.iter(..)
+///         .enumerate()
+///         .filter(|&(_, (&s, _))| s == source)
+///         .map(|(p, _)| p)
+///         .collect::<Vec<_>>()
+/// };
+/// // Halfway is position 450. Allow a few positions for discrete rounding.
 /// assert!(positions(200).iter().all(|&p| p < 455));
 /// assert!(positions(100).iter().all(|&p| p >= 445));
 /// assert_eq!(positions(600).len(), 600);
 /// # Ok::<(), dataorder::Error>(())
 /// ```
+///
+/// # Validation and rounding
+///
+/// Constructors store parameters; [`Order::new`](crate::Order::new) validates them.
+/// Parameters must be finite and satisfy the ranges documented on each variant.
+/// The combined scheduled rate must fit the mix's capacity. For example, placing
+/// 75% of the elements in the last half would require 150% of its available rate
+/// and returns [`Overcommitted`](crate::ErrorKind::Overcommitted).
+///
+/// Excess demand up to 10⁻⁹ is accepted for numerical rounding. In exact arithmetic,
+/// a feasible schedule places each element within `k` positions of its ideal rank,
+/// where `k` is the number of non-empty parts. Accepted excess demand can add drift
+/// proportional to the mix length, so that bound is not a guarantee for every
+/// accepted configuration, especially near [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
+///
+/// A scheduled part must satisfy `length × peak rate ≤ MAX_MIX_LEN`, where the rate
+/// is normalized so the part's total share is 1. Very narrow transitions can also
+/// overflow derived coefficients. Use equal adjacent breakpoints for an abrupt change.
+///
+/// Equality and hashing compare parameter bits, treating `-0.0` as `0.0`.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub enum Sampling {
-    /// A constant rate relative to the other uniform sequences; uniform sequences absorb
-    /// whatever share of the joint sequence the scheduled sequences leave free.
+    /// Fills the space left by scheduled parts, in proportion to this part's length
+    /// relative to the other uniform parts.
     #[default]
     Uniform,
-    /// Nothing before the joint sequence is a fraction `start` in, a rate rising linearly
-    /// from zero at `start` to its final value at `full`, then constant until the end.
-    /// `start == full` switches the rate on abruptly. Requires `0 ≤ start ≤ full ≤ 1` and
-    /// `start < 1`. Build it with [`Sampling::delayed`] or [`Sampling::ramp`].
+    /// A rate that rises from zero at `start` to its final value at `full`, then
+    /// stays constant. The rate is zero before `start`.
+    ///
+    /// `start == full` switches the rate on abruptly. Requires finite parameters
+    /// with `0 ≤ start ≤ full ≤ 1` and `start < 1`. Build it with
+    /// [`Sampling::delayed`] or [`Sampling::ramp`].
     DelayedLinear {
         /// Progress at which the rate starts rising from zero.
         start: f64,
         /// Progress at which it reaches its final value.
         full: f64,
     },
-    /// A rate that is zero until `start`, rises linearly to its full value at `full`, stays
-    /// there until `fade`, falls linearly to zero at `off` and stays zero: a curriculum
-    /// source that is phased out, or [`DelayedLinear`](Sampling::DelayedLinear) with an
-    /// end. Equal neighbours make the change abrupt. Requires
-    /// `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and `start + full < fade + off` (some time at a
-    /// positive rate). Build it with [`Sampling::until`], [`Sampling::fading`] or
-    /// [`Sampling::trapezoid`].
+    /// A rate that rises, stays constant, then falls back to zero.
+    ///
+    /// It is zero before `start`, rises linearly until `full`, stays constant until
+    /// `fade`, falls linearly until `off`, then stays zero. Equal neighboring
+    /// breakpoints make a transition abrupt.
+    ///
+    /// Requires finite parameters with `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and
+    /// `start + full < fade + off`, ensuring some time at a positive rate.
+    /// Build it with [`Sampling::until`], [`Sampling::fading`] or [`Sampling::trapezoid`].
     Trapezoid {
         /// Progress at which the rate starts rising from zero.
         start: f64,
@@ -64,7 +109,8 @@ pub enum Sampling {
 }
 
 impl Sampling {
-    /// Nothing before progress `at`, then a constant rate.
+    /// Creates a schedule whose rate is zero before `at`, then constant.
+    /// Requires `0 ≤ at < 1`; validated when the order is built.
     ///
     /// ```
     /// use dataorder::Sampling;
@@ -75,7 +121,9 @@ impl Sampling {
         Self::DelayedLinear { start: at, full: at }
     }
 
-    /// Nothing before `start`, a rate rising linearly until `full`, then constant.
+    /// Creates a schedule whose rate rises from zero at `start` to full at `full`.
+    /// The rate stays constant afterward. Requires `0 ≤ start ≤ full ≤ 1` and
+    /// `start < 1`; validated when the order is built.
     ///
     /// ```
     /// use dataorder::Sampling;
@@ -86,8 +134,8 @@ impl Sampling {
         Self::DelayedLinear { start, full }
     }
 
-    /// A constant rate from the start, switched off at progress `at`: the mirror image of
-    /// [`delayed`](Sampling::delayed).
+    /// Creates a schedule with a constant rate until `at`, then zero.
+    /// Requires `0 < at ≤ 1`; validated when the order is built.
     ///
     /// ```
     /// use dataorder::Sampling;
@@ -98,8 +146,8 @@ impl Sampling {
         Self::Trapezoid { start: 0.0, full: 0.0, fade: at, off: at }
     }
 
-    /// A constant rate from the start, falling linearly to zero between `fade` and `off`:
-    /// the mirror image of [`ramp`](Sampling::ramp).
+    /// Creates a schedule with a constant rate that falls to zero from `fade` to `off`.
+    /// Requires `0 ≤ fade ≤ off ≤ 1` and `off > 0`; validated when the order is built.
     ///
     /// ```
     /// use dataorder::Sampling;
@@ -110,8 +158,8 @@ impl Sampling {
         Self::Trapezoid { start: 0.0, full: 0.0, fade, off }
     }
 
-    /// Zero until `start`, rising until `full`, constant until `fade`, falling to zero at
-    /// `off`; see [`Trapezoid`](Sampling::Trapezoid).
+    /// Creates a schedule that rises, stays constant, then falls to zero.
+    /// See [`Trapezoid`](Sampling::Trapezoid) for the breakpoint constraints.
     ///
     /// ```
     /// use dataorder::Sampling;

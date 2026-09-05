@@ -1,6 +1,8 @@
 //! Compensated sums for schedule construction.
 
-/// A sum kept as two floats using Knuth's two-sum. Sufficient for bounded rate changes; signed slopes spanning many magnitudes need an `Expansion`.
+/// A sum and its rounding residual, stored as two floats using Knuth's two-sum.
+/// Sufficient for bounded rate changes. Signed slopes spanning many magnitudes
+/// need an [`Expansion`] to retain smaller contributions after larger ones are removed.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Compensated {
     hi: f64,

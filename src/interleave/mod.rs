@@ -1,61 +1,68 @@
-//! Balanced interleaving of many ordered sequences with per-sequence sampling schedules,
-//! iterated over any sub-range without materializing the merged sequence.
+//! Balanced interleaving from source lengths and sampling schedules.
 //!
-//! Given `k` sequences of lengths `n_0 … n_{k-1}`, an [`Interleave`] describes one merged
-//! ("joint") sequence of length `N = Σ n_i` in which every sequence keeps its own order
-//! and is drawn according to its [`Sampling`], a profile of its draw rate over the joint
-//! sequence:
+//! An [`Interleave`] merges ordered parts without storing their elements. It defines
+//! one order for the whole mix; both sequential iteration and random seeks recover
+//! positions in that same order.
+//!
+//! # Rate profiles
+//!
+//! A schedule describes a part's draw rate over progress `t` from 0 to 1. Integrating
+//! that rate gives a share function `F(t)`: the fraction of the part drawn by `t`.
+//! Scheduled profiles are normalized so `F(1) = 1`. A constant rate produces a linear
+//! share function; a linear ramp produces a quadratic one.
+//!
+//! Uniform parts fill the remaining capacity. Let `N` be the total length, `rho_i` the
+//! fraction `n_i / N` for scheduled part `i`, and `u` the fraction of uniform elements.
+//! All uniform parts use the same share function:
 //!
 //! ```text
-//!   ramp(d0, d1)               delayed(d)              trapezoid(d0, d1, d2, d3)     Uniform
-//!             ________                 ________              ____
-//!            /                         |                    /    \                ________
-//!   ________/                  ________|            _______/      \_______
-//!           d0     d1                  d                  d0  d1  d2  d3
+//! F_uniform(t) = (t - sum(rho_i * F_i(t))) / u
 //! ```
 //!
-//! # Model
+//! This is nondecreasing when the scheduled rates never exceed the total draw rate.
+//! Rates are piecewise linear, so checking their segment boundaries suffices. If the
+//! peak exceeds the permitted rounding tolerance, construction rejects the mix.
+//! With no uniform elements, the uniform profile is an unused placeholder.
 //!
-//! Progress `τ ∈ [0, 1]` is the joint position divided by `N`. Every sequence has a share
-//! function `F(τ)`: the fraction of it drawn by progress `τ`. For a scheduled sequence it is
-//! the integral of its rate profile normalized to `F(1) = 1`: zero until `d0`, a parabola on
-//! a ramp, a straight line at a constant rate. Every joint position holds exactly one
-//! element, so the uniform sequences absorb the slack: by progress `τ` they have jointly
-//! drawn the `τ·N − Σ_scheduled n_i·F_i(τ)` elements the scheduled ones did not, shared in
-//! proportion to their lengths, which gives them the common share function
-//! `F_U(τ) = (τ − Σ ρ_i·F_i(τ)) / u` with `ρ_i = n_i/N` and `u` the uniform fraction of all
-//! elements. It stays nondecreasing exactly when the scheduled sequences' rates sum to at
-//! most the whole draw rate at every progress; the rates are piecewise linear, so that is
-//! checked where their segments start, and otherwise the configuration is rejected.
+//! # Defining the order
 //!
-//! Every rate profile is piecewise linear and is stored as such; share functions are their
-//! integrals.
-//! Element `j` of sequence `i` gets the ideal progress `F_i⁻¹((j + φ_i)/n_i)`, where
-//! `φ_i = (2r+1)/(2k')` staggers the sequences so that equal ones round-robin instead of
-//! bunching (`k'` is the number of non-empty sequences and `r` the rank of `i` among them,
-//! so empty sequences do not affect the order), and the joint sequence is the sort of all
-//! elements by ideal progress (ties by sequence index). Rounding each sequence's draw
-//! count contributes less than one element of error at a given ideal progress, and the
-//! combined rank differs from `progress·N` by at most `k` in exact arithmetic. These bounds
-//! assume a feasible schedule: accepting overcommit within the numerical tolerance and
-//! clamping its negative slack can add drift proportional to length times that tolerance.
+//! Each element receives an ideal progress key:
 //!
-//! # Iteration
+//! ```text
+//! key(i, j) = inverse_F_i((j + phi_i) / n_i)
+//! phi_i    = (2 * r + 1) / (2 * k)
+//! ```
 //!
-//! [`Interleave::iter`] seeks by counting, per sequence, the elements below the progress
-//! `a/N` (inverse formula, then made exact against real keys; `O(log S)` per sequence for a
-//! profile of `S` segments, and the uniform profile has one per distinct breakpoint of the
-//! scheduled ones). A seek then replays up to `2k` heads, adding `O(k log(k + 1))`
-//! work. Poor count guesses use bounded binary searches instead of linear corrections.
-//! The walk repeatedly takes the minimum of a [tournament tree](tournament::TournamentTree) over the next element of every sequence
-//! (`⌈log2 k⌉` comparisons per element).
+//! Here `j` is the index within part `i`, `n_i` is its length, `k` is the number of
+//! non-empty parts, and `r` is the part's zero-based rank among them. The stagger
+//! `phi_i` makes equal uniform parts round-robin. Empty parts do not affect it.
 //!
-//! `iter(a..b)` yields exactly the elements at positions `a..b` of `iter(0..N)`, whatever
-//! the seek history. The order is defined as the sort by `(key, sequence, index)` and the
-//! tree only ever returns the true minimum of the remaining heads, so its internal state is
-//! irrelevant; the seek reproduces the heads exactly because keys are nondecreasing within
-//! a sequence by construction (monotone arithmetic, or a canonical inverse of a monotone
-//! polynomial), which also means rounding can never duplicate or drop an element.
+//! The merged order sorts by `(key, part index, element index)`. Keys are nondecreasing
+//! within each part, including under floating-point rounding, so a merge can preserve
+//! each part's order without materializing the sort.
+//!
+//! In exact arithmetic, rounding each part's count contributes less than one element
+//! of error. For a feasible schedule, an element's actual rank therefore differs from
+//! `key * N` by at most `k`. Accepted overcommitment and clamping of negative uniform
+//! rates can add drift proportional to `N` times the tolerance; the bound does not
+//! hold for every accepted configuration.
+//!
+//! # Seeking and iteration
+//!
+//! A seek first estimates the target progress as `position / N`. For each part, it
+//! counts elements below that progress, then checks the count against the actual keys.
+//! If the estimates are poor, bounded binary searches find counts that do not pass
+//! the target and leave at most `2k` elements to replay. Long runs of equal keys are
+//! handled by counts, in part order.
+//!
+//! The cursor builds a [tournament tree](tournament::TournamentTree) over the remaining
+//! heads and replays to the exact position. Each subsequent step emits the smallest
+//! head and replaces it with that part's next element. This takes `ceil(log2 k)`
+//! comparisons per element, dropping to none when one part remains.
+//!
+//! The sorted keys define the order, not the cursor's history. Reconstructing the same
+//! heads at a seek therefore gives the same elements as walking from the beginning.
+//! Monotone keys ensure rounding cannot duplicate or drop an element.
 
 mod iter;
 mod profile;
@@ -114,9 +121,10 @@ impl Interleave {
         Self::with_sampling(lens, &vec![Sampling::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
     }
 
-    /// Sequences of the given lengths and schedules (one per sequence). Zero lengths are
-    /// allowed, their schedule is ignored and they do not affect the order of the others.
-    /// Cost `O(k + s log s)` for `s` scheduled sequences, independent of the lengths.
+    /// Builds a mix from lengths and schedules, one schedule per part.
+    /// Empty parts still have their parameters validated but do not affect the
+    /// resulting order. Costs `O(k + s log s)` for `k` parts and `s` scheduled parts,
+    /// independent of the number of elements.
     ///
     /// # Panics
     /// If `lens` and `sampling` differ in length.

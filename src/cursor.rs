@@ -1,14 +1,12 @@
-//! Sequential iteration: a tree of per-node cursors mirroring the order. Every cursor can
-//! [`seek`](NodeCursor::seek) to a position, yield the [`next`](NodeCursor::next) element
-//! and [`skip`](NodeCursor::skip) elements. Only a `Mix` gains from sequential access (the
-//! interleave's tournament tree instead of a seek per element); a `Shuffle` reads its child
-//! by random access ([`get`]) because its positions are scattered.
+//! Sequential iteration with a cursor tree that mirrors the compiled order.
+//! Each node supports seeking, advancing and skipping. A mix keeps a tournament
+//! tree to avoid seeking for every element. A shuffle uses random access for its
+//! scattered child positions.
 //!
-//! Children of wide nodes (the parts of a `Mix`, the current part of a `Concat`) are built
-//! when they are first entered, so a cursor costs what it visits. The mix and shuffle steps
-//! live in their own structs. The mix step is inlined into the per-node dispatcher (a call
-//! per element costs more than its code); the shuffle step is not, since inlined it would
-//! make every other node kind pay its prologue at each level.
+//! Mix parts and the current concat child are initialized only when entered.
+//! Mix and shuffle steps have separate structs so their inlining can be controlled:
+//! the small mix step is inlined into dispatch, while the larger shuffle step stays
+//! out of line to avoid adding overhead to other node kinds.
 
 use crate::interleave::{Interleave, Iter};
 use crate::order::{Node, Order, get, resolve};
@@ -16,14 +14,17 @@ use crate::perm::{self, Key, Shape};
 use std::fmt;
 use std::ops::{Range, RangeBounds};
 
-/// Iterator over a range of an [`Order`], returned by [`Order::iter`]; yields
-/// `(&source, index in the source)`. [`seek`](Cursor::seek) repositions it,
-/// [`set_range`](Cursor::set_range) gives it another range, [`nth`](Iterator::nth) skips
-/// without visiting, and [`count`](Iterator::count) and [`last`](Iterator::last) answer
-/// from the range without walking it. Runtime allocations are deferred until the first
-/// draw, so constructing, repositioning or counting an undrawn cursor allocates nothing.
-/// It walks forward only (there is no `DoubleEndedIterator`); [`Order::get`] serves random
-/// access. `Debug` prints the position and the end of the range.
+/// A seekable iterator over a range of an [`Order`].
+///
+/// Created by [`Order::iter`], it yields `(&source, index_within_source)` pairs.
+/// Iteration moves forward; [`seek`](Cursor::seek) can move to an earlier or later
+/// position, and [`set_range`](Cursor::set_range) selects a new range.
+///
+/// [`nth`](Iterator::nth) skips without returning intermediate elements.
+/// [`count`](Iterator::count) uses the remaining length; [`last`](Iterator::last)
+/// uses random access. Neither walks the range. Allocation is deferred until an
+/// element is requested, so creating, repositioning or counting an undrawn cursor
+/// allocates nothing. `Debug` displays the current position and range end.
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     order: &'a Order<T>,
@@ -37,8 +38,8 @@ pub struct Cursor<'a, T> {
 impl<'a, T> Cursor<'a, T> {
     pub(crate) fn new(order: &'a Order<T>, range: Range<usize>) -> Self {
         let (start, end) = (range.start as u64, range.end as u64);
-        // Simple roots need no allocation. Preparing those here keeps their first draw
-        // as cheap as before; wider or composite roots defer their buffers and seeks.
+        // Prepare allocation-free roots immediately. Composite roots defer their
+        // buffers and seeks until the first draw.
         let root = match &order.root {
             Node::Empty => NodeCursor::Empty,
             Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: *offset + start },
@@ -56,7 +57,7 @@ impl<'a, T> Cursor<'a, T> {
         Cursor { order, root, pos: start, end }
     }
 
-    /// Position of the next element.
+    /// Absolute order position of the next element, or the range end if exhausted.
     #[must_use]
     pub fn position(&self) -> usize {
         self.pos as usize
@@ -68,21 +69,22 @@ impl<'a, T> Cursor<'a, T> {
         (self.end - self.pos) as usize
     }
 
-    /// Continues at `pos`, anywhere up to the end of the range. Moving forward skips: a mix
-    /// steps through its interleave, or re-seeks it for a long hop, and a hop into another
-    /// repetition or concat part lands there directly; moving backward seeks afresh. Either
-    /// way the cursor's allocations are reused (except that a concat builds the cursor of
-    /// the part it lands in, and a mix that of a part it draws from for the first time), so
-    /// seeking is the way to visit many scattered positions.
+    /// Moves to absolute order position `pos`, keeping the current range end.
+    /// `pos` may be before the range's original start. Seeking to the end exhausts
+    /// the cursor; seeking backward lets iteration resume.
+    ///
+    /// Forward seeks skip; backward seeks reposition the cursor tree. Both reuse
+    /// existing buffers. Entering another concat child or a previously unvisited mix
+    /// part can allocate a child cursor. Use this method for repeated random access.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::mix([Seq::source(100).shuffle(1), Seq::source(50)]))?;
-    /// let mut cursor = order.iter(..);
+    /// let mut cursor = order.iter(100..);
     /// cursor.seek(120);
     /// assert_eq!(cursor.position(), 120);
-    /// assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(order.get(120)).map(|(&s, i)| (s, i)));
-    /// cursor.seek(7);
+    /// assert_eq!(cursor.next(), Some(order.get(120)));
+    /// cursor.seek(7); // Absolute position, even before the original range start.
     /// assert_eq!(cursor.len(), 150 - 7);
     /// # Ok::<(), dataorder::Error>(())
     /// ```
@@ -100,9 +102,9 @@ impl<'a, T> Cursor<'a, T> {
         self.pos = pos;
     }
 
-    /// Continues over `range` of the order: seeks to its start, forward or backward as
-    /// [`seek`](Cursor::seek) does, and ends at its end. One cursor thus serves any number
-    /// of ranges with its buffers.
+    /// Selects a new range of the order and moves to its start.
+    /// Reuses existing buffers, like [`seek`](Cursor::seek), so one cursor can serve
+    /// multiple ranges. The range may extend beyond the previous range's end.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -133,9 +135,9 @@ impl<T> fmt::Debug for Cursor<'_, T> {
     }
 }
 
-/// A clone continues from the same position, independently (for a look-ahead, say). It
-/// copies the cursor tree: the cursors of every part entered so far, and the interleave's
-/// tree of every mix, so it costs about what building and seeking the cursor cost.
+/// Clones the current position and cursor state for independent iteration.
+/// Copies initialized child cursors and mix buffers, so cloning an active cursor
+/// can allocate. The source handles remain borrowed from the same order.
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
         Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end }
@@ -191,10 +193,11 @@ impl<T> ExactSizeIterator for Cursor<'_, T> {}
 
 impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 
-/// Not yet seeked: the value of `MixCursor::next_j` for an untouched child.
+/// Marks a child whose position is unknown after a mix seek or before its first draw.
 const UNSEEKED: u64 = u64::MAX;
 
-/// An explicit tag: with one hidden in a field's niche, every dispatch would decode it.
+/// Per-node iteration state. An explicit tag avoids decoding a tag stored in a
+/// field's unused bit patterns on every dispatch.
 /// `Uninitialized` defers the root's construction until an element is requested, including
 /// across seeks and range changes. `Empty` doubles as "not built yet" for the children of
 /// a `Concat` or `Mix`, whose real children are never empty (a concat drops them, a mix
@@ -208,7 +211,7 @@ pub(crate) enum NodeCursor<'a> {
         offset: u64,
         next: u64,
     },
-    /// Only the current child has a cursor, built when the concat is entered or seeked.
+    /// Only the current child has a cursor, built when the concat enters that child.
     Concat {
         children: &'a [Node],
         offsets: &'a [u64],
@@ -247,7 +250,7 @@ pub(crate) enum NodeCursor<'a> {
 }
 
 impl<'a> NodeCursor<'a> {
-    /// A cursor over `node`, not yet seeked.
+    /// Creates a cursor over `node`; it must be positioned before drawing an element.
     fn new(node: &'a Node) -> Self {
         match node {
             Node::Empty => NodeCursor::Empty,
@@ -434,12 +437,12 @@ impl<'a> NodeCursor<'a> {
     }
 }
 
-/// The cursor of a `Mix`. Children are built and seeked lazily: `next_j[s]` is the index
-/// the cursor of part `s` stands at, or [`UNSEEKED`] after a seek of the mix; skipping
-/// leaves them behind and the mismatch skips them forward when they are drawn from again.
-/// The slots are cursors in place, about 220 bytes per part whether entered or not: boxing
-/// them (16 bytes per part) was measured at 0.5 to 1.5 ns per element more on every mix and
-/// 2.9 ns on a mix of mixes, one dependent load per level, and rejected.
+/// A mix cursor with lazily positioned children.
+///
+/// `next_j[s]` records part `s`'s cursor position, or [`UNSEEKED`] when that position
+/// is unknown. Skipping the mix leaves child cursors behind; the next draw from a
+/// child catches it up. Children are stored inline to avoid an extra pointer load
+/// per tree level, at the cost of reserving a full cursor slot for every part.
 #[derive(Clone, Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
@@ -471,7 +474,7 @@ impl<'a> MixCursor<'a> {
         self.ctx = ctx;
     }
 
-    /// Inlined into the dispatcher: measured 1.5 ns per element cheaper than a call.
+    /// Inlined into dispatch to avoid a function call for each element.
     #[inline(always)]
     fn next(&mut self) -> (u32, u64) {
         let (s, j) = self.iter.step();
@@ -483,12 +486,10 @@ impl<'a> MixCursor<'a> {
         self.cursors[s].next()
     }
 
-    /// Brings the cursor of part `s` to `j`: builds it if the part has not been entered
-    /// yet, skips it forward if it stands before `j` (the mix only ever moves its parts
-    /// forward by skipping, so a part left behind is behind, never ahead; a skip of a part
-    /// that is itself a mix steps or re-seeks its interleave, where a seek would count
-    /// every element of every part again), and seeks it after a seek of the mix.
-    /// Out of the walk's hot loop: inlined, it cost 0.3 to 0.6 ns per element on mixes.
+    /// Positions part `s` at `j`, initializing its cursor if necessary.
+    /// A known child position can only be behind `j`, so it can skip forward. After
+    /// a mix seek the position is unknown and needs a full seek. Keeping this slow
+    /// path out of line reduces overhead in the ordinary mix step.
     #[cold]
     #[inline(never)]
     fn seek_child(&mut self, s: usize, j: u64) {
@@ -502,13 +503,11 @@ impl<'a> MixCursor<'a> {
         self.cursors[s].seek(j, self.ctx);
     }
 
-    /// A long skip re-seeks the interleave instead of stepping through it: from twice the
-    /// number of parts, four times when some are scheduled. Measured on mixes of 100 parts
-    /// of a million elements (Ryzen 9 9950X3D): a step costs 10 to 13 ns, a seek 1.8 µs
-    /// uniform and 4.5 µs with a fifth of the parts scheduled (their share functions have
-    /// more segments to search), so the break-even hops are about 1.7 and 3.6 parts. Either
-    /// way the parts' cursors stay where they are: each is skipped up to its next index when
-    /// it is next drawn from (see [`seek_child`](MixCursor::seek_child)).
+    /// Skips by walking short distances and seeking longer ones.
+    /// The crossover is twice the part count for uniform mixes, four times for
+    /// scheduled mixes. These thresholds were chosen from Ryzen 9 9950X3D timings;
+    /// scheduled seeks cost more because their profiles have more segments.
+    /// Child cursors stay in place until their next draw; see [`Self::seek_child`].
     fn skip(&mut self, m: u64) {
         self.pos += m;
         let hop = self.cursors.len() as u64 * if self.il.is_scheduled() { 4 } else { 2 };
