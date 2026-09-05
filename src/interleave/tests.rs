@@ -2,20 +2,8 @@
 //! properties, exact seeks, balance bounds and the schedule semantics.
 
 use super::*;
+use crate::tests::Rng;
 use Sampling::*;
-
-struct Rng(u64);
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
 
 fn full(il: &Interleave) -> Vec<(usize, u64)> {
     il.iter(0..il.len()).collect()
@@ -60,13 +48,13 @@ fn worst_deviation(il: &Interleave, all: &[(usize, u64)]) -> Vec<f64> {
 }
 
 fn random_lens(rng: &mut Rng) -> Vec<u64> {
-    let k = rng.below(9) as usize;
+    let k = rng.below64(9) as usize;
     (0..k)
-        .map(|_| match rng.below(4) {
+        .map(|_| match rng.below64(4) {
             0 => 0,
-            1 => rng.below(4),
-            2 => rng.below(30),
-            _ => rng.below(300),
+            1 => rng.below64(4),
+            2 => rng.below64(30),
+            _ => rng.below64(300),
         })
         .collect()
 }
@@ -164,14 +152,14 @@ fn subranges_and_seams() {
         let n = il.len();
         let all = full(&il);
         for _ in 0..30 {
-            let a = rng.below(n + 1);
-            let b = a + rng.below(n + 1 - a);
+            let a = rng.below64(n + 1);
+            let b = a + rng.below64(n + 1 - a);
             let got: Vec<_> = il.iter(a..b).collect();
             assert_eq!(got, &all[a as usize..b as usize], "range {a}..{b}");
             assert_eq!(il.iter(a..b).size_hint(), ((b - a) as usize, Some((b - a) as usize)));
         }
         // Random partitions tile the full sequence exactly.
-        let mut cuts: Vec<u64> = (0..5).map(|_| rng.below(n + 1)).collect();
+        let mut cuts: Vec<u64> = (0..5).map(|_| rng.below64(n + 1)).collect();
         cuts.push(0);
         cuts.push(n);
         cuts.sort_unstable();
@@ -188,9 +176,9 @@ fn every_seek_matches_the_slice() {
     for il in all_cases() {
         let n = il.len();
         let all = full(&il);
-        let starts: Vec<u64> = if n <= 3000 { (0..=n).collect() } else { (0..300).map(|_| rng.below(n + 1)).collect() };
+        let starts: Vec<u64> = if n <= 3000 { (0..=n).collect() } else { (0..300).map(|_| rng.below64(n + 1)).collect() };
         for a in starts {
-            let b = (a + 1 + rng.below(40)).min(n);
+            let b = (a + 1 + rng.below64(40)).min(n);
             let got: Vec<_> = il.iter(a..b).collect();
             assert_eq!(got, &all[a as usize..b as usize], "seek to {a}");
         }
@@ -220,23 +208,23 @@ fn random_configurations() {
     let mut rng = Rng(0xC0FF_EE00_1234_5678);
     let mut checked = 0;
     while checked < 2000 {
-        let k = 1 + rng.below(12) as usize;
+        let k = 1 + rng.below64(12) as usize;
         let lens: Vec<u64> = (0..k)
-            .map(|_| match rng.below(3) {
-                0 => rng.below(3),
-                1 => rng.below(50),
-                _ => rng.below(400),
+            .map(|_| match rng.below64(3) {
+                0 => rng.below64(3),
+                1 => rng.below64(50),
+                _ => rng.below64(400),
             })
             .collect();
         let sampling: Vec<Sampling> = (0..k)
             .map(|_| {
-                let d0 = rng.below(999);
-                let d1 = if rng.below(2) == 0 { d0 } else { d0 + rng.below(1001 - d0) };
-                match rng.below(4) {
+                let d0 = rng.below64(999);
+                let d1 = if rng.below64(2) == 0 { d0 } else { d0 + rng.below64(1001 - d0) };
+                match rng.below64(4) {
                     0 => Uniform,
                     1 => {
-                        let d2 = d1 + rng.below(1001 - d1);
-                        let d3 = if rng.below(2) == 0 { d2 } else { d2 + rng.below(1001 - d2) };
+                        let d2 = d1 + rng.below64(1001 - d1);
+                        let d3 = if rng.below64(2) == 0 { d2 } else { d2 + rng.below64(1001 - d2) };
                         if d0 + d1 < d2 + d3 {
                             Sampling::trapezoid(d0 as f64 / 1000.0, d1 as f64 / 1000.0, d2 as f64 / 1000.0, d3 as f64 / 1000.0)
                         } else {
@@ -272,8 +260,8 @@ fn random_configurations() {
             }
         }
         for _ in 0..20 {
-            let a = rng.below(n + 1);
-            let b = (a + rng.below(60)).min(n);
+            let a = rng.below64(n + 1);
+            let b = (a + rng.below64(60)).min(n);
             assert_eq!(il.iter(a..b).collect::<Vec<_>>(), &all[a as usize..b as usize], "{lens:?} {sampling:?} seek {a}");
         }
         for (s, samp) in sampling.iter().enumerate() {
@@ -475,7 +463,7 @@ fn empty_sequences_do_not_affect_the_order() {
         let il = Interleave::with_sampling(&lens, &sampling).unwrap();
         let mut lens2 = lens.clone();
         let mut sampling2 = sampling.clone();
-        let at = rng.below(lens.len() as u64 + 1) as usize;
+        let at = rng.below64(lens.len() as u64 + 1) as usize;
         lens2.insert(at, 0);
         sampling2.insert(at, if at.is_multiple_of(2) { DelayedLinear { start: 0.99, full: 0.99 } } else { Sampling::until(0.01) });
         let il2 = Interleave::with_sampling(&lens2, &sampling2).unwrap();
@@ -493,8 +481,8 @@ fn reseeking_matches_fresh_iterators() {
         let all = full(&il);
         let mut it = il.iter(0..0);
         for _ in 0..20 {
-            let a = rng.below(n + 1);
-            let b = (a + rng.below(30)).min(n);
+            let a = rng.below64(n + 1);
+            let b = (a + rng.below64(30)).min(n);
             it.seek(a..b);
             assert_eq!(it.by_ref().collect::<Vec<_>>(), &all[a as usize..b as usize], "reseek {a}..{b}");
         }
@@ -523,9 +511,9 @@ fn huge_lengths_seek_consistently() {
     let n = il.len();
     let mut rng = Rng(777);
     for _ in 0..40 {
-        let a = rng.below(n - 30_000);
-        let b = a + rng.below(10_000);
-        let c = b + rng.below(10_000);
+        let a = rng.below64(n - 30_000);
+        let b = a + rng.below64(10_000);
+        let c = b + rng.below64(10_000);
         let whole: Vec<_> = il.iter(a..c).collect();
         let mut parts: Vec<_> = il.iter(a..b).collect();
         parts.extend(il.iter(b..c));

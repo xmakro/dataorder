@@ -80,16 +80,25 @@ fn at(kind: ErrorKind, path: &[usize]) -> Error {
     Error::new(kind, path.to_vec())
 }
 
-struct Rng(u64);
+/// A xorshift generator for the random configurations of every test module.
+pub(crate) struct Rng(pub(crate) u64);
+
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         self.0
     }
-    fn below(&mut self, n: usize) -> usize {
+
+    /// Uniform below `n`.
+    pub(crate) fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
+    }
+
+    /// Uniform below `n`.
+    pub(crate) fn below64(&mut self, n: u64) -> u64 {
+        self.next() % n
     }
 }
 
@@ -723,29 +732,6 @@ fn orders_longer_than_usize_are_rejected() {
     }
 }
 
-/// With the `serde` feature a configuration survives a round trip and compiles to the same order.
-#[cfg(feature = "serde")]
-#[test]
-fn serde_round_trip() {
-    let seq: Seq<usize> = Seq::mix_with([
-        (Seq::source(1000).shuffle(1).repeat(2), Sampling::Uniform),
-        (Seq::concat([Seq::source(300).skip(10), Seq::source(50).take(20)]).shuffle(2), Sampling::ramp(0.2, 0.6)),
-    ])
-    .shard(3, 1);
-    let json = serde_json::to_string(&seq).unwrap();
-    let back: Seq<usize> = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, seq);
-    let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
-    assert!(a.iter(0..a.len()).map(|(s, i)| (*s, i)).eq(b.iter(0..b.len()).map(|(s, i)| (*s, i))));
-    // The wire format is part of the API.
-    let seq: Seq<usize> = Seq::weighted_with(9, [(Seq::source(4).shuffle(1), 0.5, Sampling::ramp(0.1, 0.2))]);
-    assert_eq!(
-        serde_json::to_string(&seq).unwrap(),
-        r#"{"Weighted":{"total":9,"parts":[{"seq":{"Shuffle":{"seed":1,"inner":{"Source":4}}},"weight":0.5,"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}}"#
-    );
-    assert!(serde_json::from_str::<Seq<usize>>(r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform","extra":1}]}"#).is_err());
-}
-
 #[test]
 fn cloned_cursor_continues_independently() {
     let order = Order::new(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).shard(3, 1)).unwrap();
@@ -770,25 +756,6 @@ fn types_are_send_and_sync() {
     assert_send_sync::<Sampling>();
     assert_send_sync::<MixPart<usize>>();
     assert_send_sync::<WeightedPart<usize>>();
-}
-
-/// Sources through references and smart pointers, trait objects included.
-#[test]
-fn source_impls() {
-    use std::rc::Rc;
-    use std::sync::Arc;
-    let shared = Arc::new(Src { id: 3, len: 7 });
-    let seq: Seq<Box<dyn Source>> = Seq::concat([
-        Seq::source(Box::new(5usize) as Box<dyn Source>),
-        Seq::source(Box::new(Rc::new(3usize)) as Box<dyn Source>),
-        Seq::source(Box::new(shared.clone()) as Box<dyn Source>),
-        Seq::source(Box::new(&*shared) as Box<dyn Source>),
-    ]);
-    assert_eq!(seq.check(), Ok(22));
-    let order = Order::new(seq).unwrap();
-    assert_eq!(order.sources().iter().map(|s| s.len()).collect::<Vec<_>>(), [5, 3, 7, 7]);
-    assert_eq!(order.get(21).1, 6);
-    assert!(Seq::source(Rc::new(4usize)).check() == Ok(4) && Seq::source(Box::new(4usize)).check() == Ok(4));
 }
 
 /// Inclusive and open bounds in `slice`.

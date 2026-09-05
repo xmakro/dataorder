@@ -206,21 +206,13 @@ fn trade(stored_wins: bool, cand: Entry, stored: Entry) -> (Entry, Entry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::Rng;
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
 
-    struct Rng(u64);
-    impl Rng {
-        fn next(&mut self) -> u64 {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 7;
-            self.0 ^= self.0 << 17;
-            self.0
-        }
-        fn key(&mut self) -> f64 {
-            // Few distinct values so that ties are common.
-            (self.next() % 50) as f64 / 7.0
-        }
+    /// Few distinct values, so that ties are common.
+    fn random_key(rng: &mut Rng) -> f64 {
+        (rng.next() % 50) as f64 / 7.0
     }
 
     /// `(key, leaf)` with a total order matching the tree's tie-break.
@@ -236,7 +228,7 @@ mod tests {
         let mut tree = TournamentTree::new(Vec::new());
         for &n in &[1usize, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 100, 1000] {
             for _ in 0..(if n < 20 { 50 } else { 3 }) {
-                let keys: Vec<f64> = (0..n).map(|_| rng.key()).collect();
+                let keys: Vec<f64> = (0..n).map(|_| random_key(&mut rng)).collect();
                 // Alternately a fresh tree and a rebuilt one.
                 if rng.next().is_multiple_of(2) {
                     tree = TournamentTree::new(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
@@ -252,7 +244,7 @@ mod tests {
                     if rng.next().is_multiple_of(3) {
                         tree.remove_min();
                     } else {
-                        let new = rng.key();
+                        let new = random_key(&mut rng);
                         tree.set_min(new, value);
                         heap.push(Reverse(k(new, leaf)));
                     }
