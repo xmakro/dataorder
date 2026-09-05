@@ -62,10 +62,10 @@ impl Error {
             self.kind(),
             ErrorKind::MixTooLong
                 | ErrorKind::InvalidSampling { .. }
-                | ErrorKind::TooSteep { .. }
+                | ErrorKind::TooSteep
                 | ErrorKind::Overcommitted { .. }
                 | ErrorKind::ZeroWeights
-                | ErrorKind::EmptyWeightedPart { .. }
+                | ErrorKind::EmptyWeightedPart
         )
     }
 }
@@ -73,6 +73,11 @@ impl Error {
 /// An error at the root, for comparisons.
 fn root(kind: ErrorKind) -> Error {
     Error::new(kind, Vec::new())
+}
+
+/// An error at the given path, for comparisons.
+fn at(kind: ErrorKind, path: &[usize]) -> Error {
+    Error::new(kind, path.to_vec())
 }
 
 struct Rng(u64);
@@ -108,17 +113,20 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             let evs = parts.iter().map(|p| eval_at(&p.seq, ctx, depth)).collect::<Result<Vec<_>, _>>()?;
             let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
-            let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| root(e.into()))?;
+            let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
+                let (kind, part): (ErrorKind, Option<usize>) = e.into();
+                at(kind, part.as_slice())
+            })?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
         }
         Seq::Weighted { total, parts } => {
             let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
-            let shares = crate::order::weighted_shares(*total as u64, &weights).map_err(root)?;
+            let shares = crate::order::weighted_shares(*total as u64, &weights).map_err(|(kind, part)| at(kind, part.as_slice()))?;
             let mut mixed = Vec::new();
             for (i, (part, share)) in parts.iter().zip(shares).enumerate() {
                 let len = eval_at(&part.seq, ctx, depth)?.len();
                 if len == 0 && share > 0 {
-                    return Err(root(ErrorKind::EmptyWeightedPart { part: i }));
+                    return Err(at(ErrorKind::EmptyWeightedPart, &[i]));
                 }
                 let times = if len == 0 { 1 } else { (share as usize).div_ceil(len).max(1) };
                 let inner = if times > 1 { Seq::Repeat { times, inner: Box::new(part.seq.clone()) } } else { part.seq.clone() };
@@ -443,12 +451,16 @@ fn errors() {
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
     let over = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 0.5, full: 0.5 }), (src(1, 1), Sampling::Uniform)]);
     assert!(matches!(Order::new(over).unwrap_err().kind(), ErrorKind::Overcommitted { .. }));
-    // A mix that folds away is still validated.
+    // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(
         Order::new(over1).unwrap_err(),
-        root(ErrorKind::InvalidSampling { part: 0, sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } })
+        at(ErrorKind::InvalidSampling { sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } }, &[0])
     );
+    let steep = Seq::concat([a.clone(), Seq::mix_with([(a.clone(), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.999))])]);
+    let err = Order::new(steep).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong), "{err}");
+    assert_eq!(err.path(), if err.kind() == &ErrorKind::TooSteep { &[1, 1][..] } else { &[1][..] });
     // The path leads to the node: part 1 of the mix, then the single child of the shuffle.
     let nested = Seq::mix([a.clone(), Seq::concat([a.clone(), a.clone().take(11).shuffle(1)])]).repeat(2);
     let err = Order::new(nested).unwrap_err();
@@ -457,10 +469,11 @@ fn errors() {
     assert_eq!(err.to_string(), "cannot take 11 of 10 positions (at node/0/1/1/0)");
     assert_eq!(root(ErrorKind::ZeroStep).to_string(), "stride step is zero (at the root)");
     assert_eq!(err.clone().into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
-    // Weights: reported at the weighted node with the part index, before the parts are compiled.
+    // Weights: reported at the part, before any part is compiled.
     let w = Seq::concat([a.clone(), Seq::weighted(10, [(a.clone(), 1.0), (a.clone().take(99), -1.0)])]);
     let err = Order::new(w).unwrap_err();
-    assert_eq!((err.kind(), err.path()), (&ErrorKind::InvalidWeight { part: 1, weight: -1.0 }, &[1][..]));
+    assert_eq!((err.kind(), err.path()), (&ErrorKind::InvalidWeight { weight: -1.0 }, &[1, 1][..]));
+    assert_eq!(err.to_string(), "invalid weight -1 (at node/1/1)");
     assert_eq!(Order::new(Seq::<Src>::weighted(5, [])).unwrap_err(), root(ErrorKind::ZeroWeights));
 }
 
@@ -489,14 +502,8 @@ fn deep_configurations_are_rejected_on_a_small_stack() {
         assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
         assert_eq!(Order::new(Seq::mix([bad(), deep()])).unwrap_err().kind(), &out_of_range);
         assert_eq!(Order::new(Seq::weighted(10, [(bad(), 1.0), (deep(), 1.0)])).unwrap_err().kind(), &out_of_range);
-        assert_eq!(
-            Order::new(Seq::weighted(10, [(deep(), -1.0)])).unwrap_err().kind(),
-            &ErrorKind::InvalidWeight { part: 0, weight: -1.0 }
-        );
-        assert_eq!(
-            Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (deep(), 1.0)])).unwrap_err().kind(),
-            &ErrorKind::EmptyWeightedPart { part: 0 }
-        );
+        assert_eq!(Order::new(Seq::weighted(10, [(deep(), -1.0)])).unwrap_err(), at(ErrorKind::InvalidWeight { weight: -1.0 }, &[0]));
+        assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (deep(), 1.0)])).unwrap_err(), at(ErrorKind::EmptyWeightedPart, &[0]));
         assert_eq!(Order::new(deep().stride(0, 0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
         let first_too_deep = Seq::concat([deep(), bad()]);
         assert_eq!(first_too_deep.check().unwrap_err().kind(), &ErrorKind::TooDeep);
@@ -777,7 +784,7 @@ fn steep_schedule_at_scale() {
     }
     // Too steep is rejected, not looped over.
     let steep = Seq::mix_with([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
-    assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep { part: 1 } | ErrorKind::MixTooLong));
+    assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong));
     assert_eq!(MAX_MIX_LEN, 1 << 46);
 }
 
@@ -797,10 +804,10 @@ fn weighted_shares_sum_and_round() {
             assert!((*share as f64 - w / sum * total as f64).abs() < 1.0);
         }
     }
-    assert_eq!(weighted_shares(5, &[1.0, -1.0]).unwrap_err(), ErrorKind::InvalidWeight { part: 1, weight: -1.0 });
-    assert!(matches!(weighted_shares(5, &[f64::NAN]).unwrap_err(), ErrorKind::InvalidWeight { part: 0, .. }));
-    assert_eq!(weighted_shares(5, &[0.0, 0.0]).unwrap_err(), ErrorKind::ZeroWeights);
-    assert_eq!(weighted_shares(5, &[]).unwrap_err(), ErrorKind::ZeroWeights);
+    assert_eq!(weighted_shares(5, &[1.0, -1.0]).unwrap_err(), (ErrorKind::InvalidWeight { weight: -1.0 }, Some(1)));
+    assert!(matches!(weighted_shares(5, &[f64::NAN]).unwrap_err(), (ErrorKind::InvalidWeight { .. }, Some(0))));
+    assert_eq!(weighted_shares(5, &[0.0, 0.0]).unwrap_err(), (ErrorKind::ZeroWeights, None));
+    assert_eq!(weighted_shares(5, &[]).unwrap_err(), (ErrorKind::ZeroWeights, None));
     assert_eq!(weighted_shares(0, &[0.0, 0.0]).unwrap(), [0, 0]);
     // Many parts with near-integer shares at the mix limit: the sum still comes out exact.
     let w: Vec<f64> = (0..300).map(|i| 1.0 + 1e-9 * (i % 7) as f64).collect();
@@ -815,8 +822,8 @@ fn weighted_shares_sum_and_round() {
     assert_eq!(weighted_shares(100, &[1e300, 1e-300]).unwrap(), [100, 0]);
     assert_eq!(Seq::weighted(100, [(src(0, 10), f64::MAX), (src(1, 10), f64::MAX)]).check(), Ok(100));
     // A total beyond the mix limit is rejected before any rounding could go wrong.
-    assert_eq!(weighted_shares((1 << 46) + 1, &[1.0]).unwrap_err(), ErrorKind::MixTooLong);
-    assert_eq!(weighted_shares(u64::MAX, &[1.0, 1.0]).unwrap_err(), ErrorKind::MixTooLong);
+    assert_eq!(weighted_shares((1 << 46) + 1, &[1.0]).unwrap_err(), (ErrorKind::MixTooLong, None));
+    assert_eq!(weighted_shares(u64::MAX, &[1.0, 1.0]).unwrap_err(), (ErrorKind::MixTooLong, None));
     #[cfg(target_pointer_width = "64")]
     assert_eq!(Seq::weighted((1usize << 60) + 5, [(src(0, 10), 1.0), (src(1, 10), 1.0)]).check().unwrap_err(), root(ErrorKind::MixTooLong));
 }
@@ -845,10 +852,7 @@ fn weighted_mix() {
     ones.dedup();
     assert_eq!(ones.len(), 1200);
     // Errors and edges.
-    assert_eq!(
-        Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (src(1, 5), 1.0)])).unwrap_err(),
-        root(ErrorKind::EmptyWeightedPart { part: 0 })
-    );
+    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (src(1, 5), 1.0)])).unwrap_err(), at(ErrorKind::EmptyWeightedPart, &[0]));
     assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 0.0), (src(1, 5), 1.0)])).unwrap().len(), 10);
     assert_eq!(Order::new(Seq::weighted(0, [(src(0, 5), 1.0)])).unwrap().len(), 0);
     assert_eq!(Order::new(Seq::weighted(0, [(src(0, 5), 0.0)])).unwrap().len(), 0);

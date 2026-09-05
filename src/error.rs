@@ -27,6 +27,7 @@ impl Error {
     /// Where: the indices of the children followed from the root of the
     /// [`Seq`](crate::Seq) to the node the problem was found at (the part index under a
     /// `Concat`, `Mix` or `Weighted`, `0` under a node with one child). Empty for the root.
+    /// A schedule or weight problem is found at the part it belongs to.
     #[must_use]
     pub fn path(&self) -> &[usize] {
         &self.path
@@ -94,40 +95,30 @@ pub enum ErrorKind {
     TooDeep,
     /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
-    /// A schedule parameter of mix part `part` is out of range or not finite.
+    /// A schedule parameter of a mix part is out of range or not finite.
     InvalidSampling {
-        /// Index of the part in the mix.
-        part: usize,
-        /// Its schedule.
+        /// The schedule.
         sampling: Sampling,
     },
-    /// Mix part `part` is too long for the steepness of its schedule (`length × final_rate`
+    /// A mix part is too long for the steepness of its schedule (`length × final_rate`
     /// exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
-    TooSteep {
-        /// Index of the part in the mix.
-        part: usize,
-    },
+    TooSteep,
     /// The scheduled parts of a mix need `demand` (> 1) times the whole draw rate at the
     /// end, leaving nothing for the uniform parts.
     Overcommitted {
         /// The scheduled parts' final rates, summed, as a fraction of the whole draw rate.
         demand: f64,
     },
-    /// A weight of a weighted mix is negative or not finite.
+    /// The weight of a weighted mix part is negative or not finite.
     InvalidWeight {
-        /// Index of the part in the mix.
-        part: usize,
-        /// Its weight.
+        /// The weight.
         weight: f64,
     },
     /// A weighted mix with a positive total has no weight to distribute it over: no parts,
     /// or weights that sum to zero.
     ZeroWeights,
     /// A part of a weighted mix has a positive share but no elements.
-    EmptyWeightedPart {
-        /// Index of the part in the mix.
-        part: usize,
-    },
+    EmptyWeightedPart,
 }
 
 impl fmt::Display for ErrorKind {
@@ -142,23 +133,24 @@ impl fmt::Display for ErrorKind {
             Self::TooManyMixParts => write!(f, "mix with 2^31 parts or more"),
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
-            Self::InvalidSampling { part, sampling } => write!(f, "mix part {part}: invalid {sampling:?}"),
-            Self::TooSteep { part } => write!(f, "mix part {part}: too long for the steepness of its schedule"),
+            Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),
+            Self::TooSteep => write!(f, "mix part too long for the steepness of its schedule"),
             Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at the end", demand * 100.0),
-            Self::InvalidWeight { part, weight } => write!(f, "weighted mix part {part}: invalid weight {weight}"),
+            Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
             Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
-            Self::EmptyWeightedPart { part } => write!(f, "weighted mix part {part} has a share but no elements"),
+            Self::EmptyWeightedPart => write!(f, "weighted mix part has a share but no elements"),
         }
     }
 }
 
-impl From<SamplingError> for ErrorKind {
+/// The kind and, for a problem with one part, the part's index.
+impl From<SamplingError> for (ErrorKind, Option<usize>) {
     fn from(e: SamplingError) -> Self {
         match e {
-            SamplingError::TooLong => Self::MixTooLong,
-            SamplingError::InvalidParameter { seq, sampling } => Self::InvalidSampling { part: seq, sampling },
-            SamplingError::TooSteep { seq } => Self::TooSteep { part: seq },
-            SamplingError::Overcommitted { demand } => Self::Overcommitted { demand },
+            SamplingError::TooLong => (ErrorKind::MixTooLong, None),
+            SamplingError::InvalidParameter { seq, sampling } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
+            SamplingError::TooSteep { seq } => (ErrorKind::TooSteep, Some(seq)),
+            SamplingError::Overcommitted { demand } => (ErrorKind::Overcommitted { demand }, None),
         }
     }
 }

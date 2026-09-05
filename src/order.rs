@@ -279,8 +279,15 @@ struct Compiler<T> {
 }
 
 impl<T: Source> Compiler<T> {
+    /// An error at the node being compiled, or at its child `part`.
+    fn err_at(&self, kind: ErrorKind, part: Option<usize>) -> Error {
+        let mut path = self.path.clone();
+        path.extend(part);
+        Error::new(kind, path)
+    }
+
     fn err(&self, kind: ErrorKind) -> Error {
-        Error::new(kind, self.path.clone())
+        self.err_at(kind, None)
     }
 
     /// Compiles child `i` of the node being compiled, `repeats` repeats deep, one nesting
@@ -426,7 +433,10 @@ impl<T: Source> Compiler<T> {
             return Err(self.err(ErrorKind::TooManyMixParts));
         }
         let lens: Vec<u64> = children.iter().map(Node::len).collect();
-        let il = Interleave::with_sampling(&lens, sampling).map_err(|e| self.err(e.into()))?;
+        let il = Interleave::with_sampling(&lens, sampling).map_err(|e| {
+            let (kind, part) = e.into();
+            self.err_at(kind, part)
+        })?;
         let mut nonempty = children.iter().filter(|c| c.len() > 0);
         Ok(match (nonempty.next(), nonempty.next()) {
             (None, _) => Node::Empty,
@@ -444,9 +454,9 @@ impl<T: Source> Compiler<T> {
         let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
         let shares = match weighted_shares(total as u64, &weights) {
             Ok(shares) => shares,
-            Err(kind) => {
+            Err((kind, part)) => {
                 parts.into_iter().for_each(|p| p.seq.dismantle());
-                return Err(self.err(kind));
+                return Err(self.err_at(kind, part));
             }
         };
         let mut children = Vec::with_capacity(parts.len());
@@ -469,7 +479,7 @@ impl<T: Source> Compiler<T> {
         let mut child = self.child(i, seq, repeats, level)?;
         let len = child.len();
         if len == 0 && share > 0 {
-            return Err(self.err(ErrorKind::EmptyWeightedPart { part: i }));
+            return Err(self.err_at(ErrorKind::EmptyWeightedPart, Some(i)));
         }
         if share == 0 {
             return Ok(Node::Empty);
@@ -491,15 +501,16 @@ impl<T: Source> Compiler<T> {
 /// fractional shares (lowest index first on ties). Rounding could make the floors sum to
 /// one more than `total` in contrived cases; then the parts with the smallest fractions
 /// give one back. A total beyond [`MAX_TOTAL_LEN`] is rejected first, so that `total` and
-/// every share are exact in `f64` and the fix-ups above suffice.
-pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, ErrorKind> {
+/// every share are exact in `f64` and the fix-ups above suffice. An error names the part
+/// it concerns, if one.
+pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, (ErrorKind, Option<usize>)> {
     for (i, &w) in weights.iter().enumerate() {
         if !(w.is_finite() && w >= 0.0) {
-            return Err(ErrorKind::InvalidWeight { part: i, weight: w });
+            return Err((ErrorKind::InvalidWeight { weight: w }, Some(i)));
         }
     }
     if total > MAX_TOTAL_LEN {
-        return Err(ErrorKind::MixTooLong);
+        return Err((ErrorKind::MixTooLong, None));
     }
     if total == 0 {
         return Ok(vec![0; weights.len()]);
@@ -511,7 +522,7 @@ pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, E
     let sum: f64 = weights.iter().map(|w| w * scale).sum();
     // The scaled weights are finite and nonnegative, so the sum is too (no NaN).
     if sum <= 0.0 {
-        return Err(ErrorKind::ZeroWeights);
+        return Err((ErrorKind::ZeroWeights, None));
     }
     let mut shares = Vec::with_capacity(weights.len());
     let mut fractions = Vec::with_capacity(weights.len());
