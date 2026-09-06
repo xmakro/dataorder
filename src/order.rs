@@ -9,7 +9,7 @@ use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
 use crate::preparation::{CompilationReport, Preparation, PreparedMix, PreparedSource, SamplingDiagnostics, WeightedAllocation};
-use crate::seq::{MixPart, WeightedPart};
+use crate::seq::{MixPart, Rebuild, WeightedPart};
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
 use std::ops::RangeBounds;
@@ -437,37 +437,14 @@ struct Compiler<'a, T> {
 fn separate_sources<T>(seq: Seq<T>) -> (Seq<usize>, Vec<T>) {
     enum Work<T> {
         Enter(Seq<T>, u32),
-        Finish(Seq<usize>),
+        Finish(Rebuild),
     }
     let mut work = vec![Work::Enter(seq, 1)];
     let (mut done, mut sources) = (Vec::new(), Vec::new());
     while let Some(item) = work.pop() {
         match item {
-            Work::Finish(mut node) => {
-                match &mut node {
-                    Seq::Source(_) => unreachable!(),
-                    Seq::Concat(parts) => {
-                        *parts = done.split_off(done.len() - parts.len());
-                    }
-                    Seq::Mix(parts) => {
-                        for p in parts.iter_mut().rev() {
-                            p.seq = done.pop().unwrap();
-                        }
-                    }
-                    Seq::Weighted { parts, .. } => {
-                        for p in parts.iter_mut().rev() {
-                            p.seq = done.pop().unwrap();
-                        }
-                    }
-                    Seq::Shuffle { inner, .. }
-                    | Seq::Repeat { inner, .. }
-                    | Seq::Cycle { inner, .. }
-                    | Seq::Skip { inner, .. }
-                    | Seq::Take { inner, .. }
-                    | Seq::Stride { inner, .. } => {
-                        **inner = done.pop().unwrap();
-                    }
-                }
+            Work::Finish(frame) => {
+                let node = frame.finish(&mut done);
                 done.push(node);
             }
             Work::Enter(seq, level) => {
@@ -476,32 +453,39 @@ fn separate_sources<T>(seq: Seq<T>) -> (Seq<usize>, Vec<T>) {
                     done.push(Seq::Source(0));
                     continue;
                 }
-                let dummy = || Box::new(Seq::Source(0));
-                let (node, children) = match seq {
+                let enter = |child| Work::Enter(child, level + 1);
+                let (frame, inner) = match seq {
                     Seq::Source(source) => {
                         done.push(Seq::Source(sources.len()));
                         sources.push(source);
                         continue;
                     }
-                    Seq::Concat(parts) => (Seq::Concat(vec![Seq::Source(0); parts.len()]), parts),
+                    Seq::Concat(parts) => {
+                        work.push(Work::Finish(Rebuild::Concat(parts.len())));
+                        work.extend(parts.into_iter().rev().map(enter));
+                        continue;
+                    }
                     Seq::Mix(parts) => {
-                        let shape = parts.iter().map(|p| MixPart { seq: Seq::Source(0), sampling: p.sampling }).collect();
-                        (Seq::Mix(shape), parts.into_iter().map(|p| p.seq).collect())
+                        let sampling = parts.iter().map(|p| p.sampling).collect();
+                        work.push(Work::Finish(Rebuild::Mix(sampling)));
+                        work.extend(parts.into_iter().rev().map(|p| enter(p.seq)));
+                        continue;
                     }
                     Seq::Weighted { total, parts } => {
-                        let shape =
-                            parts.iter().map(|p| WeightedPart { seq: Seq::Source(0), weight: p.weight, sampling: p.sampling }).collect();
-                        (Seq::Weighted { total, parts: shape }, parts.into_iter().map(|p| p.seq).collect())
+                        let parameters = parts.iter().map(|p| (p.weight, p.sampling)).collect();
+                        work.push(Work::Finish(Rebuild::Weighted(total, parameters)));
+                        work.extend(parts.into_iter().rev().map(|p| enter(p.seq)));
+                        continue;
                     }
-                    Seq::Shuffle { seed, inner } => (Seq::Shuffle { seed, inner: dummy() }, vec![*inner]),
-                    Seq::Repeat { times, inner } => (Seq::Repeat { times, inner: dummy() }, vec![*inner]),
-                    Seq::Cycle { len, inner } => (Seq::Cycle { len, inner: dummy() }, vec![*inner]),
-                    Seq::Skip { n, inner } => (Seq::Skip { n, inner: dummy() }, vec![*inner]),
-                    Seq::Take { n, inner } => (Seq::Take { n, inner: dummy() }, vec![*inner]),
-                    Seq::Stride { step, offset, inner } => (Seq::Stride { step, offset, inner: dummy() }, vec![*inner]),
+                    Seq::Shuffle { seed, inner } => (Rebuild::Shuffle(seed), inner),
+                    Seq::Repeat { times, inner } => (Rebuild::Repeat(times), inner),
+                    Seq::Cycle { len, inner } => (Rebuild::Cycle(len), inner),
+                    Seq::Skip { n, inner } => (Rebuild::Skip(n), inner),
+                    Seq::Take { n, inner } => (Rebuild::Take(n), inner),
+                    Seq::Stride { step, offset, inner } => (Rebuild::Stride(step, offset), inner),
                 };
-                work.push(Work::Finish(node));
-                work.extend(children.into_iter().rev().map(|child| Work::Enter(child, level + 1)));
+                work.push(Work::Finish(frame));
+                work.push(enter(*inner));
             }
         }
     }

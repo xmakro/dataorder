@@ -75,13 +75,18 @@ impl Build {
             return Err("Cargo's benchmark artifact is outside the isolated build directory".into());
         }
         let mut codegen = BTreeMap::new();
+        let mut direct = BTreeMap::new();
         for stderr in [version.stderr, cfg.stderr, output.stderr] {
-            capture_settings(&String::from_utf8(stderr)?, &mut codegen)?;
+            capture_settings(&String::from_utf8(stderr)?, &mut codegen, &mut direct)?;
         }
         if !["dataorder", "bench"].iter().all(|name| codegen.contains_key(*name) && profiles.contains_key(*name)) {
             return Err("could not verify compiler arguments for both dataorder and bench; benchmark not run".into());
         }
-        build.settings = json!({"compiler":compiler, "target_cfg":target_cfg, "profiles":profiles, "codegen":codegen});
+        // Cargo prints the arguments sent to a wrapper, not those it ultimately
+        // sends to rustc. Equal displayed flags cannot verify wrapped builds.
+        let invocations_verified = ["dataorder", "bench"].iter().all(|name| direct.get(*name) == Some(&true));
+        build.settings = json!({"compiler":compiler, "target_cfg":target_cfg, "profiles":profiles,
+            "codegen":codegen, "invocations_verified": invocations_verified});
         Ok(build)
     }
 }
@@ -96,15 +101,17 @@ fn probe_output(bytes: Vec<u8>) -> Result<String> {
 /// Capture only compilation settings, never the environment prefix Cargo prints
 /// in verbose output. Output paths and Cargo's revision-specific metadata are not
 /// build-setting differences. Preserve flag order because later flags can win.
-fn capture_settings(log: &str, into: &mut BTreeMap<String, Vec<String>>) -> Result<()> {
+fn capture_settings(log: &str, into: &mut BTreeMap<String, Vec<String>>, direct: &mut BTreeMap<String, bool>) -> Result<()> {
     for line in log.lines() {
         let Some(command) = line.trim().strip_prefix("Running `").and_then(|s| s.strip_suffix('`')) else { continue };
-        let Some((_, arguments)) = command.split_once(" --crate-name ") else { continue };
+        let Some((prefix, arguments)) = command.split_once(" --crate-name ") else { continue };
         let args = words(arguments)?;
         let Some(name @ ("dataorder" | "bench")) = args.first().map(String::as_str) else { continue };
         if args.iter().any(|s| s == "-vV" || s == "--print") {
             continue;
         }
+        let verified = direct_rustc(prefix)?;
+        direct.entry(name.to_owned()).and_modify(|old| *old &= verified).or_insert(verified);
         let mut selected = Vec::new();
         let mut args = args.iter().skip(1);
         while let Some(arg) = args.next() {
@@ -125,6 +132,16 @@ fn capture_settings(log: &str, into: &mut BTreeMap<String, Vec<String>>) -> Resu
         into.insert(name.to_owned(), selected);
     }
     Ok(())
+}
+
+/// Recognize an unwrapped rustc invocation conservatively. Inspect environment
+/// assignments only to skip them; never retain their names or values in provenance.
+fn direct_rustc(prefix: &str) -> Result<bool> {
+    let words = words(prefix)?;
+    let program = words.iter().position(|word| {
+        !word.split_once('=').is_some_and(|(key, _)| !key.is_empty() && key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
+    });
+    Ok(program.is_some_and(|i| i + 1 == words.len() && matches!(words[i].rsplit(['/', '\\']).next(), Some("rustc" | "rustc.exe"))))
 }
 
 fn record_setting(into: &mut Vec<String>, flag: &str, value: &str) {
@@ -175,15 +192,81 @@ mod tests {
     #[test]
     fn captures_effective_flags_without_environment_or_artifact_paths() {
         let mut settings = BTreeMap::new();
+        let mut direct = BTreeMap::new();
         let log = r#"Running `PRIVATE_ENV=do-not-save /tool/rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=3 -C opt-level=0 -Clto=thin --cfg 'feature="serde"' -C metadata=revision --out-dir /private/build -L dependency=/private/build/deps`
 Running `rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=3 --print cfg`"#;
-        capture_settings(log, &mut settings).unwrap();
+        capture_settings(log, &mut settings, &mut direct).unwrap();
+        assert_eq!(direct["bench"], true);
         assert_eq!(settings["bench"], ["--edition=2024", "-C opt-level=3", "-C opt-level=0", "-C lto=thin", "--cfg feature=\"serde\""]);
         assert_eq!(
             words(r#"bench --cfg "feature=\"serde\"" "C:\checkout path\file.rs""#).unwrap(),
             ["bench", "--cfg", "feature=\"serde\"", "C:\\checkout path\\file.rs"]
         );
         assert!(words("'unterminated").is_err());
+    }
+
+    #[test]
+    fn wrappers_cannot_be_certified_from_cargos_displayed_flags() {
+        for prefix in [
+            "PRIVATE_ENV=hidden /wrapper /tool/rustc",
+            "/wrapper /workspace-wrapper /tool/rustc",
+            r#""C:\wrapper path\cache.exe" "C:\tool\rustc.exe""#,
+            "/custom-compiler",
+        ] {
+            let mut settings = BTreeMap::new();
+            let mut direct = BTreeMap::new();
+            capture_settings(&format!("Running `{prefix} --crate-name bench -C opt-level=3`"), &mut settings, &mut direct).unwrap();
+            assert!(!direct["bench"], "{prefix}");
+            assert_eq!(settings["bench"], ["-C opt-level=3"]);
+        }
+        assert!(direct_rustc(r#"PRIVATE_ENV='hidden value' "C:\tool path\rustc.exe""#).unwrap());
+    }
+
+    #[test]
+    fn real_wrapper_flag_changes_require_an_override() {
+        let root = Build::new(&std::env::temp_dir().join("dataorder-wrapper-tests")).unwrap();
+        let dir = &root.directory;
+        for subdir in ["src", "examples", ".cargo"] {
+            fs::create_dir(dir.join(subdir)).unwrap();
+        }
+        fs::write(dir.join("Cargo.toml"), "[workspace]\n[package]\nname='dataorder'\nversion='0.0.0'\nedition='2024'\n").unwrap();
+        fs::write(dir.join("Cargo.lock"), "version=4\n[[package]]\nname='dataorder'\nversion='0.0.0'\n").unwrap();
+        fs::write(dir.join("src/lib.rs"), "pub fn go(x:u64)->u64{(0..x).map(|i|i*i).sum()}").unwrap();
+        fs::write(dir.join("examples/bench.rs"), "fn main(){std::hint::black_box(dataorder::go(std::hint::black_box(100)));}").unwrap();
+        let wrapper_source = dir.join("wrapper.rs");
+        fs::write(
+            &wrapper_source,
+            r#"
+fn main() {
+    let mut args = std::env::args_os().skip(1);
+    let compiler = args.next().unwrap();
+    let mut args: Vec<_> = args.collect();
+    if args.iter().any(|a| a == "--crate-name") && !args.iter().any(|a| a == "-vV" || a == "--print") {
+        args.push("-C".into());
+        args.push(format!("opt-level={}", include_str!("level")).into());
+    }
+    let status = std::process::Command::new(compiler).args(args).status().unwrap();
+    std::process::exit(status.code().unwrap_or(1));
+}
+"#,
+        )
+        .unwrap();
+        let mut settings = Vec::new();
+        for level in ["0", "3"] {
+            fs::write(dir.join("level"), level).unwrap();
+            let wrapper = dir.join(format!("wrapper{level}{}", std::env::consts::EXE_SUFFIX));
+            checked_output(Command::new("rustc").arg(&wrapper_source).arg("-o").arg(&wrapper)).unwrap();
+            fs::write(dir.join(".cargo/config.toml"), format!("[build]\nrustc-wrapper={}\n", serde_json::to_string(&wrapper).unwrap()))
+                .unwrap();
+            let build = Build::prepare(dir, &dir.join("builds")).unwrap();
+            assert_eq!(build.settings["invocations_verified"], false);
+            settings.push(build.settings.clone());
+        }
+        assert_eq!(settings[0], settings[1], "Cargo cannot observe the injected flags");
+        let metadata = json!({"environment":{"schema":1,"cpu":"fixture","system":"fixture","os":"fixture","arch":"fixture",
+            "affinity":null,"build":settings[0]}});
+        assert!(crate::validate_environment(&metadata, &metadata, "a", "b", false).is_err());
+        assert!(crate::validate_environment(&metadata, &metadata, "a", "b", true).is_ok());
     }
 
     #[test]

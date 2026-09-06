@@ -42,6 +42,49 @@ fn element(order: &Order<usize>, pos: usize) -> (usize, usize) {
     (*s, i)
 }
 
+#[test]
+fn unary_traversals_do_not_allocate_temporary_child_lists() {
+    let (parts, depth) = (128, 100);
+    let make = || Seq::mix((0..parts).map(|_| (0..depth).fold(Seq::source(10), |seq, _| seq.take(10))));
+    let seq = make();
+    let count = allocations(|| {
+        let order = Order::new(seq).unwrap();
+        assert_eq!(order.len(), parts * 10);
+    });
+    // One box for each transformed output node plus shared traversal/compile
+    // buffers. Temporary singleton Vecs would almost double this budget.
+    assert!(count < parts * depth + 1000, "compilation allocated {count} times");
+    let seq = make();
+    let count = allocations(|| seq.map(|n| n + 1).dispose());
+    assert!(count < parts * depth + 1000, "mapping allocated {count} times");
+}
+
+#[test]
+fn concat_recycles_mix_buffers_across_epochs_and_seeks() {
+    use dataorder::Sampling;
+    let part = |k, len, scheduled| {
+        Seq::mix_with((0..k).map(|i| {
+            (Seq::source(len).shuffle(i as u64 + 1), if scheduled && i % 5 == 0 { Sampling::ramp(0.1, 0.6) } else { Sampling::Uniform })
+        }))
+    };
+    let order = Order::new(Seq::concat([part(1000, 10, false), part(700, 20, true)]).repeat(3)).unwrap();
+    let epoch = order.len() / 3;
+    let mut cursor = order.iter(..);
+    cursor.by_ref().take(epoch).for_each(|item| {
+        black_box(item);
+    });
+    let count = allocations(|| {
+        cursor.by_ref().take(epoch).for_each(|item| {
+            black_box(item);
+        });
+        for pos in [10_000, 0, 17_001, epoch, 9999, 10_000, 10_001] {
+            cursor.seek(pos);
+            black_box(cursor.next());
+        }
+    });
+    assert_eq!(count, 0, "recycled mix buffers allocated {count} times");
+}
+
 /// A mix builds a part's cursor when the part is first drawn from (nothing to allocate for
 /// a shuffled source, whose cursor sits in the mix's slot for it); after that, seeks reuse
 /// everything. Drawing a thousand elements first enters every part of a balanced mix of a

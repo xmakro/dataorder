@@ -30,13 +30,28 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
             (Seq::source(Dataset { ordinal: i, len: n.as_u64().unwrap() as usize }), sampling)
         })))
         .unwrap();
-        for sample in fixture["samples"].as_array().unwrap() {
+        let samples = fixture["samples"].as_array().unwrap();
+        let mut walking = order.iter(0..0);
+        let mut next_position = None;
+        for sample in samples {
             let pos = sample[0].as_u64().unwrap() as usize;
             let expected = (sample[1].as_u64().unwrap() as usize, sample[2].as_u64().unwrap() as usize);
             let (source, index) = order.get(pos);
             assert_eq!((source.ordinal, index), expected, "case {case}, position {pos}");
             let (source, index) = order.iter(pos..).next().unwrap();
             assert_eq!((source.ordinal, index), expected, "cursor: case {case}, position {pos}");
+            // Every small fixture is a complete walk. Large fixtures contain short
+            // independently generated windows: seek only across gaps, then exercise
+            // the tournament and cached segment transitions with consecutive nexts.
+            if next_position != Some(pos) {
+                walking.set_range(pos..);
+            }
+            let (source, index) = walking.next().unwrap();
+            assert_eq!((source.ordinal, index), expected, "walk: case {case}, position {pos}");
+            next_position = pos.checked_add(1);
+        }
+        if samples.len() == order.len() {
+            assert!(walking.next().is_none());
         }
     }
 }

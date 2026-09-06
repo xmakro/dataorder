@@ -95,12 +95,13 @@ def sparse_case(name, lens, schedules):
     def key(s, j):
         return inverse(ps[s], (j + phi[s]) / lens[s]).quantize(Decimal("1e-75"))
 
-    samples = []
+    samples = {}
     for s in live:
         indices = range(lens[s]) if lens[s] < 20 else sorted({0, 1, lens[s] // 4, lens[s] // 2, lens[s] * 3 // 4, lens[s] - 2, lens[s] - 1})
         for j in indices:
             target = (key(s, j), s)
             rank = 0
+            neighbors = []
             for t in live:
                 lo, hi = 0, lens[t]
                 while lo < hi:
@@ -110,10 +111,19 @@ def sparse_case(name, lens, schedules):
                     else:
                         hi = mid
                 rank += lo
-            samples.append([rank, s, j])
-    samples.sort()
-    assert len({p for p, _, _ in samples}) == len(samples)
-    return dict(name=name, lens=lens, schedules=schedules, samples=samples)
+                # A small neighborhood from each sorted part contains the merged
+                # neighborhood, without enumerating any large part's full output.
+                for index in range(max(0, lo - 4), min(lens[t], lo + 5)):
+                    neighbors.append((key(t, index), t, index))
+            neighbors.sort()
+            center = next(i for i, (_, t, index) in enumerate(neighbors) if (t, index) == (s, j))
+            for offset in range(-min(4, rank), min(4, sum(lens) - rank - 1) + 1):
+                _, t, index = neighbors[center + offset]
+                position = rank + offset
+                assert samples.get(position, (t, index)) == (t, index)
+                samples[position] = (t, index)
+    return dict(name=name, lens=lens, schedules=schedules,
+                samples=[[pos, s, j] for pos, (s, j) in sorted(samples.items())])
 
 
 def fixtures():

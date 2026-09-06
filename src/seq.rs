@@ -673,7 +673,7 @@ impl<T: Source> Seq<T> {
 
 /// A source-independent frame: completed children stay on the output stack until
 /// this frame rebuilds their parent. No dummy source values or recursive calls.
-enum Rebuild {
+pub(crate) enum Rebuild {
     Concat(usize),
     Mix(Vec<Sampling>),
     Weighted(usize, Vec<(f64, Sampling)>),
@@ -709,58 +709,69 @@ impl<T, U> Drop for Mapping<T, U> {
     }
 }
 
+impl Rebuild {
+    /// Assemble already visited children; unary frames need no temporary child vector.
+    pub(crate) fn finish<T>(self, done: &mut Vec<Seq<T>>) -> Seq<T> {
+        match self {
+            Self::Concat(n) => Seq::Concat(done.split_off(done.len() - n)),
+            Self::Mix(parameters) => {
+                let children = done.drain(done.len() - parameters.len()..);
+                Seq::mix_with(children.zip(parameters))
+            }
+            Self::Weighted(total, parameters) => {
+                let children = done.drain(done.len() - parameters.len()..);
+                Seq::weighted_with(total, children.zip(parameters).map(|(seq, (weight, sampling))| (seq, weight, sampling)))
+            }
+            Self::Shuffle(seed) => done.pop().unwrap().shuffle(seed),
+            Self::Repeat(times) => done.pop().unwrap().repeat(times),
+            Self::Cycle(len) => done.pop().unwrap().cycle(len),
+            Self::Skip(n) => done.pop().unwrap().skip(n),
+            Self::Take(n) => done.pop().unwrap().take(n),
+            Self::Stride(step, offset) => done.pop().unwrap().stride(step, offset),
+        }
+    }
+}
+
 fn map_iterative<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> Result<Seq<U>, E> {
     let mut state = Mapping { work: vec![MapWork::Enter(seq)], done: Vec::new() };
     while let Some(work) = state.work.pop() {
         match work {
             MapWork::Enter(seq) => {
-                let (frame, children) = match seq {
+                let (frame, inner) = match seq {
                     Seq::Source(source) => {
                         state.done.push(Seq::Source(f(source)?));
                         continue;
                     }
-                    Seq::Concat(parts) => (Rebuild::Concat(parts.len()), parts),
+                    Seq::Concat(parts) => {
+                        state.work.push(MapWork::Finish(Rebuild::Concat(parts.len())));
+                        state.work.extend(parts.into_iter().rev().map(MapWork::Enter));
+                        continue;
+                    }
                     Seq::Mix(parts) => {
                         let sampling = parts.iter().map(|p| p.sampling).collect();
-                        (Rebuild::Mix(sampling), parts.into_iter().map(|p| p.seq).collect())
+                        state.work.push(MapWork::Finish(Rebuild::Mix(sampling)));
+                        state.work.extend(parts.into_iter().rev().map(|p| MapWork::Enter(p.seq)));
+                        continue;
                     }
                     Seq::Weighted { total, parts } => {
                         let parameters = parts.iter().map(|p| (p.weight, p.sampling)).collect();
-                        (Rebuild::Weighted(total, parameters), parts.into_iter().map(|p| p.seq).collect())
+                        state.work.push(MapWork::Finish(Rebuild::Weighted(total, parameters)));
+                        state.work.extend(parts.into_iter().rev().map(|p| MapWork::Enter(p.seq)));
+                        continue;
                     }
-                    Seq::Shuffle { seed, inner } => (Rebuild::Shuffle(seed), vec![*inner]),
-                    Seq::Repeat { times, inner } => (Rebuild::Repeat(times), vec![*inner]),
-                    Seq::Cycle { len, inner } => (Rebuild::Cycle(len), vec![*inner]),
-                    Seq::Skip { n, inner } => (Rebuild::Skip(n), vec![*inner]),
-                    Seq::Take { n, inner } => (Rebuild::Take(n), vec![*inner]),
-                    Seq::Stride { step, offset, inner } => (Rebuild::Stride(step, offset), vec![*inner]),
+                    Seq::Shuffle { seed, inner } => (Rebuild::Shuffle(seed), inner),
+                    Seq::Repeat { times, inner } => (Rebuild::Repeat(times), inner),
+                    Seq::Cycle { len, inner } => (Rebuild::Cycle(len), inner),
+                    Seq::Skip { n, inner } => (Rebuild::Skip(n), inner),
+                    Seq::Take { n, inner } => (Rebuild::Take(n), inner),
+                    Seq::Stride { step, offset, inner } => (Rebuild::Stride(step, offset), inner),
                 };
                 state.work.push(MapWork::Finish(frame));
-                state.work.extend(children.into_iter().rev().map(MapWork::Enter));
+                state.work.push(MapWork::Enter(*inner));
             }
             MapWork::Finish(frame) => {
-                let done = &mut state.done;
-                let seq = match frame {
-                    Rebuild::Concat(n) => Seq::Concat(done.split_off(done.len() - n)),
-                    Rebuild::Mix(parameters) => {
-                        let children = done.split_off(done.len() - parameters.len());
-                        Seq::mix_with(children.into_iter().zip(parameters))
-                    }
-                    Rebuild::Weighted(total, parameters) => {
-                        let children = done.split_off(done.len() - parameters.len());
-                        Seq::weighted_with(
-                            total,
-                            children.into_iter().zip(parameters).map(|(seq, (weight, sampling))| (seq, weight, sampling)),
-                        )
-                    }
-                    Rebuild::Shuffle(seed) => done.pop().unwrap().shuffle(seed),
-                    Rebuild::Repeat(times) => done.pop().unwrap().repeat(times),
-                    Rebuild::Cycle(len) => done.pop().unwrap().cycle(len),
-                    Rebuild::Skip(n) => done.pop().unwrap().skip(n),
-                    Rebuild::Take(n) => done.pop().unwrap().take(n),
-                    Rebuild::Stride(step, offset) => done.pop().unwrap().stride(step, offset),
-                };
-                done.push(seq);
+                let seq = frame.finish(&mut state.done);
+                state.done.push(seq);
             }
         }
     }

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Checkpoint batches stream through one cursor and commit successful progress after
+  resuming. Worker creation rejects configurations the checkpoint parser cannot read.
+  `ORDERING_VERSION` exposes the linked crate's version for conservative checkpoints.
+- Tree traversal avoids temporary singleton child vectors and uses shared rebuild
+  frames. Concat cursors recycle compatible child buffers across epochs and seeks.
+- Independent schedule oracles now test continuous walks and contiguous large-order
+  windows. Allocation regressions cover unary traversal and concat buffer recycling.
+- Benchmark campaigns mark wrapped compiler invocations as unverified and require an
+  explicit override. Commands have configurable deadlines, terminate timed-out process
+  trees and retain failure diagnostics without replacing completed campaign results.
+
 - Mapping and cleanup after callback errors or panics use an explicit heap stack,
   including previously mapped and unvisited deep sibling branches.
 - Mix cursors box their largest state, reducing per-part storage. Lifecycle benchmarks

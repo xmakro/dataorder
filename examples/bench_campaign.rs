@@ -18,6 +18,8 @@ mod build_provenance;
 #[path = "support/measurements.rs"]
 #[allow(dead_code)]
 mod measurements;
+#[path = "support/process.rs"]
+mod process;
 use measurements::{Measurements, Report, Rows, summarize};
 const RUNS: usize = 6;
 
@@ -46,6 +48,9 @@ Unpinned by default. BENCH_CORE=N requests taskset affinity; none disables it.
 Builds use private target directories. Comparisons reject mismatched environments.
 Use --allow-environment-differences to explicitly compare compilers, flags or machines.
 Raw samples, workload fingerprints and effective build provenance are saved.
+Compiler wrappers require --allow-environment-differences; their effective flags are unverified.
+BENCH_TIMEOUT_SECS sets a positive per-command deadline (default: 1800 seconds).
+Failed command output is retained in target/bench-diagnostics; timed-out process trees are terminated.
 Results: target/bench-campaign.json in the campaign runner's crate.";
 
 #[derive(Default)]
@@ -251,6 +256,9 @@ fn validate_environment(a: &Value, b: &Value, label: &str, previous: &str, allow
         if a["cpu"].is_null() || b["cpu"].is_null() {
             differences.push("CPU identity is unavailable".into());
         }
+        if a["build"]["invocations_verified"] != true || b["build"]["invocations_verified"] != true {
+            differences.push("compiler invocations are unverified (wrapper or older provenance)".into());
+        }
     }
     if !differences.is_empty() {
         let message = format!("{label} and {previous}: benchmark environments differ: {}", differences.join("; "));
@@ -297,7 +305,7 @@ impl Affinity {
 }
 
 fn optional_output(command: &mut Command) -> Option<String> {
-    command.output().ok().filter(|output| output.status.success()).map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    checked_output(command).ok().map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn provenance(directory: &Path, mode: &str, affinity: &Affinity) -> Result<Value> {
@@ -350,11 +358,8 @@ fn aggregate(reports: &[Report]) -> Result<(Rows, Ranges)> {
 }
 
 fn checked_output(command: &mut Command) -> Result<Output> {
-    let output = command.output().map_err(|error| format!("{command:?}: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("{command:?} failed ({}):\n{}", output.status, String::from_utf8_lossy(&output.stderr)).into());
-    }
-    Ok(output)
+    let timeout = process::timeout(env::var("BENCH_TIMEOUT_SECS").ok().as_deref())?;
+    process::run(command, timeout, &Path::new(env!("CARGO_MANIFEST_DIR")).join("target/bench-diagnostics"))
 }
 
 struct Campaign {
@@ -368,12 +373,19 @@ struct Campaign {
 }
 
 impl Campaign {
-    fn prepare(label: String, directory: &Path, mode: &str) -> Result<Self> {
+    fn prepare(label: String, directory: &Path, mode: &str, allow_environment_differences: bool) -> Result<Self> {
         let directory = directory.canonicalize()?;
         let affinity = Affinity::parse(env::var("BENCH_CORE").ok().as_deref())?;
         affinity.validate(&directory)?;
         let mut metadata = provenance(&directory, mode, &affinity)?;
         let build = build_provenance::Build::prepare(&directory, &Path::new(env!("CARGO_MANIFEST_DIR")).join("target/bench-builds"))?;
+        if build.settings["invocations_verified"] != true {
+            let message = "compiler wrapper or custom launcher prevents verifying effective rustc arguments";
+            if !allow_environment_differences {
+                return Err(format!("{message}; use --allow-environment-differences to explicitly accept unverified builds").into());
+            }
+            eprintln!("{message} (explicitly allowed)");
+        }
         metadata["environment"]["build"] = build.settings.clone();
         metadata["executable_fingerprint"] = json!(measurements::fingerprint(&fs::read(&build.executable)?));
         Ok(Self { label, directory, affinity, metadata, build, samples: Vec::new(), reports: Vec::new() })
@@ -407,7 +419,10 @@ fn run(targets: Vec<(String, PathBuf)>, mode: &str, path: &Path, allow_environme
     if targets.iter().enumerate().any(|(i, (label, _))| label.is_empty() || targets[..i].iter().any(|t| &t.0 == label)) {
         return Err("campaign labels must be nonempty and distinct".into());
     }
-    let mut campaigns = targets.into_iter().map(|(label, dir)| Campaign::prepare(label, &dir, mode)).collect::<Result<Vec<_>>>()?;
+    let mut campaigns = targets
+        .into_iter()
+        .map(|(label, dir)| Campaign::prepare(label, &dir, mode, allow_environment_differences))
+        .collect::<Result<Vec<_>>>()?;
     for pair in campaigns.windows(2) {
         validate_environment(&pair[0].metadata, &pair[1].metadata, &pair[0].label, &pair[1].label, allow_environment_differences)?;
     }
@@ -478,7 +493,7 @@ mod tests {
     use super::*;
 
     fn test_environment() -> Value {
-        json!({"schema":1,"cpu":"cpu","system":"system","os":"os","arch":"arch","affinity":null,"build":{"compiler":"compiler","target_cfg":["cfg"],"profiles":{},"codegen":{}}})
+        json!({"schema":1,"cpu":"cpu","system":"system","os":"os","arch":"arch","affinity":null,"build":{"compiler":"compiler","target_cfg":["cfg"],"profiles":{},"codegen":{},"invocations_verified":true}})
     }
 
     #[test]
@@ -491,6 +506,12 @@ mod tests {
             assert!(validate_environment(&original, &changed, "a", "b", true).is_ok());
         }
         assert!(validate_environment(&json!({}), &json!({}), "a", "b", false).is_err());
+        for verified in [json!(false), Value::Null] {
+            let mut wrapped = original.clone();
+            wrapped["environment"]["build"]["invocations_verified"] = verified;
+            assert!(validate_environment(&wrapped, &wrapped, "a", "b", false).is_err());
+            assert!(validate_environment(&wrapped, &wrapped, "a", "b", true).is_ok());
+        }
     }
 
     #[test]

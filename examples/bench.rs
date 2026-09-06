@@ -282,6 +282,16 @@ fn lifecycle_at(name: &str, seq: Seq<usize>, warmup: usize, workers: usize, seek
 }
 
 fn lifecycles() {
+    lifecycle(
+        "mix(256 sources, 64 identity transforms each)",
+        Seq::mix((0..256).map(|_| (0..64).fold(Seq::source(10), |seq, _| seq.take(10)))),
+        512,
+    );
+    lifecycle(
+        "concat(100 mixes of 100 sources), repeated epochs",
+        Seq::concat((0..100).map(|_| Seq::mix((0..100).map(|_| Seq::source(10))))).repeat(3),
+        200_000,
+    );
     for k in [100, 1000, 10_000, 100_000] {
         lifecycle(&format!("mix({k} sources)"), Seq::mix((0..k).map(|_| Seq::source(10_000))), 2 * k);
     }

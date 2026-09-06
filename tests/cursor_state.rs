@@ -224,3 +224,44 @@ fn failure_history_shrinking_keeps_only_relevant_operations() {
         minimize(vec![Op::Next, Op::Clone, Op::Next, Op::BadSeek, Op::Count], |ops| ops.iter().any(|op| matches!(op, Op::BadSeek)));
     assert!(matches!(result.as_slice(), [Op::BadSeek]));
 }
+
+#[test]
+fn boundary_skip_rebinds_retained_child_before_backward_seek() {
+    let order = Order::new(Seq::concat([
+        Seq::mix([Seq::source(5), Seq::source(5)]),
+        Seq::mix([Seq::source(7), Seq::source(7), Seq::source(7)]),
+        Seq::source(3),
+    ]))
+    .unwrap();
+    let mut cursor = order.iter(..).indexed();
+    cursor.next(); // Initialize buffers for the first child.
+    cursor.seek(31); // End of the second child; retain the first child's buffers.
+    cursor.seek(10); // Same child index, but the retained buffers must be rebound.
+    assert_eq!(cursor.next(), Some(order.get_indexed(10)));
+}
+
+#[test]
+fn recycled_children_replace_every_transform_parameter() {
+    let source = |n, seed| Seq::source(n).shuffle(seed);
+    let nested = |seed, n| {
+        Seq::mix([
+            source(n, seed).repeat(3).skip(2).stride(3, 1),
+            source(n + 2, seed + 1).repeat(2).take(n + 3),
+            Seq::concat([source(n, seed + 2), Seq::source(n + 3)]).stride(2, 1),
+            Seq::mix([source(n, seed), source(n + 1, seed + 3)]).shuffle(seed + 4),
+        ])
+    };
+    let seq = Seq::concat([nested(1, 11), nested(55, 19), Seq::source(3), nested(99, 7)]).repeat(3);
+    let order = Order::with_seed(seq, 42).unwrap();
+    let expected: Vec<_> = (0..order.len()).map(|pos| order.get_indexed(pos)).collect();
+    assert_eq!(order.iter(..).indexed().collect::<Vec<_>>(), expected);
+    let mut cursor = order.iter(..).indexed();
+    for pos in (0..order.len()).rev().step_by(3).chain((0..order.len()).step_by(7)) {
+        cursor.seek(pos);
+        let mut copy = cursor.clone();
+        for expected in &expected[pos..(pos + 5).min(order.len())] {
+            assert_eq!(cursor.next(), Some(*expected));
+            assert_eq!(copy.next(), Some(*expected));
+        }
+    }
+}

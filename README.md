@@ -211,9 +211,12 @@ for details.
 For a complete restart pattern, run `cargo run --example checkpoint --features serde`.
 The example stores the whole configuration as its identity, immutable source versions,
 lengths and salts, seeds, shard count/index, the next worker-local offset, and checkpoint
-and crate versions. Restore compares these against independently loaded current metadata
-and rejects mismatches. It advances the checkpoint only after successful processing;
-applications should persist committed work rather than prefetched positions.
+and crate versions, using `dataorder::ORDERING_VERSION` to identify the linked crate.
+Restore compares these against independently loaded current metadata and rejects
+mismatches. Processing seeks once per batch and commits each successful callback,
+including after resume. Worker creation checks that its checkpoint can be parsed by
+the restore format: JSON's depth limit can reject configurations that the crate accepts.
+Applications should persist committed work rather than prefetched positions.
 
 ## Performance
 
@@ -270,6 +273,12 @@ near-capacity schedules. Exact quota construction can take longer for wide expon
 in this campaign, 10,000 parts took about 0.63 ms with weights 1–13 and 2.25 ms with
 one weight changed to `1e-300`.
 
+Concat cursors recycle compatible child buffers across boundaries, seeks and repeated
+epochs. Their retained capacities can reflect larger previously visited children,
+but they do not cache every visited child. Switching node kinds or dropping nested
+child states can still allocate on a later visit. Lifecycle benchmarks also cover
+repeated concatenations and compilation of many identity transforms.
+
 ## Development
 
 Requires Rust 1.89 or newer.
@@ -290,9 +299,10 @@ inverse calculations independent of the Rust implementation. Omit `--check` to
 regenerate the fixtures after changing a generator. The schedule fixtures include
 complementary schedules without uniform parts, interacting ramps, reordered minorities,
 nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`. CI checks both generated
-files. Stateful cursor tests combine seeks, range changes, clones, skips, exhaustion and
-failed operations; failures print a reproducible `DATAORDER_STATE_SEED` and minimize
-the operation history.
+files. Small oracle fixtures check complete continuous walks; large fixtures include
+independently computed contiguous windows. Stateful cursor tests combine seeks, range
+changes, clones, skips, exhaustion and failed operations; failures print a reproducible
+`DATAORDER_STATE_SEED` and minimize the operation history.
 
 For repeated benchmark runs and comparisons, run
 `cargo run --release --example bench_campaign -- --help`.
@@ -319,6 +329,17 @@ and missing environment provenance. Use `--allow-environment-differences` when s
 difference is intentional; the runner prints the differences. This does not bypass
 harness or workload checks. Machine metadata cannot account for thermal state or other
 processes, so run timing campaigns on an otherwise idle machine.
+
+Compiler wrappers and custom launchers require `--allow-environment-differences`:
+Cargo's displayed arguments cannot establish which flags a wrapper actually passed
+to the compiler. These builds are recorded as unverified, even when their displayed
+settings match. Comparisons with older provenance lacking this verification also
+require the override.
+
+`BENCH_TIMEOUT_SECS` sets a positive deadline for each external command (default:
+1800 seconds). Timed-out process trees are terminated. Failed commands retain their
+stdout and stderr under `target/bench-diagnostics`; the error prints the directory.
+Incomplete campaigns do not replace saved comparison results.
 
 Concurrent campaigns commit both comparison labels under one lock and atomically replace
 the results file. Each command prints its own committed snapshot. A later table rejects

@@ -184,6 +184,9 @@
 //! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
 //! buffers, including in a cloned cursor, though entering a new child can allocate.
+//! Concat transitions recycle compatible child buffers, including mix seek state.
+//! Retained capacities can reflect the largest previously visited compatible child;
+//! incompatible variants and removed child states are dropped rather than cached.
 //! `last()` reuses initialized state; selecting an empty range defers repositioning.
 //! For measurements and reproduction commands, see the
 //! [README's performance section](https://github.com/xmakro/dataorder/blob/main/README.md#performance).
@@ -228,6 +231,7 @@
 //! The same configuration, source lengths and salts, and seed produce the same order
 //! on supported platforms. A release that changes an order or the serialized
 //! configuration format is a breaking change: a new minor version while the crate is 0.x.
+//! Save [`ORDERING_VERSION`] in checkpoints for a conservative exact-version check.
 //!
 //! Calculations use IEEE 754 binary64 without fused operations. Targets with hardware
 //! or software binary64 agree; x87-only `i586` targets using extended precision are
@@ -303,6 +307,16 @@ pub const MAX_DEPTH: u32 = 256;
 /// assert_eq!(repeated.check(), Ok(3 * (1 << 30) + 3));
 /// ```
 pub const MAX_MIX_LEN: u64 = interleave::MAX_TOTAL_LEN;
+
+/// Version identifier for conservatively validating saved orders and checkpoints.
+///
+/// This is the version of the linked `dataorder` crate, including its patch version,
+/// rather than the calling application's `CARGO_PKG_VERSION`. Save it alongside the
+/// configuration, source metadata, seeds and worker settings. Require an exact match
+/// on restore unless the application has explicitly verified a compatible migration.
+/// A difference does not necessarily mean that the ordering changed; see the crate's
+/// [stability policy](crate#stability).
+pub const ORDERING_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The README's code blocks, compiled as doctests.
 #[cfg(doctest)]

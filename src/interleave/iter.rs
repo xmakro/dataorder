@@ -26,6 +26,13 @@ impl<'a> Iter<'a> {
         iter
     }
 
+    /// Recycle seek buffers for a different immutable interleave. A nonempty seek
+    /// must follow before drawing: the old tournament still describes the old mix.
+    pub(crate) fn rebind(&mut self, il: &'a Interleave) {
+        self.il = il;
+        self.remaining = 0;
+    }
+
     /// Repositions at an already validated range, reusing allocated buffers.
     /// Counts elements before the start, rebuilds the tournament over the remaining
     /// heads, then replays the small gap left by the counts.
