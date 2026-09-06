@@ -11,6 +11,9 @@ On an Apple M2 Pro, shuffled random access takes about **22 ns**, a random looku
 in a mix of 100 datasets about **1.9 µs**, and walking that mix after a seek about
 **27 ns per item**. See the [performance highlights](#performance) below.
 
+The default build has **no dependencies**. Clean release builds on the same machine
+took **under a second**.
+
 - **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
   and O(1) space, without generating or storing the full permutation.
 - **Jump into a mix.** Counting and binary searches locate the position within each
