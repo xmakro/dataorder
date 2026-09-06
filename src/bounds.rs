@@ -1,12 +1,20 @@
-//! Fallible position and range validation shared by builders and cursors.
+//! Fallible position, range and shard validation shared by builders and cursors.
 
 use std::fmt;
 use std::ops::{Bound, Range, RangeBounds};
 
-/// An invalid range or cursor position. Failed cursor operations leave it unchanged.
+/// An invalid range, cursor position or shard. Failed cursor operations leave the
+/// cursor unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BoundsError {
+    /// A worker index is outside `0..count`, including a zero worker count.
+    InvalidShard {
+        /// Number of workers.
+        count: usize,
+        /// Requested worker index.
+        index: usize,
+    },
     /// An exclusive start at `usize::MAX` cannot be advanced by one.
     StartOverflow,
     /// An inclusive end at `usize::MAX` cannot be advanced by one.
@@ -37,6 +45,7 @@ pub enum BoundsError {
 impl fmt::Display for BoundsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidShard { count, index } => write!(f, "shard index {index} out of range for {count} shards"),
             Self::StartOverflow => write!(f, "range start overflows usize"),
             Self::EndOverflow => write!(f, "range end overflows usize"),
             Self::Reversed { start, end } => write!(f, "range {start}..{end} ends before it starts"),

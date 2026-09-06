@@ -13,19 +13,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-type Measurements = Vec<Option<f64>>;
-type Rows = BTreeMap<String, Measurements>;
+#[path = "support/measurements.rs"]
+#[allow(dead_code)]
+mod measurements;
+use measurements::{Measurements, Report, Rows, summarize};
+const RUNS: usize = 6;
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
 
 const TITLES: [&str; 6] = ["seek µs", "walk ns/elem", "get ns", "build µs", "reused seek µs", "cursor requested bytes"];
 const USAGE: &str = "cargo run --release --example bench_campaign -- run LABEL DIR [MODE]
-cargo run --release --example bench_campaign -- table [COL]
+cargo run --release --example bench_campaign -- compare LABEL_A DIR_A LABEL_B DIR_B [MODE]
+cargo run --release --example bench_campaign -- table [COL] [LABEL ...]
 
 MODE: default, phases, lifecycle, all (default: BENCH_MODE or default)
 COL: 0 seek, 1 walk (default), 2 get, 3 build, 4 reused seek, 5 cursor bytes
-Runs twice, unpinned by default. BENCH_CORE=N requests taskset affinity; none disables it.
-Explicit affinity is checked before building. Raw runs and provenance are saved alongside minima.
+Six runs per revision; compare alternates revision order on each round.
+Each benchmark reports five calibrated samples per metric. Tables show median [min..max].
+Compared revisions must use identical bench.rs and support files and matching workloads.
+Unpinned by default. BENCH_CORE=N requests taskset affinity; none disables it.
+Raw samples, workload fingerprints and provenance are saved.
 Results: target/bench-campaign.json in the campaign runner's crate.";
 
 #[derive(Default)]
@@ -85,26 +92,73 @@ impl Results {
         result
     }
 
-    fn table(&self, col: usize) {
+    fn validate_comparison(&self, labels: &[String]) -> Result<()> {
+        for (i, label) in labels.iter().enumerate() {
+            if !self.labels.contains(label) {
+                return Err(format!("unknown campaign label: {label}").into());
+            }
+            for previous in &labels[..i] {
+                let a = &self.runs.get(label).ok_or("legacy results have no comparable workload identity; select one label")?["metadata"];
+                let b =
+                    &self.runs.get(previous).ok_or("legacy results have no comparable workload identity; select one label")?["metadata"];
+                if a["harness"].as_str().is_none() || a["harness"] != b["harness"] {
+                    return Err(format!("{label} and {previous}: incompatible or unverified benchmark harnesses; select one label or rerun with identical harnesses").into());
+                }
+                for (name, values) in &self.rows {
+                    if values.contains_key(label)
+                        && values.contains_key(previous)
+                        && (a["workloads"][name].as_str().is_none() || a["workloads"][name] != b["workloads"][name])
+                    {
+                        return Err(format!("{name}: workload differs between {label} and {previous}").into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn cell(&self, name: &str, label: &str, col: usize) -> String {
+        let Some(value) = self.rows[name].get(label).and_then(|row| row.get(col)).copied().flatten() else { return "-".into() };
+        let middle = measurement(value, col);
+        let range = self.runs.get(label).and_then(|run| run["ranges"].get(name));
+        if let Some((low, high)) = range.and_then(|r| r[0][col].as_f64().zip(r[1][col].as_f64()))
+            && low != high
+        {
+            return format!("{middle} [{}..{}]", measurement(low, col), measurement(high, col));
+        }
+        middle
+    }
+
+    fn table(&self, col: usize, labels: &[String]) -> Result<()> {
+        self.validate_comparison(labels)?;
         let name_width = self.rows.keys().map(|name| name.chars().count()).max().unwrap_or(0).max(40);
+        let widths: Vec<_> = labels
+            .iter()
+            .map(|label| {
+                self.rows
+                    .keys()
+                    .map(|name| self.cell(name, label, col).chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    .max(label.chars().count())
+                    .max(14)
+                    + 2
+            })
+            .collect();
+        println!("Median [min..max] across retained samples; legacy single-label values retain their original statistic.");
         print!("{:<name_width$}", TITLES[col]);
-        for label in &self.labels {
-            print!("{:>width$}", label, width = label.chars().count().max(14) + 2);
+        for (label, &width) in labels.iter().zip(&widths) {
+            print!("{label:>width$}");
         }
         println!();
-        for (name, values) in &self.rows {
+        for name in self.rows.keys().filter(|name| labels.iter().any(|label| self.rows[*name].contains_key(label))) {
             print!("{name:<name_width$}");
-            for label in &self.labels {
-                let rendered = values
-                    .get(label)
-                    .and_then(|row| row.get(col))
-                    .copied()
-                    .flatten()
-                    .map_or_else(|| "-".into(), |value| measurement(value, col));
-                print!("{:>width$}", rendered, width = label.chars().count().max(14) + 2);
+            for (label, &width) in labels.iter().zip(&widths) {
+                print!("{:>width$}", self.cell(name, label, col));
             }
             println!();
         }
+        Ok(())
     }
 }
 
@@ -201,48 +255,23 @@ fn provenance(directory: &Path, mode: &str, affinity: &Affinity) -> Result<Value
     }))
 }
 
-fn parse_output(output: &str) -> Rows {
-    let mut rows = Rows::new();
-    for line in output.lines() {
-        let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.len() < 7 {
-            continue;
-        }
-        let (name, values) = fields.split_at(fields.len() - 6);
-        let lifecycle = name[0] == "lifecycle";
-        if [values[1], values[3], values[5]] != if lifecycle { ["µs", "µs", "B"] } else { ["µs", "ns", "ns"] } {
-            continue;
-        }
-        let parsed: std::result::Result<Vec<f64>, _> = [values[0], values[2], values[4]].iter().map(|value| value.parse()).collect();
-        let Ok(parsed) = parsed else { continue };
-        if parsed.iter().any(|value| !value.is_finite() || *value < 0.0) {
-            continue;
-        }
-        let name_text = values.iter().rev().fold(line.trim_end(), |rest, field| rest[..rest.len() - field.len()].trim_end()).trim();
-        let mut measurements = Vec::new();
-        let name = if lifecycle {
-            if name.len() == 1 {
-                continue;
-            }
-            measurements.extend([None; 3]);
-            format!("lifecycle: {}", name_text["lifecycle".len()..].trim())
-        } else {
-            name_text.to_owned()
-        };
-        measurements.extend(parsed.into_iter().map(Some));
-        rows.insert(name, measurements);
-    }
-    rows
-}
+type Ranges = BTreeMap<String, [Measurements; 2]>;
 
-fn merge_minima(rows: &mut Rows, current: Rows) {
-    for (name, values) in current {
-        rows.entry(name)
-            .and_modify(|previous| {
-                *previous = previous.iter().zip(&values).map(|(a, b)| a.zip(*b).map(|(a, b)| a.min(b))).collect();
-            })
-            .or_insert(values);
+fn aggregate(reports: &[Report]) -> Result<(Rows, Ranges)> {
+    let first = reports.first().ok_or("no benchmark samples")?;
+    first.validate()?;
+    for report in &reports[1..] {
+        report.validate()?;
+        first.compatible(report)?;
     }
+    let (mut rows, mut ranges) = (Rows::new(), Ranges::new());
+    for name in first.rows.keys() {
+        let samples: Vec<_> = reports.iter().flat_map(|report| report.rows[name].samples.iter().cloned()).collect();
+        let (median, low, high) = summarize(&samples);
+        rows.insert(name.clone(), median);
+        ranges.insert(name.clone(), [low, high]);
+    }
+    Ok((rows, ranges))
 }
 
 fn checked_output(command: &mut Command) -> Result<Output> {
@@ -253,48 +282,116 @@ fn checked_output(command: &mut Command) -> Result<Output> {
     Ok(output)
 }
 
-fn run(label: String, directory: &Path, mode: &str, path: &Path) -> Result<()> {
-    if !["default", "phases", "lifecycle", "all"].contains(&mode) {
-        return Err(format!("unknown benchmark mode: {mode}").into());
+/// Keep each build independent even if checkouts share CARGO_TARGET_DIR or a
+/// concurrent build replaces the original artifact between measurement rounds.
+struct ExecutableSnapshot(PathBuf);
+
+impl ExecutableSnapshot {
+    fn copy(executable: &Path) -> Result<Self> {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let serial = NONCE.fetch_add(1, Ordering::Relaxed);
+        let directory = env::temp_dir().join(format!("dataorder-bench-{}-{nonce}-{serial}", std::process::id()));
+        fs::create_dir(&directory)?;
+        let snapshot = Self(directory.join(executable.file_name().ok_or("benchmark executable has no file name")?));
+        fs::copy(executable, &snapshot.0)?;
+        Ok(snapshot)
     }
-    let directory = directory.canonicalize()?;
-    let affinity = Affinity::parse(env::var("BENCH_CORE").ok().as_deref())?;
-    affinity.validate(&directory)?;
-    let metadata = provenance(&directory, mode, &affinity)?;
-    let build = checked_output(
-        Command::new("cargo")
-            .args(["build", "--locked", "--release", "--example", "bench", "--message-format=json"])
-            .current_dir(&directory),
-    )?;
-    let executable = String::from_utf8(build.stdout)?
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find_map(|value| {
-            (value["reason"] == "compiler-artifact" && value["target"]["name"] == "bench")
-                .then(|| value["executable"].as_str().map(PathBuf::from))
-                .flatten()
-        })
-        .ok_or("cargo did not report the bench executable")?;
-    let mut samples = Vec::new();
-    let mut rows = Rows::new();
-    for round in 1..=2 {
-        eprintln!("Benchmark run {round}/2 ({mode})");
-        let mut command = affinity.command(&executable);
+}
+
+impl Drop for ExecutableSnapshot {
+    fn drop(&mut self) {
+        if let Some(directory) = self.0.parent() {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+}
+
+struct Campaign {
+    label: String,
+    directory: PathBuf,
+    affinity: Affinity,
+    metadata: Value,
+    executable: ExecutableSnapshot,
+    samples: Vec<Value>,
+    reports: Vec<Report>,
+}
+
+impl Campaign {
+    fn prepare(label: String, directory: &Path, mode: &str) -> Result<Self> {
+        let directory = directory.canonicalize()?;
+        let affinity = Affinity::parse(env::var("BENCH_CORE").ok().as_deref())?;
+        affinity.validate(&directory)?;
+        let metadata = provenance(&directory, mode, &affinity)?;
+        let build = checked_output(
+            Command::new("cargo")
+                .args(["build", "--locked", "--release", "--example", "bench", "--message-format=json"])
+                .current_dir(&directory),
+        )?;
+        let executable = String::from_utf8(build.stdout)?
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find_map(|value| {
+                (value["reason"] == "compiler-artifact" && value["target"]["name"] == "bench")
+                    .then(|| value["executable"].as_str().map(PathBuf::from))
+                    .flatten()
+            })
+            .ok_or("cargo did not report the bench executable")?;
+        let executable = ExecutableSnapshot::copy(&executable)?;
+        Ok(Self { label, directory, affinity, metadata, executable, samples: Vec::new(), reports: Vec::new() })
+    }
+
+    fn sample(&mut self, mode: &str, round: usize) -> Result<()> {
+        eprintln!("Benchmark {} run {}/{RUNS} ({mode})", self.label, round + 1);
+        let mut command = self.affinity.command(&self.executable.0);
         if mode != "default" {
             command.arg(format!("--{mode}"));
         }
-        let output = checked_output(command.current_dir(&directory))?;
+        let output = checked_output(command.current_dir(&self.directory))?;
         let raw = String::from_utf8(output.stdout)?;
-        let current = parse_output(&raw);
-        if current.is_empty() {
-            return Err(format!("benchmark run {round} produced no recognizable measurement rows").into());
+        let report = Report::parse(&raw)?;
+        if report.mode != mode {
+            return Err("benchmark reported the wrong mode".into());
         }
-        samples.push(json!({"round": round, "rows": current, "stdout": raw}));
-        merge_minima(&mut rows, current);
+        if let Some(first) = self.reports.first() {
+            first.compatible(&report)?;
+        }
+        self.samples.push(json!({"round": round + 1, "report": report, "stdout": raw, "stderr": String::from_utf8_lossy(&output.stderr)}));
+        self.reports.push(report);
+        Ok(())
     }
-    let results = commit(path, label, rows, json!({"metadata": metadata, "samples": samples}))?;
-    results.table(if mode == "lifecycle" { 3 } else { 1 });
-    Ok(())
+}
+
+fn run(targets: Vec<(String, PathBuf)>, mode: &str, path: &Path) -> Result<()> {
+    if !["default", "phases", "lifecycle", "all"].contains(&mode) {
+        return Err(format!("unknown benchmark mode: {mode}").into());
+    }
+    if targets.iter().enumerate().any(|(i, (label, _))| label.is_empty() || targets[..i].iter().any(|t| &t.0 == label)) {
+        return Err("campaign labels must be nonempty and distinct".into());
+    }
+    let mut campaigns = targets.into_iter().map(|(label, dir)| Campaign::prepare(label, &dir, mode)).collect::<Result<Vec<_>>>()?;
+    for round in 0..RUNS {
+        let mut order: Vec<_> = (0..campaigns.len()).collect();
+        if round % 2 == 1 {
+            order.reverse();
+        }
+        for i in order {
+            campaigns[i].sample(mode, round)?;
+            if campaigns.len() > 1 && campaigns.iter().all(|c| !c.reports.is_empty()) {
+                campaigns[0].reports[0].compatible(&campaigns[1].reports[0])?;
+            }
+        }
+    }
+    let labels: Vec<_> = campaigns.iter().map(|c| c.label.clone()).collect();
+    for mut campaign in campaigns {
+        let (rows, ranges) = aggregate(&campaign.reports)?;
+        let report = &campaign.reports[0];
+        campaign.metadata["harness"] = json!(report.harness);
+        campaign.metadata["workloads"] = json!(report.rows.iter().map(|(name, row)| (name, &row.workload)).collect::<BTreeMap<_, _>>());
+        campaign.metadata["statistic"] = json!("median of calibrated samples; range is minimum to maximum");
+        campaign.metadata["rounds"] = json!(RUNS);
+        commit(path, campaign.label, rows, json!({"metadata":campaign.metadata,"samples":campaign.samples,"ranges":ranges}))?;
+    }
+    Results::load(path)?.table(if mode == "lifecycle" { 3 } else { 1 }, &labels)
 }
 
 fn main() -> Result<()> {
@@ -303,15 +400,20 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("run") if (3..=4).contains(&args.len()) => {
             let mode = args.get(3).cloned().unwrap_or_else(|| env::var("BENCH_MODE").unwrap_or_else(|_| "default".into()));
-            run(args[1].clone(), Path::new(&args[2]), &mode, &path)
+            run(vec![(args[1].clone(), PathBuf::from(&args[2]))], &mode, &path)
         }
-        Some("table") if args.len() <= 2 => {
+        Some("compare") if (5..=6).contains(&args.len()) => {
+            let mode = args.get(5).cloned().unwrap_or_else(|| env::var("BENCH_MODE").unwrap_or_else(|_| "default".into()));
+            run(vec![(args[1].clone(), PathBuf::from(&args[2])), (args[3].clone(), PathBuf::from(&args[4]))], &mode, &path)
+        }
+        Some("table") => {
             let col = args.get(1).map(|value| value.parse::<usize>()).transpose()?.unwrap_or(1);
             if col >= TITLES.len() {
                 return Err("table column must be between 0 and 5".into());
             }
-            Results::load(&path)?.table(col);
-            Ok(())
+            let results = Results::load(&path)?;
+            let labels = if args.len() > 2 { &args[2..] } else { &results.labels };
+            results.table(col, labels)
         }
         Some("--help" | "-h") => {
             println!("{USAGE}");
@@ -325,25 +427,54 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    fn row(name: &str, values: [f64; 3]) -> Rows {
+        BTreeMap::from([(name.into(), values.into_iter().map(Some).collect())])
+    }
+
     #[test]
-    fn measurements_and_minima() {
-        let mut rows = parse_output(
-            "order  seek  walk / elem  get(pos)\nsource 1e9  0.02 µs  1.4 ns  3.1 ns\nlifecycle mix(100 sources)  8.20 µs  2.30 µs  4096 B\n",
-        );
-        merge_minima(&mut rows, parse_output("source 1e9  0.03 µs  1.2 ns  3.0 ns\nlifecycle mix(100 sources)  8.10 µs  2.40 µs  4000 B"));
-        assert_eq!(rows["source 1e9"], vec![Some(0.02), Some(1.2), Some(3.0)]);
-        assert_eq!(rows["lifecycle: mix(100 sources)"], vec![None, None, None, Some(8.1), Some(2.3), Some(4000.0)]);
-        assert_eq!(rows.len(), 2);
-        assert!(parse_output("invalid  NaN µs  1 ns  2 ns\ninvalid  1 µs  2 ms  3 ns").is_empty());
-        assert!(parse_output("shuffle(mix)  [slow path]  1 µs  2 ns  3 ns").contains_key("shuffle(mix)  [slow path]"));
+    fn incompatible_saved_results_are_not_compared() {
+        let mut results = Results::default();
+        results.update("old".into(), row("source", [1.0, 2.0, 3.0]));
+        results.update("new".into(), row("source", [1.0, 2.0, 3.0]));
+        assert!(results.validate_comparison(&results.labels).is_err());
+        for label in ["old", "new"] {
+            results.runs.insert(label.into(), json!({"metadata":{"harness":"same","workloads":{"source":"same"}}}));
+        }
+        results.validate_comparison(&results.labels).unwrap();
+        results.runs.get_mut("new").unwrap()["metadata"]["workloads"]["source"] = json!("different");
+        assert!(results.validate_comparison(&results.labels).is_err());
+        results.validate_comparison(&["old".into()]).unwrap();
+    }
+
+    #[test]
+    fn aggregation_uses_every_sample_and_rejects_incomplete_runs() {
+        use measurements::Measurement;
+        let mut a = Report {
+            schema: 1,
+            harness: "same".into(),
+            mode: "default".into(),
+            rows: BTreeMap::from([(
+                "source".into(),
+                Measurement { workload: "same".into(), samples: vec![vec![Some(1.0), Some(2.0), Some(3.0), None, None, None]; 3] },
+            )]),
+        };
+        let mut b = a.clone();
+        for sample in &mut b.rows.get_mut("source").unwrap().samples {
+            sample[0] = Some(9.0);
+        }
+        let (rows, ranges) = aggregate(&[a.clone(), b.clone()]).unwrap();
+        assert_eq!(rows["source"][0], Some(5.0));
+        assert_eq!((ranges["source"][0][0], ranges["source"][1][0]), (Some(1.0), Some(9.0)));
+        a.rows.insert("extra".into(), a.rows["source"].clone());
+        assert!(aggregate(&[a, b]).is_err());
     }
 
     #[test]
     fn replacing_label_removes_stale_measurements() {
         let mut results = Results::default();
-        results.update("baseline".into(), parse_output("source  1 µs  2 ns  3 ns"));
-        results.update("candidate".into(), parse_output("source  2 µs  3 ns  4 ns\nold  3 µs  4 ns  5 ns"));
-        results.update("candidate".into(), parse_output("new  4 µs  5 ns  6 ns"));
+        results.update("baseline".into(), row("source", [1.0, 2.0, 3.0]));
+        results.update("candidate".into(), row("source", [2.0, 3.0, 4.0]).into_iter().chain(row("old", [3.0, 4.0, 5.0])).collect());
+        results.update("candidate".into(), row("new", [4.0, 5.0, 6.0]));
         assert_eq!(results.labels, ["baseline", "candidate"]);
         assert_eq!(results.rows["source"].len(), 1);
         assert!(!results.rows.contains_key("old"));
@@ -381,6 +512,21 @@ mod tests {
     }
 
     #[test]
+    fn executable_snapshots_survive_replaced_build_artifacts() {
+        let directory = TestDirectory::new();
+        let artifact = directory.0.join("bench");
+        fs::write(&artifact, "before").unwrap();
+        let before = ExecutableSnapshot::copy(&artifact).unwrap();
+        fs::write(&artifact, "after").unwrap();
+        let after = ExecutableSnapshot::copy(&artifact).unwrap();
+        assert_eq!(fs::read_to_string(&before.0).unwrap(), "before");
+        assert_eq!(fs::read_to_string(&after.0).unwrap(), "after");
+        let parent = before.0.parent().unwrap().to_owned();
+        drop(before);
+        assert!(!parent.exists());
+    }
+
+    #[test]
     fn legacy_results_load_and_new_runs_retain_raw_samples() {
         let directory = TestDirectory::new();
         let path = directory.0.join("results.json");
@@ -388,11 +534,11 @@ mod tests {
         let old = Results::load(&path).unwrap();
         assert!(old.runs.is_empty());
         let run = json!({"metadata":{"revision":"abc","compiler":"rustc"},"samples":[{"rows":{"source":[0.03,1.4,3.1]}},{"rows":{"source":[0.02,1.2,3.0]}}]});
-        commit(&path, "new".into(), parse_output("source 0.02 µs 1.2 ns 3.0 ns"), run.clone()).unwrap();
+        commit(&path, "new".into(), row("source", [0.02, 1.2, 3.0]), run.clone()).unwrap();
         let saved = Results::load(&path).unwrap();
         assert_eq!(saved.labels, ["legacy", "new"]);
         assert_eq!(saved.runs["new"], run);
-        commit(&path, "new".into(), parse_output("replacement 0.04 µs 2 ns 4 ns"), json!({"samples":[]})).unwrap();
+        commit(&path, "new".into(), row("replacement", [0.04, 2.0, 4.0]), json!({"samples":[]})).unwrap();
         let saved = Results::load(&path).unwrap();
         assert!(!saved.rows["source"].contains_key("new"));
         assert_eq!(saved.runs["new"], json!({"samples":[]}));
@@ -421,7 +567,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         for round in 0..10 {
-            commit(&path, label.clone(), parse_output("source 0.02 µs 1.2 ns 3.0 ns"), json!({"round":round})).unwrap();
+            commit(&path, label.clone(), row("source", [0.02, 1.2, 3.0]), json!({"round":round})).unwrap();
         }
     }
 

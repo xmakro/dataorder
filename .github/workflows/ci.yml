@@ -44,6 +44,8 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
+      - run: python3 tests/fixtures/generate_weight_oracle.py --check
+      - run: python3 tests/fixtures/generate_schedule_oracle.py --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo doc --locked --no-deps --all-features --document-private-items

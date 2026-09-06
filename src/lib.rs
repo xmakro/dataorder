@@ -114,6 +114,8 @@
 //!
 //! [`Order::new`] returns an [`Error`] with a kind and a path to the invalid node.
 //! [`Seq::check`] performs the same validation without consuming the configuration.
+//! [`Seq::validate`] consumes it, returning it on success and safely disposing of
+//! rejected trees. [`Seq::dispose`] also permits safe disposal after a borrowed check.
 //! This includes parts that would contribute no elements, such as the child of
 //! `repeat(0)`.
 //!
@@ -138,7 +140,7 @@
 //! node lengths. It collects no output elements; ordinary constructors skip that report.
 //!
 //! [`Order::try_get`] returns `None` for an invalid position. [`Order::try_iter`],
-//! [`Cursor::try_seek`], [`Cursor::try_set_range`] and [`Seq::try_slice`] report
+//! [`Cursor::try_seek`], [`Cursor::try_set_range`], [`Seq::try_slice`] and [`Seq::try_shard`] report
 //! [`BoundsError`] instead of panicking on invalid bounds. Failed cursor operations
 //! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;
 //! `position(predicate)` remains the standard consuming iterator search.
@@ -171,7 +173,9 @@
 //! Sequential iteration keeps cursor state. A mix uses `⌈log2 k⌉` tournament comparisons
 //! per element plus one key computation, with no comparisons once one part remains.
 //! A shuffle reads scattered child positions, so **shuffling a mix pays for a mix seek
-//! per element**. Shuffle the parts before mixing when that is the order you need.
+//! per element**. Its cursor retains seek buffers for every mix reached underneath
+//! that shuffle, allocating on the first visit and reusing them thereafter. Shuffle
+//! the parts before mixing when that is the order you need.
 //!
 //! A stride skips unselected child positions. Mixes advance their interleave for short
 //! skips and seek for longer ones. Sharding a mix across `count` workers can therefore
@@ -180,6 +184,7 @@
 //! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
 //! buffers, including in a cloned cursor, though entering a new child can allocate.
+//! `last()` reuses initialized state; selecting an empty range defers repositioning.
 //! For measurements and reproduction commands, see the
 //! [README's performance section](https://github.com/xmakro/dataorder/blob/main/README.md#performance).
 //!
@@ -200,7 +205,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dataorder = { version = "0.1", features = ["serde"] }
+//! dataorder = { version = "0.2", features = ["serde"] }
 //! serde_json = { version = "1", features = ["float_roundtrip"] }
 //! ```
 //!

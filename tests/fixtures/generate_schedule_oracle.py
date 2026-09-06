@@ -1,0 +1,124 @@
+"""Independent schedule oracle: exact rational CDFs and 96-digit inverse CDFs.
+
+Run: python3 tests/fixtures/generate_schedule_oracle.py [--check]
+Uses only Python's standard library; never imports or executes dataorder.
+Breakpoints are interpreted as their exact binary64 values, as in the Rust API.
+"""
+from decimal import Decimal, localcontext
+from fractions import Fraction as F
+import json
+from pathlib import Path
+import random
+import sys
+
+
+def profile(points):
+    a, b, c, d = map(F, points)
+    peak = 2 / ((c - b) + (d - a))
+    return [(s, e, r0, r1) for s, e, r0, r1 in
+            [(F(0), a, 0, 0), (a, b, 0, peak), (b, c, peak, peak),
+             (c, d, peak, 0), (d, F(1), 0, 0)] if e > s]
+
+
+def rate(segments, t, before):
+    for a, b, r0, r1 in segments:
+        if (a < t <= b) if before else (a <= t < b):
+            return r0 + (r1 - r0) * (t - a) / (b - a)
+    raise AssertionError((segments, t, before))
+
+
+def profiles(lens, schedules):
+    parts = [None if p is None else profile(p) for p in schedules]
+    total = sum(lens)
+    uniform = sum(n for n, p in zip(lens, parts) if p is None)
+    points = sorted({F(0), F(1)} | {v for p in parts if p for s in p for v in s[:2]})
+    rest = []
+    for a, b in zip(points, points[1:]):
+        r0 = total - sum(n * rate(p, a, False) for n, p in zip(lens, parts) if p)
+        r1 = total - sum(n * rate(p, b, True) for n, p in zip(lens, parts) if p)
+        assert min(r0, r1) >= 0, "oracle case is overcommitted"
+        rest.append((a, b, r0 / uniform, r1 / uniform))
+    result = [p if p is not None else rest for p in parts]
+    for p in result:
+        assert sum((b - a) * (r0 + r1) / 2 for a, b, r0, r1 in p) == 1
+    return result
+
+
+def dec(x):
+    x = F(x)
+    return Decimal(x.numerator) / Decimal(x.denominator)
+
+
+def inverse(p, y):
+    share = F(0)
+    for a, b, r0, r1 in p:
+        mass = (r0 + r1) * (b - a) / 2
+        if y <= share + mass:
+            z = y - share
+            if z == 0:
+                return dec(a)
+            if r0 == r1:
+                return dec(a + z / r0)
+            c = (r1 - r0) / (2 * (b - a))
+            root = (dec(r0 * r0 + 4 * c * z)).sqrt()
+            return dec(a) + 2 * dec(z) / (dec(r0) + root)
+        share += mass
+    raise AssertionError("unnormalized profile")
+
+
+def small_case(lens, schedules):
+    ps = profiles(lens, schedules)
+    live = [s for s, n in enumerate(lens) if n]
+    keys = []
+    for rank, s in enumerate(live):
+        for j in range(lens[s]):
+            y = F(2 * len(live) * j + 2 * rank + 1, 2 * len(live) * lens[s])
+            # Collapse only rounding at the oracle's 96-digit precision, far below
+            # any distinctions in these fixtures, including exact cross-part ties.
+            key = inverse(ps[s], y).quantize(Decimal("1e-75"))
+            keys.append((key, s, j))
+    keys.sort()
+    return dict(lens=lens, schedules=schedules,
+                samples=[[pos, s, j] for pos, (_, s, j) in enumerate(keys)])
+
+
+def fixtures():
+    cases = []
+    with localcontext() as ctx:
+        ctx.prec = 96
+        cases.append(small_case([101, 17, 13], [None, [0, 0, .5, .5], [.5, .75, 1, 1]]))
+        cases.append(small_case([173, 19, 11], [None, [.125, .25, .5, .875], [0, .25, 1, 1]]))
+        rng = random.Random(0xDA7A5C4)
+        for _ in range(12):
+            points = sorted(rng.sample(range(1, 16), 4))
+            cases.append(small_case([211, 7, 5], [None, [p / 16 for p in points], [0, 0, .75, 1]]))
+        for n in [10**9, 10**12, 10**13]:
+            # The singleton has stagger 1/4. The other part has stagger 3/4.
+            # With constant rates, its exact rank is N/4-1 (the singleton wins ties).
+            rank = n // 4 - 1
+            for points in [[0, 0, 1, 1], [0, 1e-16, 1, 1]]:
+                ps = profiles([1, n - 1], [None, points])
+                t = inverse(ps[0], F(1, 4))
+                # Count the dominant part's keys below the singleton by bisection,
+                # independently of any production seek, using the exact oracle CDF.
+                low, high = 0, n - 1
+                while low < high:
+                    mid = (low + high) // 2
+                    if inverse(ps[1], F(4 * mid + 3, 4 * (n - 1))) < t:
+                        low = mid + 1
+                    else:
+                        high = mid
+                if points[1] == 0:
+                    assert low == rank
+                samples = [[p, 0 if p == low else 1, 0 if p == low else p - (p > low)]
+                           for p in range(low - 3, low + 4)]
+                cases.append(dict(lens=[1, n - 1], schedules=[None, points], samples=samples))
+    return json.dumps(cases, separators=(",", ":")) + "\n"
+
+
+path = Path(__file__).with_name("schedule_oracle.json")
+content = fixtures()
+if "--check" in sys.argv:
+    assert path.read_text() == content, "schedule fixtures differ from the independent oracle"
+else:
+    path.write_text(content)

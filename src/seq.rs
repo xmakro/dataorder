@@ -28,12 +28,15 @@ use std::ops::RangeBounds;
 ///
 /// Two builders check their arguments immediately and panic: [`slice`](Seq::slice)
 /// for reversed or overflowing range bounds, and [`shard`](Seq::shard) for an index
-/// outside `0..count`. See those methods for details.
+/// outside `0..count`. Use [`try_slice`](Seq::try_slice) and [`try_shard`](Seq::try_shard)
+/// for fallible alternatives.
 ///
 /// # Depth
 ///
-/// [`Order::new`] and [`check`](Seq::check) stop at [`MAX_DEPTH`]. Construction also
-/// disposes of rejected trees without recursing through the remaining nodes.
+/// [`Order::new`], [`check`](Seq::check) and [`validate`](Seq::validate) stop at
+/// [`MAX_DEPTH`]. The consuming operations, `Order::new` and `validate`, dispose of
+/// rejected trees without recursing through the remaining nodes. After a borrowed
+/// `check` rejects a tree, use [`dispose`](Seq::dispose) to destroy it safely.
 ///
 /// Other tree operations, including cloning, mapping, serialization and ordinary
 /// dropping, recurse once per level. Their stack use depends on depth and the size
@@ -390,7 +393,13 @@ impl<T> Seq<T> {
     /// # Errors
     /// [`BoundsError::Reversed`], [`BoundsError::StartOverflow`] or [`BoundsError::EndOverflow`].
     pub fn try_slice(self, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
-        let (start, end) = boundaries(range)?;
+        let (start, end) = match boundaries(range) {
+            Ok(bounds) => bounds,
+            Err(error) => {
+                self.dispose();
+                return Err(error);
+            }
+        };
         let skipped = if start == 0 { self } else { self.skip(start) };
         Ok(match end {
             Some(end) => skipped.take(end - start),
@@ -481,8 +490,27 @@ impl<T> Seq<T> {
     /// another worker's data.
     #[must_use]
     pub fn shard(self, count: usize, index: usize) -> Self {
-        assert!(index < count, "dataorder: shard index {index} out of range for {count} shards");
-        self.stride(count, index)
+        self.try_shard(count, index).unwrap_or_else(|e| panic!("dataorder: {e}"))
+    }
+
+    /// Builds a worker's shard, reporting invalid worker parameters without panicking.
+    /// The rejected configuration is disposed of without recursive tree destruction.
+    ///
+    /// ```
+    /// use dataorder::{BoundsError, Seq};
+    /// assert_eq!(Seq::source(10).try_shard(3, 1)?.check(), Ok(3));
+    /// assert_eq!(Seq::source(10).try_shard(0, 0), Err(BoundsError::InvalidShard { count: 0, index: 0 }));
+    /// # Ok::<(), BoundsError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// [`BoundsError::InvalidShard`] when `index >= count`, including `count == 0`.
+    pub fn try_shard(self, count: usize, index: usize) -> Result<Self, BoundsError> {
+        if index >= count {
+            self.dispose();
+            return Err(BoundsError::InvalidShard { count, index });
+        }
+        Ok(self.stride(count, index))
     }
 
     /// Transforms each source with `f`, preserving the sequence structure.
@@ -528,9 +556,17 @@ impl<T> Seq<T> {
         self.try_map_with(&mut f)
     }
 
-    /// Drops the tree with an explicit heap stack, avoiding recursive drop for
-    /// configurations that exceed the depth limit.
-    pub(crate) fn dismantle(self) {
+    /// Disposes of this configuration using a heap stack instead of recursive drop.
+    /// Use this for trees whose depth is unknown or which [`check`](Seq::check)
+    /// rejected. Source values still run their own destructors normally.
+    ///
+    /// ```
+    /// use dataorder::Seq;
+    /// let seq = (0..10_000).fold(Seq::source(1), |s, _| s.take(1));
+    /// assert!(seq.check().is_err());
+    /// seq.dispose();
+    /// ```
+    pub fn dispose(self) {
         let mut stack = vec![self];
         while let Some(seq) = stack.pop() {
             match seq {
@@ -546,6 +582,10 @@ impl<T> Seq<T> {
                 | Self::Stride { inner, .. } => stack.push(*inner),
             }
         }
+    }
+
+    pub(crate) fn dismantle(self) {
+        self.dispose();
     }
 
     fn try_map_with<U, E, F: FnMut(T) -> Result<U, E>>(self, f: &mut F) -> Result<Seq<U>, E> {
@@ -573,10 +613,38 @@ impl<T> Seq<T> {
 }
 
 impl<T: Source> Seq<T> {
+    /// Validates and returns this configuration, disposing of it safely on error.
+    /// Prefer this to a borrowed [`check`](Self::check) when rejecting a tree of
+    /// unknown depth: an early `?` cannot leave an overdeep tree to recursive drop.
+    /// This compiles a temporary order; use [`Order::new`] to retain compilation.
+    ///
+    /// ```
+    /// use dataorder::{Seq, ErrorKind};
+    /// let seq = (0..10_000).fold(Seq::source(1), |s, _| s.take(1));
+    /// assert_eq!(seq.validate().unwrap_err().kind(), &ErrorKind::TooDeep);
+    /// let valid = Seq::source(10).validate()?;
+    /// assert_eq!(valid.check(), Ok(10));
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As for [`check`](Self::check); rejected trees are disposed of on the heap.
+    pub fn validate(self) -> Result<Self, Error> {
+        match self.check() {
+            Ok(_) => Ok(self),
+            Err(error) => {
+                self.dispose();
+                Err(error)
+            }
+        }
+    }
+
     /// Validates the configuration and returns its length without consuming it.
     /// Performs the same checks as [`Order::new`], using the sources' lengths.
     /// This builds and discards a compiled order; calling it before `Order::new`
     /// repeats compilation. Use [`Order::prepare`] to compile once with diagnostics.
+    /// This borrows the tree: on rejection, use [`dispose`](Self::dispose) rather
+    /// than recursive drop. [`validate`](Self::validate) handles that cleanup for you.
     ///
     /// ```
     /// use dataorder::{ErrorKind, Seq};

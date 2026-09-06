@@ -371,7 +371,18 @@ impl<'a, T> IntoIterator for &'a Order<T> {
 }
 
 /// The element at `pos` of `node` in context `ctx`, as `(source index, index in it)`.
-pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
+pub(crate) fn get(node: &Node, pos: u64, ctx: u64) -> (u32, u64) {
+    get_with(node, pos, ctx, |il, pos| il.iter(pos..pos + 1).next().expect("dataorder: interleave yielded nothing"))
+}
+
+/// Random traversal with a caller-supplied mix seeker, allowing shuffles to retain
+/// buffers for every mix they reach, including mixes in different concat children.
+pub(crate) fn get_with<'a>(
+    mut node: &'a Node,
+    mut pos: u64,
+    mut ctx: u64,
+    mut mix: impl FnMut(&'a Interleave, u64) -> (usize, u64),
+) -> (u32, u64) {
     loop {
         match node {
             Node::Empty => unreachable!("dataorder: position in an empty sequence"),
@@ -382,7 +393,7 @@ pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
                 node = &children[i];
             }
             Node::Mix { il, children } => {
-                let (s, j) = il.iter(pos..pos + 1).next().expect("dataorder: interleave yielded nothing");
+                let (s, j) = mix(il, pos);
                 pos = j;
                 node = &children[s];
             }

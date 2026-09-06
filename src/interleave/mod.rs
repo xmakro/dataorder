@@ -171,7 +171,7 @@ impl Interleave {
                     if n == 0 {
                         0
                     } else {
-                        scheduled.push((n as f64 / total as f64, p));
+                        scheduled.push((n as f64, p));
                         scheduled.len() as u32
                     }
                 }
@@ -188,8 +188,7 @@ impl Interleave {
             seqs.push(Seq { n, inv_n, phi, profile });
         }
         // Without uniform elements the shared profile is a placeholder that nothing reads.
-        let u = if uniform_len == 0 { 0.0 } else { uniform_len as f64 / total as f64 };
-        let (uniform, demand, (start, end)) = Profile::uniform(&scheduled, u);
+        let (uniform, demand, (start, end)) = Profile::uniform(&scheduled, uniform_len as f64, total.max(1) as f64);
         if !uniform.is_finite() || !demand.is_finite() {
             return Err(SamplingError::Overflow);
         }

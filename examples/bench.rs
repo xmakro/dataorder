@@ -10,8 +10,54 @@
 use dataorder::{Order, Sampling, Seq};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::hint::black_box;
-use std::time::Instant;
+use std::ops::Range;
+use std::time::{Duration, Instant};
+#[path = "support/measurements.rs"]
+#[allow(dead_code)]
+mod measurements;
+use measurements::{Measurement, Report, fingerprint, summarize};
+const SAMPLES: usize = 5;
+const SAMPLE_TIME: Duration = Duration::from_millis(20);
+thread_local! { static ROWS: RefCell<BTreeMap<String, Measurement>> = const { RefCell::new(BTreeMap::new()) }; }
+
+/// Calibration also warms the code and data. Keep five timed samples after it.
+fn samples(mut batch: impl FnMut(usize) -> Duration, units: usize) -> Vec<f64> {
+    let mut repetitions = 1usize;
+    while batch(repetitions) < SAMPLE_TIME {
+        repetitions = repetitions.checked_mul(2).expect("benchmark batch overflow");
+    }
+    (0..SAMPLES).map(|_| batch(repetitions).as_secs_f64() * 1e9 / repetitions as f64 / units as f64).collect()
+}
+
+/// Generate positions outside the timed region, including phase-specific bounds.
+fn positions(range: Range<usize>) -> Vec<usize> {
+    assert!(!range.is_empty());
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    (0..2048)
+        .map(|_| {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            range.start + ((x >> 11) % range.len() as u64) as usize
+        })
+        .collect()
+}
+
+fn record(name: &str, workload: String, columns: [Option<Vec<f64>>; 6]) {
+    let row = Measurement {
+        workload: fingerprint(workload.as_bytes()),
+        samples: (0..SAMPLES).map(|i| columns.iter().map(|col| col.as_ref().map(|values| values[i])).collect()).collect(),
+    };
+    let (median, low, high) = summarize(&row.samples);
+    let display = |col: usize| format!("{:.3} [{:.3}..{:.3}]", median[col].unwrap(), low[col].unwrap(), high[col].unwrap());
+    if name.starts_with("lifecycle: ") {
+        println!("{name:<54} {} µs  {} µs  {:.0} B", display(3), display(4), median[5].unwrap());
+    } else {
+        println!("{name:<54} {} µs  {} ns  {} ns", display(0), display(1), display(2));
+    }
+    ROWS.with_borrow_mut(|rows| assert!(rows.insert(name.to_owned(), row).is_none(), "duplicate benchmark row"));
+}
 
 struct Counting;
 thread_local! {
@@ -60,48 +106,60 @@ fn measure(name: &str, seq: Seq<usize>, count: usize) {
 }
 
 fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, continuous: bool) {
-    let focused = start.is_some();
+    let config = format!("{seq:?}; count={count}; start={start:?}; continuous={continuous}");
     let order = Order::new(seq).unwrap();
     let n = order.len();
-    let seeks = 200;
-    let mut x = 0x9E37_79B9_7F4A_7C15u64;
-    let t = Instant::now();
-    for _ in 0..seeks {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let pos = ((x >> 11) % n as u64) as usize;
-        let _ = black_box(order.iter(pos..).next());
-    }
-    let seek_us = t.elapsed().as_nanos() as f64 / seeks as f64 / 1000.0;
-
-    let mut acc = 0u64;
-    let start = start.unwrap_or(n / 3);
-    let count = count.min(n - start);
-    // Enter early parts by actually walking them: nth/seek would rebuild the tournament
-    // and hide the cost of retaining exhausted leaves during an uninterrupted stream.
-    let mut ongoing = continuous.then(|| order.iter(..));
-    if let Some(cursor) = &mut ongoing {
-        for _ in 0..start {
-            black_box(cursor.next());
-        }
-    }
-    let t = Instant::now();
-    let cursor = ongoing.get_or_insert_with(|| order.iter(start..start + count));
-    for (s, i) in cursor.take(count) {
-        acc = acc.wrapping_add((*s ^ i) as u64);
-    }
-    let stream_ns = t.elapsed().as_nanos() as f64 / count as f64;
-
-    let gets = count.min(if focused { 2000 } else { 200_000 });
-    let mut x = 0x9E37_79B9_7F4A_7C15u64;
-    let t = Instant::now();
-    for _ in 0..gets {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let (s, i) = order.get(((x >> 11) % n as u64) as usize);
-        acc = acc.wrapping_add((*s ^ i) as u64);
-    }
-    let get_ns = t.elapsed().as_nanos() as f64 / gets as f64;
-    black_box(acc);
-    println!("{name:<44} {seek_us:>11.5} µs {stream_ns:>13.3} ns {get_ns:>11.3} ns");
+    let walk_start = start.unwrap_or(n / 3);
+    let count = count.min(n - walk_start);
+    let region = start.map_or(0..n, |s| s..s + count);
+    let positions = positions(region);
+    let seek = samples(
+        |reps| {
+            let t = Instant::now();
+            for &pos in positions.iter().cycle().take(reps) {
+                black_box(order.iter(black_box(pos)..).next());
+            }
+            t.elapsed()
+        },
+        1,
+    )
+    .into_iter()
+    .map(|ns| ns / 1000.0)
+    .collect();
+    let walk = samples(
+        |reps| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..reps {
+                let mut ongoing = continuous.then(|| order.iter(..));
+                if let Some(cursor) = &mut ongoing {
+                    for _ in 0..walk_start {
+                        black_box(cursor.next());
+                    }
+                }
+                let t = Instant::now();
+                let cursor = ongoing.get_or_insert_with(|| order.iter(walk_start..walk_start + count));
+                let mut acc = 0u64;
+                for (s, i) in cursor.take(count) {
+                    acc = acc.wrapping_add((*s ^ i) as u64);
+                }
+                black_box(acc);
+                elapsed += t.elapsed();
+            }
+            elapsed
+        },
+        count,
+    );
+    let get = samples(
+        |reps| {
+            let t = Instant::now();
+            for &pos in positions.iter().cycle().take(reps) {
+                black_box(order.get(black_box(pos)));
+            }
+            t.elapsed()
+        },
+        1,
+    );
+    record(name, config, [Some(seek), Some(walk), Some(get), None, None, None]);
 }
 
 fn phases() {
@@ -128,15 +186,24 @@ fn phases() {
 }
 
 fn lifecycle(name: &str, seq: Seq<usize>, warmup: usize) {
-    let mut elapsed = 0;
-    for _ in 0..20 {
-        let input = seq.clone();
-        let t = Instant::now();
-        let order = black_box(Order::new(input).unwrap());
-        elapsed += t.elapsed().as_nanos();
-        drop(order);
-    }
-    let build_us = elapsed as f64 / 20.0 / 1000.0;
+    let config = format!("{seq:?}; warmup={warmup}");
+    let build = samples(
+        |reps| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..reps {
+                let input = seq.clone();
+                let t = Instant::now();
+                let order = black_box(Order::new(input).unwrap());
+                elapsed += t.elapsed();
+                drop(order);
+            }
+            elapsed
+        },
+        1,
+    )
+    .into_iter()
+    .map(|ns| ns / 1000.0)
+    .collect();
     let order = Order::new(seq).unwrap();
     BYTES.set(0);
     COUNT_BYTES.set(true);
@@ -146,18 +213,25 @@ fn lifecycle(name: &str, seq: Seq<usize>, warmup: usize) {
     });
     COUNT_BYTES.set(false);
     let bytes = BYTES.get();
-    // The warmup enters every part in these all-uniform configurations. Measure both
-    // the known-zero rank and random ranks without allocating another cursor.
-    let mut x = 0x9E37_79B9_7F4A_7C15u64;
-    let t = Instant::now();
-    for i in 0..400 {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let pos = if i % 2 == 0 { 0 } else { ((x >> 11) % order.len() as u64) as usize };
-        cursor.seek(pos);
-        black_box(cursor.next());
+    let mut positions = positions(0..order.len());
+    for pos in positions.iter_mut().step_by(2) {
+        *pos = 0;
     }
-    let reuse_us = t.elapsed().as_nanos() as f64 / 400.0 / 1000.0;
-    println!("lifecycle {name:<44} {build_us:>11.5} µs {reuse_us:>11.5} µs {bytes:>10} B");
+    let reuse = samples(
+        |reps| {
+            let t = Instant::now();
+            for &pos in positions.iter().cycle().take(reps) {
+                cursor.seek(black_box(pos));
+                black_box(cursor.next());
+            }
+            t.elapsed()
+        },
+        1,
+    )
+    .into_iter()
+    .map(|ns| ns / 1000.0)
+    .collect();
+    record(&format!("lifecycle: {name}"), config, [None, None, None, Some(build), Some(reuse), Some(vec![bytes as f64; SAMPLES])]);
 }
 
 fn lifecycles() {
@@ -230,6 +304,7 @@ fn typical() {
 
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
+    println!("Median [min..max] of {SAMPLES} samples, batches calibrated to at least 20 ms; random positions precomputed.");
     match mode.as_str() {
         "" => typical(),
         "--phases" => phases(),
@@ -243,5 +318,26 @@ fn main() {
             eprintln!("usage: bench [--phases|--lifecycle|--all]");
             std::process::exit(2);
         }
+    }
+    let report = Report {
+        schema: 1,
+        harness: fingerprint(concat!(include_str!("bench.rs"), include_str!("support/measurements.rs")).as_bytes()),
+        mode: if mode.is_empty() { "default".into() } else { mode.trim_start_matches("--").into() },
+        rows: ROWS.with_borrow_mut(std::mem::take),
+    };
+    report.validate().unwrap();
+    println!("{}{}", measurements::PREFIX, serde_json::to_string(&report).unwrap());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn random_access_positions_stay_inside_the_named_phase() {
+        let early = positions(0..200_000);
+        let late = positions(9_000_000..9_200_000);
+        assert!(early.iter().all(|p| (0..200_000).contains(p)));
+        assert!(late.iter().all(|p| (9_000_000..9_200_000).contains(p)));
+        assert_eq!(early.iter().map(|p| p + 9_000_000).collect::<Vec<_>>(), late);
     }
 }

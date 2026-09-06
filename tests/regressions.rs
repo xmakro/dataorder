@@ -37,9 +37,29 @@ fn large_inline_sources_fit_a_thread_stack() {
 }
 
 #[test]
+fn public_validation_and_disposal_reject_deep_trees_safely() {
+    isolated("dispose");
+}
+
+#[test]
 fn isolated_case() {
     let Ok(case) = std::env::var("DATAORDER_REGRESSION_CASE") else { return };
     match case.as_str() {
+        "dispose" => std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(|| {
+                let deep = || (0..200_000).fold(Seq::source(1usize), |s, _| s.take(1));
+                let seq = deep();
+                assert_eq!(seq.check().unwrap_err().kind(), &ErrorKind::TooDeep);
+                seq.dispose();
+                assert_eq!(deep().validate().unwrap_err().kind(), &ErrorKind::TooDeep);
+                assert!(deep().try_shard(0, 0).is_err());
+                assert!(deep().try_slice(..=usize::MAX).is_err());
+                assert_eq!(Seq::source(3).validate().unwrap(), Seq::source(3));
+            })
+            .unwrap()
+            .join()
+            .unwrap(),
         "stack" => std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(|| {

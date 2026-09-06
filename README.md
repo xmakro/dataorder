@@ -7,12 +7,11 @@ index array in memory. Each lookup tells you **which dataset to read and the rec
 index within it**, leaving record loading to you. Ordering memory grows with the
 number of datasets and the sequence structure, not the number of records.
 
-On an Apple M2 Pro, shuffled random access takes about **22 ns**, a random lookup
-in a mix of 100 datasets about **1.9 µs**, and walking that mix after a seek about
-**27 ns per item**. See the [performance highlights](#performance) below.
+In the measurements below, shuffled random access takes about **31 ns**, a random
+lookup in a mix of 100 datasets about **2.7 µs**, and walking that mix after
+a seek about **35 ns per item**. See the [performance highlights](#performance).
 
-The default build has **no dependencies**. Clean release builds on the same machine
-took **under a second**.
+The default build has **no dependencies**.
 
 - **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
   and O(1) space, without generating or storing the full permutation.
@@ -33,7 +32,7 @@ The same configuration and seed reproduce the same order, including after a rest
 
 ```toml
 [dependencies]
-dataorder = "0.1"
+dataorder = "0.2"
 ```
 
 Start with `Seq::source(dataset)`, add ordering operations, then validate and prepare
@@ -170,7 +169,8 @@ fade-outs and rounding at schedule boundaries.
   kind and node path. `take` and `skip` past the end are errors. Accessing an invalid
   position with `get`, or an invalid range with `iter`, panics. Use `try_get` for an
   optional result and `try_iter`, `try_seek`, `try_set_range`, or `Seq::try_slice` for
-  fallible range operations. Failed cursor operations leave their state unchanged.
+  fallible range operations. `Seq::try_shard` checks worker counts and indices.
+  Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
   `offset()` reports the next absolute position; `position(predicate)` is the usual
@@ -184,6 +184,9 @@ without enumerating records. The report distinguishes original configuration pat
 for quotas from paths in the simplified compiled tree. Ordinary constructors do not
 collect it. `Seq::check` performs compilation to validate a borrowed configuration;
 calling it before `Order::new` repeats that work.
+For configuration trees of unknown depth, use consuming `Seq::validate` to return
+the tree on success and dispose of it safely on error. After a borrowed check rejects
+a deep tree, call `Seq::dispose`; ordinary enum destruction is recursive.
 
 `Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
 `map` or `try_map`. The optional `serde` feature adds configuration serialization. When
@@ -193,19 +196,23 @@ for details.
 
 ## Performance
 
-Measured on an Apple M2 Pro with Rust 1.98.1 on macOS, release build, on 2026-09-05.
-Each column is the minimum of two runs; timings exclude record I/O.
+Measured on macOS ARM64 with Rust 1.98.1, release build, on 2026-09-05.
+Each cell is the median [minimum..maximum] of five samples after warmup and batch
+calibration to at least 20 ms. Timings exclude record I/O.
 
 | Order | Positions | Random lookup | Seek + first item | Walk / item |
 | --- | --- | --- | --- | --- |
-| Shuffled dataset | 1 billion | 21.7 ns | 0.04 µs | 14.2 ns |
-| Mix of 100 shuffled datasets | 100 million | 1.87 µs | 2.20 µs | 26.7 ns |
-| Mix of 1,000 shuffled datasets, 20% scheduled | 100 million | 44.18 µs | 47.40 µs | 45.1 ns |
-| Nested mix of 1,100 shuffled datasets, 2–4 epochs | 4.1 billion | 30.69 µs | 33.86 µs | 62.4 ns |
+| Shuffled dataset | 1 billion | 31.3 [31.2..31.3] ns | 0.046 [0.046..0.047] µs | 18.3 [18.2..18.3] ns |
+| Mix of 100 shuffled datasets | 100 million | 2.71 [2.71..2.71] µs | 3.109 [3.108..3.111] µs | 35.2 [35.1..35.2] ns |
+| Mix of 1,000 shuffled datasets, 20% scheduled | 100 million | 64.61 [64.53..64.65] µs | 67.163 [67.102..67.269] µs | 63.4 [63.4..63.4] ns |
+| Nested mix of 1,100 shuffled datasets, 2–4 epochs | 4.1 billion | 44.74 [44.72..44.82] µs | 47.780 [47.743..47.799] µs | 84.1 [84.1..84.2] ns |
 
 Random lookup measures `get(pos)`. Seek measures `iter(pos..).next()`, including
-cursor construction. Walk averages five million items, including the initial seek.
-The benchmark runs on one thread without CPU affinity. Run it locally with:
+cursor construction and destruction. Walk measures batches of five million items,
+including the initial seek. Random positions are precomputed outside timing; reading
+the positions, loop control and optimization barriers remain inside. Phase mode uses
+positions within each named phase window. The benchmark runs on one thread without
+CPU affinity. Run it locally with:
 
 ```sh
 cargo run --release --example bench
@@ -224,16 +231,33 @@ cargo run --release --example demo
 cargo test --locked --all-features
 cargo test --locked --all-features --examples
 cargo doc --locked --no-deps --all-features
+python3 tests/fixtures/generate_weight_oracle.py --check
+python3 tests/fixtures/generate_schedule_oracle.py --check
 ```
 
 The README's Rust examples are tested with the crate's documentation examples.
+The fixture generators use Python's standard library and fixed seeds. Weight quotas
+use exact integer ratios; schedule expectations use rational CDFs and 96-digit
+inverse calculations independent of the Rust implementation. Omit `--check` to
+regenerate the fixtures after changing a generator. CI checks both generated files.
+
 For repeated benchmark runs and comparisons, run
 `cargo run --release --example bench_campaign -- --help`.
+Use `compare before /path/to/before after /path/to/after all` to run six rounds,
+alternating which revision runs first. Both checkouts must contain identical
+`examples/bench.rs` and `examples/support/measurements.rs`; copy the harness into
+the older checkout when comparing implementations. The runner checks harness and
+workload fingerprints, complete row sets, and measurement columns before saving.
+It snapshots each executable so shared build directories cannot replace a revision
+between rounds. `table 1 before after` selects labels and the walk column.
+
 Campaigns run unpinned by default. Set `BENCH_CORE=N` to request CPU affinity through
 `taskset`; unavailable affinity is reported before building. Results retain each raw
-run, revision and working-tree status, compiler, machine information and affinity,
-alongside the minimum comparison table. Unavailable machine fields are stored as
-`null`. Concurrent campaigns merge their results
-under a file lock and replace the results file atomically.
+run and its five calibrated samples per metric, revision and working-tree status,
+compiler, machine information and affinity. Tables show the median of all retained
+samples and their minimum-to-maximum range. Legacy results remain readable one label
+at a time, with their original statistic. Unavailable machine fields are stored as
+`null`. Concurrent campaigns merge their results under a file lock and replace the
+results file atomically.
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

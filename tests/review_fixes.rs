@@ -16,6 +16,12 @@ fn standard_iterator_position_is_available() {
 #[test]
 #[allow(clippy::reversed_empty_ranges)]
 fn checked_access_preserves_cursor_on_errors() {
+    for (count, index) in [(0, 0), (2, 2), (1, usize::MAX)] {
+        let error = Seq::source(10).try_shard(count, index).unwrap_err();
+        assert_eq!(error, BoundsError::InvalidShard { count, index });
+        assert_eq!(error.to_string(), format!("shard index {index} out of range for {count} shards"));
+    }
+    assert_eq!(Seq::source(10).try_shard(3, 1).unwrap(), Seq::source(10).shard(3, 1));
     let order = Order::new(Seq::mix([Seq::source(10).shuffle(1), Seq::source(7)])).unwrap();
     assert_eq!(order.try_get(16), Some(order.get(16)));
     assert_eq!(order.try_get(17), None);

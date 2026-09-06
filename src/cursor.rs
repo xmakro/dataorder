@@ -10,8 +10,9 @@
 
 use crate::bounds::{BoundsError, resolve};
 use crate::interleave::{Interleave, Iter};
-use crate::order::{Node, Order, get};
+use crate::order::{Node, Order, get_with};
 use crate::perm::{self, Key, Shape};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Range, RangeBounds};
 
@@ -23,7 +24,8 @@ use std::ops::{Range, RangeBounds};
 ///
 /// [`nth`](Iterator::nth) skips without returning intermediate elements.
 /// [`count`](Iterator::count) uses the remaining length; [`last`](Iterator::last)
-/// uses random access. Neither walks the range. Allocation is deferred until an
+/// seeks through existing state, or uses random access for an undrawn cursor.
+/// Neither walks the range. Allocation is deferred until an
 /// element is requested, so creating, repositioning or counting an undrawn cursor
 /// allocates nothing. `Debug` displays the current position and range end.
 #[must_use = "a cursor is lazy: it yields nothing until iterated"]
@@ -34,6 +36,9 @@ pub struct Cursor<'a, T> {
     root: NodeCursor<'a>,
     pos: u64,
     end: u64,
+    /// An exhausted cursor may leave its tree behind. Reposition it only when a
+    /// later seek/range can produce elements, retaining all existing buffers.
+    deferred_from: Option<u64>,
 }
 
 impl<'a, T> Cursor<'a, T> {
@@ -52,10 +57,11 @@ impl<'a, T> Cursor<'a, T> {
                 key: perm::key(*seed, order.ctx, *salt),
                 pos: start,
                 ctx: order.ctx,
+                mixes: None,
             }),
             node => NodeCursor::Uninitialized { node, pos: start, ctx: order.ctx },
         };
-        Cursor { order, root, pos: start, end }
+        Cursor { order, root, pos: start, end, deferred_from: None }
     }
 
     /// Absolute order position of the next element, or the range end if exhausted.
@@ -106,10 +112,16 @@ impl<'a, T> Cursor<'a, T> {
             return Err(BoundsError::SeekOutOfBounds { pos, end: self.end as usize });
         }
         let pos = pos as u64;
-        if pos > self.pos {
-            self.root.skip(pos - self.pos);
-        } else if pos < self.pos {
-            self.root.seek(pos, self.order.ctx);
+        let at = self.deferred_from.unwrap_or(self.pos);
+        if pos == self.end {
+            self.deferred_from = Some(at);
+        } else {
+            if pos > at {
+                self.root.skip(pos - at);
+            } else if pos < at {
+                self.root.seek(pos, self.order.ctx);
+            }
+            self.deferred_from = None;
         }
         self.pos = pos;
         Ok(())
@@ -118,6 +130,7 @@ impl<'a, T> Cursor<'a, T> {
     /// Selects a new range of the order and moves to its start.
     /// Reuses existing buffers, like [`seek`](Cursor::seek), so one cursor can serve
     /// multiple ranges. The range may extend beyond the previous range's end.
+    /// Selecting an empty range defers tree repositioning and allocates nothing.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -174,12 +187,25 @@ impl<'a, T> Cursor<'a, T> {
         Some((s as usize, &self.order.sources[s as usize], i as usize))
     }
 
+    fn last_indexed(mut self) -> Option<(usize, &'a T, usize)> {
+        if self.pos == self.end {
+            None
+        } else if matches!(self.root, NodeCursor::Uninitialized { .. }) {
+            Some(self.order.get_indexed(self.end as usize - 1))
+        } else {
+            self.seek(self.end as usize - 1);
+            self.next_indexed()
+        }
+    }
+
     /// Skip to the nth element, returning false when the cursor is exhausted.
     fn skip_n(&mut self, n: usize) -> bool {
         let n = n as u64;
         let left = self.end - self.pos;
         if n >= left {
-            self.root.skip(left);
+            if left > 0 {
+                self.deferred_from = Some(self.pos);
+            }
             self.pos = self.end;
             return false;
         }
@@ -202,7 +228,7 @@ impl<T> fmt::Debug for Cursor<'_, T> {
 /// can allocate. The source handles remain borrowed from the same order.
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
-        Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end }
+        Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end, deferred_from: self.deferred_from }
     }
 }
 
@@ -228,9 +254,9 @@ impl<'a, T> Iterator for Cursor<'a, T> {
         self.remaining()
     }
 
-    /// The last element of the range, by random access, without walking there.
+    /// The last element of the range, reusing initialized state without walking there.
     fn last(self) -> Option<(&'a T, usize)> {
-        if self.pos == self.end { None } else { Some(self.order.get(self.end as usize - 1)) }
+        self.last_indexed().map(|(_, source, index)| (source, index))
     }
 }
 
@@ -319,7 +345,7 @@ impl<'a, T> Iterator for IndexedCursor<'a, T> {
     }
 
     fn last(self) -> Option<Self::Item> {
-        if self.inner.pos == self.inner.end { None } else { Some(self.inner.order.get_indexed(self.inner.end as usize - 1)) }
+        self.inner.last_indexed()
     }
 }
 
@@ -392,9 +418,16 @@ impl<'a> NodeCursor<'a> {
                 NodeCursor::Concat { children, offsets, idx: 0, left: 0, ctx: 0, child: Box::new(NodeCursor::Empty) }
             }
             Node::Mix { il, children } => NodeCursor::Mix(MixCursor::new(il, children)),
-            Node::Shuffle { seed, salt, shape, child } => {
-                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, salt: *salt, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 })
-            }
+            Node::Shuffle { seed, salt, shape, child } => NodeCursor::Shuffle(ShuffleCursor {
+                seed: *seed,
+                salt: *salt,
+                shape: *shape,
+                child,
+                key: Key::UNSET,
+                pos: 0,
+                ctx: 0,
+                mixes: None,
+            }),
             Node::Repeat { child_len, depth, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
                 depth: *depth,
@@ -664,6 +697,12 @@ pub(crate) struct ShuffleCursor<'a> {
     key: Key,
     pos: u64,
     ctx: u64,
+    /// Sparse buffers for mixes reached by random traversal. Pointer keys identify
+    /// immutable interleaves borrowed for this cursor's lifetime; they are never dereferenced.
+    /// Box the map header too: shuffles that reach no mixes carry and drop only one
+    /// optional pointer. An inline map measurably slows fresh shuffled-source cursors.
+    #[allow(clippy::box_collection)]
+    mixes: Option<Box<BTreeMap<usize, Iter<'a>>>>,
 }
 
 impl ShuffleCursor<'_> {
@@ -673,6 +712,21 @@ impl ShuffleCursor<'_> {
     fn next(&mut self) -> (u32, u64) {
         let p = perm::permute(self.shape, self.key, self.pos);
         self.pos += 1;
-        get(self.child, p, self.ctx)
+        match self.child {
+            Node::Source { src, offset, .. } => (*src, offset + p),
+            _ => self.get_composite(p),
+        }
+    }
+
+    /// Keep the map traversal's stack frame out of the common shuffled-source path.
+    #[inline(never)]
+    fn get_composite(&mut self, p: u64) -> (u32, u64) {
+        get_with(self.child, p, self.ctx, |il, pos| {
+            let key = std::ptr::from_ref(il) as usize;
+            let mixes = self.mixes.get_or_insert_with(Box::default);
+            let iter = mixes.entry(key).or_insert_with(|| il.iter(0..0));
+            iter.seek(pos..pos + 1);
+            iter.step()
+        })
     }
 }

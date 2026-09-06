@@ -1,5 +1,5 @@
 # total | exact binary64 weight bits (hex) | expected integer quotas
-# Fixed regression cases with independently calculated exact quotas; do not bless implementation output.
+# Generated independently by generate_weight_oracle.py; do not bless Rust output.
 1|0000000000000001,7fefffffffffffff,3e0dc6cb9fbd528e,3794b06e17bc0dd2,5528dd62404d73e1,386c65b582a14d31,6e3f8f7a9e5ec9b4,07909e6575977dc0,38a782507733c2f5,2a9b7715123f64b1,28239475812c6638|0,1,0,0,0,0,0,0,0,0,0
 3|317b0e9c0fd035d8,317b0e9c0fd035d5,317b0e9c0fd035d8,317b0e9c0fd035de,317b0e9c0fd035db,317b0e9c0fd035d3,317b0e9c0fd035dd,317b0e9c0fd035dd,317b0e9c0fd035d9,317b0e9c0fd035d4,317b0e9c0fd035db,317b0e9c0fd035de,317b0e9c0fd035d4,317b0e9c0fd035df,317b0e9c0fd035d3|0,0,0,1,0,0,0,0,0,0,0,1,0,1,0
 17|0000000000000001,0000000000000000,07b0000000000000,07b0000000000000,07dc000000000000|0,0,2,2,13

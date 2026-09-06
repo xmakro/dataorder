@@ -208,3 +208,68 @@ fn empty_parts_do_not_allocate_runtime_state() {
     };
     assert_eq!(bytes(&plain), bytes(&padded));
 }
+
+#[test]
+fn shuffles_reuse_every_reached_mix_including_concat_children() {
+    let mix = || Seq::mix((0..10).map(|_| Seq::source(100)));
+    let order = Order::new(Seq::concat([mix(), Seq::mix([mix(), mix()])]).repeat(3).shuffle(8)).unwrap();
+    let mut cursor = order.iter(..);
+    cursor.by_ref().for_each(drop); // Reach all cached mixes and exhaust the cursor.
+    let mut clone = cursor.clone();
+    for c in [&mut cursor, &mut clone] {
+        let count = allocations(|| {
+            c.set_range(..);
+            c.by_ref().take(1000).for_each(|item| {
+                black_box(item);
+            });
+            c.seek(300);
+            black_box(c.next());
+        });
+        assert_eq!(count, 0, "a warmed shuffled composition allocated {count} times");
+        assert_eq!(c.next(), Some(order.get(301)));
+    }
+}
+
+#[test]
+fn last_reuses_an_initialized_mix_for_both_cursor_types() {
+    let order = Order::new(Seq::mix((0..100).map(|_| Seq::source(1000)))).unwrap();
+    let mut cursor = order.iter(..);
+    cursor.next();
+    let indexed = cursor.clone().indexed();
+    let expected = order.get(order.len() - 1);
+    let count = allocations(|| assert_eq!(cursor.last(), Some(expected)));
+    assert_eq!(count, 0);
+    let expected = order.get_indexed(order.len() - 1);
+    let count = allocations(|| assert_eq!(indexed.last(), Some(expected)));
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn empty_ranges_defer_new_children_and_preserve_old_buffers() {
+    let mix = || Seq::mix((0..100).map(|_| Seq::source(1000)));
+    let order = Order::new(Seq::concat([mix(), mix()])).unwrap();
+    let mut cursor = order.iter(..);
+    cursor.next();
+    let at = 100_005;
+    assert_eq!(
+        allocations(|| {
+            cursor.set_range(at..at);
+            assert_eq!(cursor.next(), None);
+            assert_eq!(cursor.nth(usize::MAX), None);
+            cursor.set_range(5..5);
+            cursor.set_range(..10);
+            black_box(cursor.next());
+        }),
+        0
+    );
+    assert_eq!(cursor.next(), Some(order.get(1)));
+    cursor.set_range(at..at);
+    let mut clone = cursor.clone();
+    for c in [&mut cursor, &mut clone] {
+        c.set_range(at..at + 3);
+        assert_eq!(c.next(), Some(order.get(at)));
+        assert_eq!(c.nth(usize::MAX), None);
+        c.set_range(at + 3..at + 4);
+        assert_eq!(c.next(), Some(order.get(at + 3)));
+    }
+}
