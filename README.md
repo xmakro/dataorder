@@ -3,21 +3,21 @@
 Shuffle and mix billions of records. Seek anywhere, then stream from there.
 
 `dataorder` provides deterministic ordering for datasets too large to keep a full
-index array in memory. Each lookup computes a **source and an index within that
-source**, leaving record loading to you. Ordering memory grows with the sources and
-sequence structure, not the number of records.
+index array in memory. Each lookup tells you **which dataset to read and the record's
+index within it**, leaving record loading to you. Ordering memory grows with the
+number of datasets and the sequence structure, not the number of records.
 
 On an Apple M2 Pro, shuffled random access takes about **22 ns**, a random lookup
-in a 100-source mix about **1.9 µs**, and walking that mix after a seek about
+in a mix of 100 datasets about **1.9 µs**, and walking that mix after a seek about
 **27 ns per item**. See the [performance highlights](#performance) below.
 
 - **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
   and O(1) space, without generating or storing the full permutation.
 - **Jump into a mix.** Counting and binary searches locate the position within each
-  part, without replaying the preceding records. Seek cost depends on the parts and
-  their schedules, rather than how far into the dataset you go.
-- **Walk cheaply after seeking.** A mix keeps a tournament tree, choosing each next
-  part with **O(log k) comparisons** for `k` parts. Pay for the seek once, then
+  input sequence, without replaying the preceding records. Seek cost depends on the
+  input sequences and their schedules, rather than how far into the dataset you go.
+- **Walk cheaply after seeking.** A mix chooses which sequence to read next with
+  **O(log k) comparisons** for `k` input sequences. Pay for the seek once, then
   iterate from there.
 
 Combine these operations with sampling schedules, repeated epochs and worker sharding.
@@ -33,8 +33,9 @@ The same configuration and seed reproduce the same order, including after a rest
 dataorder = "0.1"
 ```
 
-Describe the sequence with `Seq`, then validate and prepare it with `Order::new`.
-A `usize` can stand in for a dataset when you only need its length:
+Start with `Seq::source(dataset)`, add ordering operations, then validate and prepare
+the sequence with `Order::new`. A `usize` can stand in for a dataset when you only
+need its length:
 
 ```rust
 use dataorder::{Order, Seq};
@@ -47,22 +48,23 @@ fn main() -> Result<(), dataorder::Error> {
 
     // Resume deep into the second epoch without replaying the earlier positions.
     let resume = 1_200_000_000;
-    for (source, index) in order.iter(resume..resume + 10) {
-        println!("record {index} from a source of {source} records");
+    for (dataset_len, index) in order.iter(resume..resume + 10) {
+        println!("record {index} from a dataset of {dataset_len} records");
     }
     assert_eq!(order.iter(resume..).next(), Some(order.get(resume)));
     Ok(())
 }
 ```
 
-An order's position and a source's index are different: position 1,200,000,000 above
-selects one of the original billion records. `get(pos)` returns its source and index;
-`iter(range)` returns the same pairs in order.
+The position in an order differs from the index within a dataset: position
+1,200,000,000 above selects one of the original billion records. `get(pos)` returns
+a dataset handle and a record index; `iter(range)` returns the same pairs in order.
 
 ## Using your datasets
 
-Implement `Source` for a dataset handle. Only its length is required. A stable `salt`
-distinguishes its shuffle from those of other datasets with the same length and seed.
+Implement `Source`, the dataset trait, for your own handle type. Only its length is
+required. A stable `salt` distinguishes its shuffle from those of other datasets
+with the same length and seed.
 
 ```rust
 use dataorder::{Order, Seq, Source};
@@ -90,30 +92,34 @@ fn main() -> Result<(), dataorder::Error> {
 }
 ```
 
-`Order` owns the handles and yields references to them. Slices, arrays, vectors and
-references to sources also implement `Source`. Keep source lengths stable after
-building an order: it uses the lengths recorded at construction.
+`Order` owns your dataset handles and yields references to them. Slices, arrays and
+vectors also implement `Source`, as do references to any type implementing the trait.
+Keep dataset lengths stable after building an order: it uses the lengths recorded
+at construction.
 
 ## Combining sequences
 
+Each input sequence can represent a single dataset or combine several datasets,
+so you can nest mixes and concatenations.
+
 | To… | Use |
 | --- | --- |
-| Read parts one after another | `Seq::concat(parts)` |
-| Interleave parts, preserving each part's order | `Seq::mix(parts)` |
+| Read sequences one after another | `Seq::concat(sequences)` |
+| Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
 | Choose a total length and relative proportions | `Seq::weighted(total, [(seq, weight), …])` |
-| Change when a part appears | `Seq::mix_with` or `Seq::weighted_with`, with a `Sampling` schedule |
+| Control when a sequence contributes records | `Seq::mix_with` or `Seq::weighted_with`, with a `Sampling` schedule |
 | Shuffle positions | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
 | Repeat or truncate to an exact length | `.cycle(len)` |
 | Keep a range or every nth position | `.slice(range)` or `.stride(step, offset)` |
 | Assign every nth position to a worker | `.shard(worker_count, worker_index)` |
 
-A plain mix uses every element once, so longer parts appear more often. A weighted
-mix repeats or truncates each part to its assigned count; the counts sum exactly
-to `total`. Neither operation shuffles a part unless you add `.shuffle(seed)`.
+A plain mix uses every input element once, drawing more often from longer sequences.
+A weighted mix repeats or truncates each input sequence to its assigned count; the
+counts sum exactly to `total`. Each input keeps its order unless you add `.shuffle(seed)`.
 
 Schedules control **when** elements appear, while lengths or weights control **how
-many** appear. For example, this order draws 75% from one source and introduces
+many** appear. For example, this order draws 75% from one dataset and introduces
 the other around halfway through the run:
 
 ```rust
@@ -130,19 +136,20 @@ fn main() -> Result<(), dataorder::Error> {
 }
 ```
 
-Uniform parts fill the space left by scheduled parts. A schedule that requires more
-records than can fit in an interval is rejected. See
+`Sampling::Uniform` spreads a sequence's records across the space left by the other
+schedules. A schedule that requires more records than can fit in an interval is rejected. See
 [`Sampling`](https://docs.rs/dataorder/latest/dataorder/enum.Sampling.html) for ramps,
 fade-outs and rounding at schedule boundaries.
 
 ## Things to know
 
-- **Composition matters.** Shuffle parts before mixing for efficient iteration.
-  Repeat the parts to make a schedule span several epochs; repeating the mix restarts
-  its schedules each epoch.
+- **Composition matters.** Shuffle each input sequence before mixing for efficient
+  iteration. To make a schedule span several epochs, repeat its input sequence;
+  repeating the whole mix restarts its schedules each epoch.
 - **Workers partition positions.** Apply `.shard(count, index)` to the completed
-  sequence to divide its positions without overlap. Sharding parts before mixing
-  produces a different order and can make an otherwise valid schedule infeasible.
+  sequence to divide its positions without overlap. Sharding the input sequences
+  before mixing produces a different order and can make an otherwise valid schedule
+  infeasible.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
   Adding an outer repeat can change later epochs of repeats inside it; see the
@@ -153,8 +160,8 @@ fade-outs and rounding at schedule boundaries.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
 
-`Seq` can be cloned, compared, hashed and mapped to another source type with `map`
-or `try_map`. The optional `serde` feature adds configuration serialization. When
+`Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
+`map` or `try_map`. The optional `serde` feature adds configuration serialization. When
 using JSON, also enable `serde_json/float_roundtrip` to preserve weights and schedules.
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
@@ -166,10 +173,10 @@ Each column is the minimum of two runs; timings exclude record I/O.
 
 | Order | Positions | Random lookup | Seek + first item | Walk / item |
 | --- | --- | --- | --- | --- |
-| Shuffled source | 1 billion | 21.7 ns | 0.04 µs | 14.2 ns |
-| Mix of 100 shuffled sources | 100 million | 1.87 µs | 2.20 µs | 26.7 ns |
-| Mix of 1,000 shuffled sources, 20% scheduled | 100 million | 44.18 µs | 47.40 µs | 45.1 ns |
-| Nested mix of 1,100 shuffled sources, 2–4 epochs | 4.1 billion | 30.69 µs | 33.86 µs | 62.4 ns |
+| Shuffled dataset | 1 billion | 21.7 ns | 0.04 µs | 14.2 ns |
+| Mix of 100 shuffled datasets | 100 million | 1.87 µs | 2.20 µs | 26.7 ns |
+| Mix of 1,000 shuffled datasets, 20% scheduled | 100 million | 44.18 µs | 47.40 µs | 45.1 ns |
+| Nested mix of 1,100 shuffled datasets, 2–4 epochs | 4.1 billion | 30.69 µs | 33.86 µs | 62.4 ns |
 
 Random lookup measures `get(pos)`. Seek measures `iter(pos..).next()`, including
 cursor construction. Walk averages five million items, including the initial seek.
@@ -179,7 +186,7 @@ The benchmark runs on one thread without CPU affinity. Run it locally with:
 cargo run --release --example bench
 ```
 
-See [the benchmark source](examples/bench.rs) for the measured configurations and
+See [the benchmark code](examples/bench.rs) for the measured configurations and
 the [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) for how composition
 affects performance.
 
