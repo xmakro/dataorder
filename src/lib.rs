@@ -257,10 +257,12 @@ mod weight;
 
 pub use bounds::BoundsError;
 pub use cursor::{Cursor, IndexedCursor};
-pub use error::{Error, ErrorKind};
+pub use error::{Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
 pub use order::Order;
-pub use preparation::{Preparation, PreparedKind, PreparedNode, WeightedAllocation};
+pub use preparation::{
+    Preparation, PreparedKind, PreparedMix, PreparedNode, PreparedParameters, PreparedSource, SamplingDiagnostics, WeightedAllocation,
+};
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::{Source, salt, salt_path};
 

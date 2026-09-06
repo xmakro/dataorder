@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Mapping and cleanup after callback errors or panics use an explicit heap stack,
+  including previously mapped and unvisited deep sibling branches.
+- Mix cursors box their largest state, reducing per-part storage. Lifecycle benchmarks
+  measure requested, retained and peak cursor memory and worker scaling, and include
+  wide weight exponents, remainder ties and near-capacity schedules.
+- Preparation reports include compiled transform parameters, original source paths,
+  lengths and salts, and successful schedule capacity/tolerance diagnostics.
+  `Error::sampling_detail` distinguishes invalid breakpoint and coefficient failures
+  and reports the values behind excessive steepness.
+- Independent schedule fixtures cover complementary schedules without uniform parts,
+  interacting ramps, reordered minorities, nearby boundaries, exact ties and the mix
+  length limit. Stateful cursor regressions minimize failing operation histories.
+- Benchmark campaigns build in isolated directories, capture Cargo-observed compiler
+  settings, check environment compatibility and commit comparison labels atomically.
+- A versioned checkpoint example validates configuration, immutable source metadata,
+  seeds, worker settings, crate version and resume position before restoring.
+
 ## 0.2.0
 
 Schedule construction now preserves rounding residuals when computing a small uniform

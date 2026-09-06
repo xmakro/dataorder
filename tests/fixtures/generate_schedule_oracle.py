@@ -37,7 +37,10 @@ def profiles(lens, schedules):
         r0 = total - sum(n * rate(p, a, False) for n, p in zip(lens, parts) if p)
         r1 = total - sum(n * rate(p, b, True) for n, p in zip(lens, parts) if p)
         assert min(r0, r1) >= 0, "oracle case is overcommitted"
-        rest.append((a, b, r0 / uniform, r1 / uniform))
+        if uniform:
+            rest.append((a, b, r0 / uniform, r1 / uniform))
+        else:
+            assert r0 == r1 == 0, "scheduled-only parts must exactly fill capacity"
     result = [p if p is not None else rest for p in parts]
     for p in result:
         assert sum((b - a) * (r0 + r1) / 2 for a, b, r0, r1 in p) == 1
@@ -82,12 +85,65 @@ def small_case(lens, schedules):
                 samples=[[pos, s, j] for pos, (_, s, j) in enumerate(keys)])
 
 
+def sparse_case(name, lens, schedules):
+    """Find ranks of selected keys without walking a huge output or calling Rust."""
+    ps = profiles(lens, schedules)
+    live = [s for s, n in enumerate(lens) if n]
+    k = len(live)
+    phi = {s: F(2 * rank + 1, 2 * k) for rank, s in enumerate(live)}
+
+    def key(s, j):
+        return inverse(ps[s], (j + phi[s]) / lens[s]).quantize(Decimal("1e-75"))
+
+    samples = []
+    for s in live:
+        indices = range(lens[s]) if lens[s] < 20 else sorted({0, 1, lens[s] // 4, lens[s] // 2, lens[s] * 3 // 4, lens[s] - 2, lens[s] - 1})
+        for j in indices:
+            target = (key(s, j), s)
+            rank = 0
+            for t in live:
+                lo, hi = 0, lens[t]
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if (key(t, mid), t) < target:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                rank += lo
+            samples.append([rank, s, j])
+    samples.sort()
+    assert len({p for p, _, _ in samples}) == len(samples)
+    return dict(name=name, lens=lens, schedules=schedules, samples=samples)
+
+
 def fixtures():
     cases = []
     with localcontext() as ctx:
         ctx.prec = 96
         cases.append(small_case([101, 17, 13], [None, [0, 0, .5, .5], [.5, .75, 1, 1]]))
         cases.append(small_case([173, 19, 11], [None, [.125, .25, .5, .875], [0, .25, 1, 1]]))
+        for name, lens, schedules in [
+            ("complementary abrupt halves", [19, 19], [[0, 0, .5, .5], [.5, .5, 1, 1]]),
+            ("complementary ramps with an exact tie", [5, 5], [[0, 1, 1, 1], [0, 0, 0, 1]]),
+            ("overlapping ramps at capacity", [20, 20, 14], [[0, .5, 1, 1], [0, 0, .5, 1], None]),
+            ("multiple scheduled minorities", [97, 3, 5, 7, 11], [None, [0, 0, .125, .125], [.25, .5, .75, 1], [0, .125, .375, .5], [.5, .5, 1, 1]]),
+            ("nearly coincident boundaries", [101, 3, 5, 7], [None, [0, 0, .5, .5], [.5, .5 + 2**-30, .875, 1], [0, .25, .5 - 2**-30, .75]]),
+            ("constant quantile ties", [1, 3, 0], [None, [0, 0, 1, 1], [0, 0, .5, .5]]),
+        ]:
+            for reverse in [False, True]:
+                a, b = (lens[::-1], schedules[::-1]) if reverse else (lens, schedules)
+                case = small_case(a, b)
+                case["name"] = name + (" reversed" if reverse else "")
+                cases.append(case)
+        maximum = 2**46
+        for name, lens, schedules in [
+            ("MAX_MIX_LEN scheduled halves", [maximum // 2, maximum // 2], [[0, 0, .5, .5], [.5, .5, 1, 1]]),
+            ("MAX_MIX_LEN complementary ramps", [maximum // 2, maximum // 2], [[0, 1, 1, 1], [0, 0, 0, 1]]),
+            ("MAX_MIX_LEN uniform minorities", [1, 3, 7, maximum - 11], [None, None, None, [0, 0, 1, 1]]),
+            ("large interacting ramps", [2**42, 2**42, 13, 7], [[0, 1, 1, 1], [0, 0, 0, 1], None, None]),
+        ]:
+            cases.append(sparse_case(name, lens, schedules))
+            cases.append(sparse_case(name + " reversed", lens[::-1], schedules[::-1]))
         rng = random.Random(0xDA7A5C4)
         for _ in range(12):
             points = sorted(rng.sample(range(1, 16), 4))

@@ -200,12 +200,12 @@ impl Hash for Sampling {
 pub(crate) enum SamplingError {
     /// The total length exceeds [`MAX_TOTAL_LEN`].
     TooLong,
-    /// A schedule parameter is out of range or not finite.
-    InvalidParameter { seq: usize, sampling: Sampling },
+    /// A breakpoint or derived profile coefficient is invalid.
+    InvalidParameter { seq: usize, sampling: Sampling, detail: crate::SamplingDetail },
     /// The combined profile cannot be represented by finite coefficients.
     Overflow,
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
-    TooSteep { seq: usize },
+    TooSteep { seq: usize, len: u64, peak_rate: f64 },
     /// The scheduled sequences' rates sum to `demand` (> 1) times the total draw rate at
     /// some progress, leaving nothing for the uniform sequences there.
     Overcommitted { demand: f64, start: f64, end: f64 },
@@ -215,9 +215,9 @@ impl fmt::Display for SamplingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
-            Self::InvalidParameter { seq, sampling } => write!(f, "sequence {seq}: invalid {sampling:?}"),
+            Self::InvalidParameter { seq, sampling, .. } => write!(f, "sequence {seq}: invalid {sampling:?}"),
             Self::Overflow => write!(f, "combined sampling profile exceeds floating-point range"),
-            Self::TooSteep { seq } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
+            Self::TooSteep { seq, .. } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
             Self::Overcommitted { demand, start, end } => {
                 write!(f, "scheduled sequences need {}% of the draw rate at their peak (progress {start}..{end})", demand * 100.0)
             }

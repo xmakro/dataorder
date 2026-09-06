@@ -159,8 +159,9 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
             let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
+                let detail = e.detail();
                 let (kind, part) = e.into_kind();
-                at(kind, part.as_slice())
+                at(kind, part.as_slice()).with_sampling_detail(detail)
             })?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
         }
@@ -545,6 +546,7 @@ fn errors() {
     assert_eq!(
         Order::new(over1).unwrap_err(),
         at(ErrorKind::InvalidSampling { sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } }, &[0])
+            .with_sampling_detail(Some(crate::SamplingDetail::InvalidBreakpoints))
     );
     let steep = Seq::concat([
         a.clone(),

@@ -437,12 +437,12 @@ fn rejects_bad_configurations() {
     assert!(Interleave::with_sampling(&[500, 500], &[Sampling::until(0.5), Uniform]).is_ok());
     assert!(matches!(
         Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, Sampling::trapezoid(0.0, 0.0, 0.001, 0.001)]),
-        Err(TooSteep { seq: 1 })
+        Err(TooSteep { seq: 1, .. })
     ));
     assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
     assert!(matches!(
         Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]),
-        Err(TooSteep { seq: 1 })
+        Err(TooSteep { seq: 1, .. })
     ));
     // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
     assert!(Interleave::with_sampling(&[10, 0], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]).is_ok());

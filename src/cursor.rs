@@ -379,7 +379,9 @@ pub(crate) enum NodeCursor<'a> {
         ctx: u64,
         child: Box<Self>,
     },
-    Mix(MixCursor<'a>),
+    // Keep the largest state out of every inline child slot. This adds one allocation
+    // per active mix, but substantially shrinks wide mixes and worker-local cursors.
+    Mix(Box<MixCursor<'a>>),
     Shuffle(ShuffleCursor<'a>),
     /// `depth` counts the repeats above this one; it salts the epoch contexts.
     Repeat {
@@ -417,7 +419,7 @@ impl<'a> NodeCursor<'a> {
             Node::Concat { offsets, children } => {
                 NodeCursor::Concat { children, offsets, idx: 0, left: 0, ctx: 0, child: Box::new(NodeCursor::Empty) }
             }
-            Node::Mix { il, children } => NodeCursor::Mix(MixCursor::new(il, children)),
+            Node::Mix { il, children } => NodeCursor::Mix(Box::new(MixCursor::new(il, children))),
             Node::Shuffle { seed, salt, shape, child } => NodeCursor::Shuffle(ShuffleCursor {
                 seed: *seed,
                 salt: *salt,

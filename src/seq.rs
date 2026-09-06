@@ -38,7 +38,7 @@ use std::ops::RangeBounds;
 /// rejected trees without recursing through the remaining nodes. After a borrowed
 /// `check` rejects a tree, use [`dispose`](Seq::dispose) to destroy it safely.
 ///
-/// Other tree operations, including cloning, mapping, serialization and ordinary
+/// Other tree operations, including cloning, serialization and ordinary
 /// dropping, recurse once per level. Their stack use depends on depth and the size
 /// of `T`. Large inline sources, such as arrays, can exhaust the stack even below
 /// `MAX_DEPTH`; use handles or boxed sources for those trees.
@@ -537,7 +537,8 @@ impl<T> Seq<T> {
     }
 
     /// Transforms sources like [`map`](Seq::map), stopping at the first error.
-    /// Sources after the error are not visited.
+    /// Sources after the error are not visited. Traversal and cleanup use a heap
+    /// stack, including disposal of unvisited inputs and mapped outputs on error.
     ///
     /// ```
     /// use dataorder::Seq;
@@ -553,7 +554,7 @@ impl<T> Seq<T> {
     /// # Errors
     /// The first error `f` returns.
     pub fn try_map<U, E, F: FnMut(T) -> Result<U, E>>(self, mut f: F) -> Result<Seq<U>, E> {
-        self.try_map_with(&mut f)
+        map_iterative(self, &mut f)
     }
 
     /// Disposes of this configuration using a heap stack instead of recursive drop.
@@ -586,29 +587,6 @@ impl<T> Seq<T> {
 
     pub(crate) fn dismantle(self) {
         self.dispose();
-    }
-
-    fn try_map_with<U, E, F: FnMut(T) -> Result<U, E>>(self, f: &mut F) -> Result<Seq<U>, E> {
-        Ok(match self {
-            Self::Source(t) => Seq::Source(f(t)?),
-            Self::Concat(parts) => Seq::Concat(parts.into_iter().map(|p| p.try_map_with(f)).collect::<Result<_, E>>()?),
-            Self::Mix(parts) => Seq::Mix(
-                parts.into_iter().map(|p| Ok(MixPart { seq: p.seq.try_map_with(f)?, sampling: p.sampling })).collect::<Result<_, E>>()?,
-            ),
-            Self::Weighted { total, parts } => Seq::Weighted {
-                total,
-                parts: parts
-                    .into_iter()
-                    .map(|p| Ok(WeightedPart { seq: p.seq.try_map_with(f)?, weight: p.weight, sampling: p.sampling }))
-                    .collect::<Result<_, E>>()?,
-            },
-            Self::Shuffle { seed, inner } => Seq::Shuffle { seed, inner: Box::new(inner.try_map_with(f)?) },
-            Self::Repeat { times, inner } => Seq::Repeat { times, inner: Box::new(inner.try_map_with(f)?) },
-            Self::Cycle { len, inner } => Seq::Cycle { len, inner: Box::new(inner.try_map_with(f)?) },
-            Self::Skip { n, inner } => Seq::Skip { n, inner: Box::new(inner.try_map_with(f)?) },
-            Self::Take { n, inner } => Seq::Take { n, inner: Box::new(inner.try_map_with(f)?) },
-            Self::Stride { step, offset, inner } => Seq::Stride { step, offset, inner: Box::new(inner.try_map_with(f)?) },
-        })
     }
 }
 
@@ -691,4 +669,100 @@ impl<T: Source> Seq<T> {
             Self::Stride { step, offset, inner: i } => Seq::Stride { step: *step, offset: *offset, inner: inner(i) },
         }
     }
+}
+
+/// A source-independent frame: completed children stay on the output stack until
+/// this frame rebuilds their parent. No dummy source values or recursive calls.
+enum Rebuild {
+    Concat(usize),
+    Mix(Vec<Sampling>),
+    Weighted(usize, Vec<(f64, Sampling)>),
+    Shuffle(u64),
+    Repeat(usize),
+    Cycle(usize),
+    Skip(usize),
+    Take(usize),
+    Stride(usize, usize),
+}
+
+enum MapWork<T> {
+    Enter(Seq<T>),
+    Finish(Rebuild),
+}
+
+/// The guard also dismantles pending trees if a caller's mapping function panics.
+struct Mapping<T, U> {
+    work: Vec<MapWork<T>>,
+    done: Vec<Seq<U>>,
+}
+
+impl<T, U> Drop for Mapping<T, U> {
+    fn drop(&mut self) {
+        for work in self.work.drain(..) {
+            if let MapWork::Enter(seq) = work {
+                seq.dispose();
+            }
+        }
+        for seq in self.done.drain(..) {
+            seq.dispose();
+        }
+    }
+}
+
+fn map_iterative<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> Result<Seq<U>, E> {
+    let mut state = Mapping { work: vec![MapWork::Enter(seq)], done: Vec::new() };
+    while let Some(work) = state.work.pop() {
+        match work {
+            MapWork::Enter(seq) => {
+                let (frame, children) = match seq {
+                    Seq::Source(source) => {
+                        state.done.push(Seq::Source(f(source)?));
+                        continue;
+                    }
+                    Seq::Concat(parts) => (Rebuild::Concat(parts.len()), parts),
+                    Seq::Mix(parts) => {
+                        let sampling = parts.iter().map(|p| p.sampling).collect();
+                        (Rebuild::Mix(sampling), parts.into_iter().map(|p| p.seq).collect())
+                    }
+                    Seq::Weighted { total, parts } => {
+                        let parameters = parts.iter().map(|p| (p.weight, p.sampling)).collect();
+                        (Rebuild::Weighted(total, parameters), parts.into_iter().map(|p| p.seq).collect())
+                    }
+                    Seq::Shuffle { seed, inner } => (Rebuild::Shuffle(seed), vec![*inner]),
+                    Seq::Repeat { times, inner } => (Rebuild::Repeat(times), vec![*inner]),
+                    Seq::Cycle { len, inner } => (Rebuild::Cycle(len), vec![*inner]),
+                    Seq::Skip { n, inner } => (Rebuild::Skip(n), vec![*inner]),
+                    Seq::Take { n, inner } => (Rebuild::Take(n), vec![*inner]),
+                    Seq::Stride { step, offset, inner } => (Rebuild::Stride(step, offset), vec![*inner]),
+                };
+                state.work.push(MapWork::Finish(frame));
+                state.work.extend(children.into_iter().rev().map(MapWork::Enter));
+            }
+            MapWork::Finish(frame) => {
+                let done = &mut state.done;
+                let seq = match frame {
+                    Rebuild::Concat(n) => Seq::Concat(done.split_off(done.len() - n)),
+                    Rebuild::Mix(parameters) => {
+                        let children = done.split_off(done.len() - parameters.len());
+                        Seq::mix_with(children.into_iter().zip(parameters))
+                    }
+                    Rebuild::Weighted(total, parameters) => {
+                        let children = done.split_off(done.len() - parameters.len());
+                        Seq::weighted_with(
+                            total,
+                            children.into_iter().zip(parameters).map(|(seq, (weight, sampling))| (seq, weight, sampling)),
+                        )
+                    }
+                    Rebuild::Shuffle(seed) => done.pop().unwrap().shuffle(seed),
+                    Rebuild::Repeat(times) => done.pop().unwrap().repeat(times),
+                    Rebuild::Cycle(len) => done.pop().unwrap().cycle(len),
+                    Rebuild::Skip(n) => done.pop().unwrap().skip(n),
+                    Rebuild::Take(n) => done.pop().unwrap().take(n),
+                    Rebuild::Stride(step, offset) => done.pop().unwrap().stride(step, offset),
+                };
+                done.push(seq);
+            }
+        }
+    }
+    Ok(state.done.pop().unwrap())
 }

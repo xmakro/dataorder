@@ -87,6 +87,11 @@ impl Profile {
         profile
     }
 
+    #[cfg(test)]
+    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64, total_len: f64) -> (Self, f64, (f64, f64)) {
+        Self::uniform_with_clamping(scheduled, u, total_len, &mut false)
+    }
+
     /// Returns the uniform profile, peak combined demand and a segment attaining that peak.
     /// For scheduled lengths `n_i` and uniform length `u`, the uniform rate is
     /// `(1 - sum(n_i / total * rate_i)) / (u / total)`, clamped to zero. With `u = 0`, no elements
@@ -99,7 +104,8 @@ impl Profile {
     /// their rounding residuals until the uniform remainder has been subtracted.
     /// Sorting the boundaries costs `O(s log s)` for `s` scheduled profiles, compared
     /// with `O(s²)` when evaluating every profile at every boundary.
-    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64, total_len: f64) -> (Self, f64, (f64, f64)) {
+    /// Also records whether a negative uniform remainder was clamped to zero.
+    pub(crate) fn uniform_with_clamping(scheduled: &[(f64, Self)], u: f64, total_len: f64, clamped: &mut bool) -> (Self, f64, (f64, f64)) {
         // Remove the old contribution and add the new one separately: forming their
         // difference first can round away a small new slope before compensation sees it.
         let mut events = Vec::new();
@@ -114,7 +120,15 @@ impl Profile {
             }
         }
         events.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let rate = |total: Compensated| if u > 0.0 { total.remaining(1.0).max(0.0) / (u / total_len) } else { 0.0 };
+        let mut rate = |total: Compensated| {
+            if u > 0.0 {
+                let remainder = total.remaining(1.0);
+                *clamped |= remainder < 0.0;
+                remainder.max(0.0) / (u / total_len)
+            } else {
+                0.0
+            }
+        };
         let (mut total, mut slope) = (Compensated::default(), Expansion::default());
         let (mut windows, mut peak, mut next, mut t) = (Vec::new(), 0.0f64, 0, 0.0);
         let mut peak_interval = (0.0, 1.0);

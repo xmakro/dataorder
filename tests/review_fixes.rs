@@ -164,3 +164,71 @@ fn overcommit_diagnostic_explains_small_excess_and_location() {
     assert!(text.contains("100.0000002"), "{text}");
     assert!(text.contains("progress 0..0.999999998"), "{text}");
 }
+
+#[test]
+fn preparation_explains_folded_ranges_and_original_sources() {
+    use dataorder::PreparedParameters as P;
+    let seq = Seq::concat([Seq::source(4), Seq::concat([Seq::source(10), Seq::source(6)])]).skip(7).take(5);
+    let (_, report) = Order::prepare(seq, 0).unwrap();
+    assert_eq!(report.nodes.len(), 1);
+    let node = &report.nodes[0];
+    assert_eq!(node.parameters, P::Source { offset: 3 });
+    assert_eq!(node.len, 5);
+    assert_eq!(node.source_ordinal, Some(1));
+    assert_eq!(report.sources[1].path, [0, 0, 1, 0]);
+    assert_eq!(report.sources.iter().map(|s| s.len).collect::<Vec<_>>(), [4, 10, 6]);
+    let (_, report) = Order::prepare(Seq::source(100).skip(5).stride(3, 1).skip(2).stride(2, 1), 0).unwrap();
+    assert_eq!(report.nodes[0].parameters, P::Stride { step: 6, offset: 10 });
+    assert_eq!(report.nodes[1].parameters, P::Source { offset: 5 });
+    assert_eq!(report.sources[0].path, [0, 0, 0, 0]);
+    let seq = Seq::source(10).shuffle(7).repeat(3).skip(2);
+    let (_, report) = Order::prepare(seq, 0).unwrap();
+    assert_eq!(report.nodes[0].parameters, P::Slice { start: 2 });
+    assert_eq!(report.nodes[1].parameters, P::Repeat { child_len: 10, depth: 0 });
+    assert!(matches!(report.nodes[2].parameters, P::Shuffle { seed: 7, .. }));
+}
+
+#[test]
+fn sampling_diagnostics_distinguish_reasons_and_report_successful_tolerance() {
+    use dataorder::{MAX_MIX_LEN, SamplingDetail as D};
+    for (sampling, expected) in [
+        (Sampling::delayed(f64::INFINITY), D::NonFiniteParameter),
+        (Sampling::ramp(0.5, 0.25), D::InvalidBreakpoints),
+        (Sampling::ramp(0.0, f64::from_bits(1)), D::CoefficientOverflow),
+    ] {
+        let err = Order::new(Seq::mix_with([(Seq::source(1), sampling)])).unwrap_err();
+        assert!(matches!(err.kind(), ErrorKind::InvalidSampling { .. }));
+        assert_eq!(err.sampling_detail(), Some(&expected));
+        assert_eq!(err.path(), [0]);
+        assert!(err.to_string().contains(&expected.to_string()));
+    }
+    let seq = Seq::mix_with([(Seq::source(1usize << 30), Sampling::until(1e-6))]);
+    let err = Order::new(seq).unwrap_err();
+    assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN }));
+    let weighted = Seq::weighted_with(1 << 30, [(Seq::source(10), 3.0, Sampling::until(1e-6)), (Seq::source(10), 1.0, Sampling::Uniform)]);
+    let err = Order::prepare(weighted, 0).unwrap_err();
+    assert_eq!(err.path(), [0]);
+    assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN }));
+    let (_, report) = Order::prepare(Seq::mix_with([(Seq::source(1000), Sampling::until(1.0 - 5e-10))]).take(0), 0).unwrap();
+    let mix = &report.mixes[0];
+    assert_eq!(mix.path, [0]);
+    assert_eq!(mix.counts, [1000]);
+    assert!(mix.diagnostics.demand > 1.0);
+    assert!(mix.diagnostics.used_tolerance);
+    assert!(!mix.diagnostics.clamped_uniform); // No uniform records to clamp.
+    assert_eq!((mix.diagnostics.start, mix.diagnostics.end), (0.0, 1.0 - 5e-10));
+    #[cfg(target_pointer_width = "64")]
+    {
+        let (_, report) = Order::prepare(
+            Seq::mix_with([(Seq::source((1usize << 44) - 1), Sampling::until(1.0 - 5e-10)), (Seq::source(1), Sampling::Uniform)]),
+            0,
+        )
+        .unwrap();
+        assert!(report.mixes[0].diagnostics.used_tolerance);
+        assert!(report.mixes[0].diagnostics.clamped_uniform);
+    }
+    let (_, report) = Order::prepare(Seq::mix([Seq::source(10), Seq::source(20)]), 0).unwrap();
+    assert_eq!(report.mixes[0].diagnostics.demand, 0.0);
+    assert!(!report.mixes[0].diagnostics.used_tolerance);
+    assert!(!report.mixes[0].diagnostics.clamped_uniform);
+}

@@ -45,6 +45,28 @@ fn public_validation_and_disposal_reject_deep_trees_safely() {
 fn isolated_case() {
     let Ok(case) = std::env::var("DATAORDER_REGRESSION_CASE") else { return };
     match case.as_str() {
+        "map" => std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(|| {
+                let deep = || (0..200_000).fold(Seq::source("later"), |s, _| s.take(1));
+                // Success, an untouched deep sibling, and an already mapped deep sibling.
+                deep().map(|_| 1usize).dispose();
+                for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
+                    let mut calls = Vec::new();
+                    let result = seq.try_map(|name| {
+                        calls.push(name);
+                        if name == "missing" { Err(()) } else { Ok(1usize) }
+                    });
+                    assert!(result.is_err());
+                    assert_eq!(calls.last(), Some(&"missing"));
+                    assert!(calls.len() <= 2);
+                }
+                let seq = Seq::concat([Seq::source("missing"), deep()]);
+                assert!(std::panic::catch_unwind(|| seq.map::<usize, _>(|_| panic!("mapping failed"))).is_err());
+            })
+            .unwrap()
+            .join()
+            .unwrap(),
         "dispose" => std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(|| {
@@ -310,4 +332,9 @@ fn zero_weight_parts_never_receive_an_element() {
             }
         }
     }
+}
+
+#[test]
+fn mapping_and_error_cleanup_use_a_heap_stack() {
+    isolated("map");
 }

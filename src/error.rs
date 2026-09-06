@@ -19,11 +19,24 @@ use std::fmt;
 pub struct Error {
     kind: ErrorKind,
     path: Vec<usize>,
+    sampling_detail: Option<SamplingDetail>,
 }
 
 impl Error {
     pub(crate) fn new(kind: ErrorKind, path: Vec<usize>) -> Self {
-        Self { kind, path }
+        Self { kind, path, sampling_detail: None }
+    }
+
+    pub(crate) fn with_sampling_detail(mut self, detail: Option<SamplingDetail>) -> Self {
+        self.sampling_detail = detail;
+        self
+    }
+
+    /// Additional numerical context for an invalid schedule or excessive steepness.
+    /// The stable classification remains available through [`Error::kind`].
+    #[must_use]
+    pub fn sampling_detail(&self) -> Option<&SamplingDetail> {
+        self.sampling_detail.as_ref()
     }
 
     /// What went wrong.
@@ -43,7 +56,7 @@ impl Error {
         &self.path
     }
 
-    /// Consumes the error and returns its kind, discarding the path.
+    /// Consumes the error and returns its kind, discarding the path and sampling details.
     #[must_use]
     pub fn into_kind(self) -> ErrorKind {
         self.kind
@@ -53,6 +66,9 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt(f)?;
+        if let Some(detail) = &self.sampling_detail {
+            write!(f, ": {detail}")?;
+        }
         if self.path.is_empty() {
             write!(f, " (at the root)")
         } else {
@@ -69,6 +85,38 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Additional context for [`ErrorKind::InvalidSampling`] and [`ErrorKind::TooSteep`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum SamplingDetail {
+    /// At least one breakpoint is NaN or infinite.
+    NonFiniteParameter,
+    /// Finite breakpoints violate their ordering, range or positive-area constraints.
+    InvalidBreakpoints,
+    /// Valid breakpoints produced non-finite profile coefficients.
+    CoefficientOverflow,
+    /// The part's assigned length multiplied by its peak rate exceeds the limit.
+    TooSteep {
+        /// Compiled part length, or assigned weighted quota.
+        len: u64,
+        /// Highest normalized rate in the part's profile.
+        peak_rate: f64,
+        /// Maximum supported length times rate.
+        limit: u64,
+    },
+}
+
+impl fmt::Display for SamplingDetail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFiniteParameter => write!(f, "a breakpoint is not finite"),
+            Self::InvalidBreakpoints => write!(f, "breakpoints are out of range, out of order, or have zero area"),
+            Self::CoefficientOverflow => write!(f, "derived profile coefficients exceed floating-point range"),
+            Self::TooSteep { len, peak_rate, limit } => write!(f, "length {len} × peak rate {peak_rate} exceeds {limit}"),
+        }
+    }
+}
 
 /// The reason a configuration failed validation.
 ///
@@ -180,13 +228,23 @@ impl fmt::Display for ErrorKind {
 }
 
 impl SamplingError {
+    pub(crate) fn detail(&self) -> Option<SamplingDetail> {
+        match self {
+            Self::InvalidParameter { detail, .. } => Some(*detail),
+            Self::TooSteep { len, peak_rate, .. } => {
+                Some(SamplingDetail::TooSteep { len: *len, peak_rate: *peak_rate, limit: MAX_TOTAL_LEN })
+            }
+            _ => None,
+        }
+    }
+
     /// The kind and, for a problem with one part, the part's index.
     pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
         match self {
             Self::TooLong => (ErrorKind::MixTooLong, None),
-            Self::InvalidParameter { seq, sampling } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
+            Self::InvalidParameter { seq, sampling, .. } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
             Self::Overflow => (ErrorKind::SamplingOverflow, None),
-            Self::TooSteep { seq } => (ErrorKind::TooSteep, Some(seq)),
+            Self::TooSteep { seq, .. } => (ErrorKind::TooSteep, Some(seq)),
             Self::Overcommitted { demand, start, end } => (ErrorKind::Overcommitted { demand, start, end }, None),
         }
     }

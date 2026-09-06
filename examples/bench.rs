@@ -4,9 +4,11 @@
 //! measurements use source lengths only and exclude record I/O.
 //! `cargo run --release --example bench`
 //! `-- --phases` measures early, rising, falling and exhausted schedule phases; `-- --lifecycle`
-//! measures compilation, reusable seeks and requested cursor-allocation bytes. `-- --all`
-//! includes both alongside the original table. Allocation bytes are cumulative requests,
-//! not retained memory or RSS; compilation excludes cloning the input configuration.
+//! measures compilation, reusable seeks and cursor memory, including worker scaling.
+//! `-- --all` includes both alongside the original table. Memory is requested, retained
+//! and peak live allocator bytes during cursor construction and warmup, including the
+//! cursor vector but excluding the shared order and allocator overhead (not RSS).
+//! Compilation excludes cloning the input configuration.
 use dataorder::{Order, Sampling, Seq};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -44,7 +46,7 @@ fn positions(range: Range<usize>) -> Vec<usize> {
         .collect()
 }
 
-fn record(name: &str, workload: String, columns: [Option<Vec<f64>>; 6]) {
+fn record(name: &str, workload: String, columns: [Option<Vec<f64>>; 8]) {
     let row = Measurement {
         workload: fingerprint(workload.as_bytes()),
         samples: (0..SAMPLES).map(|i| columns.iter().map(|col| col.as_ref().map(|values| values[i])).collect()).collect(),
@@ -52,7 +54,14 @@ fn record(name: &str, workload: String, columns: [Option<Vec<f64>>; 6]) {
     let (median, low, high) = summarize(&row.samples);
     let display = |col: usize| format!("{:.3} [{:.3}..{:.3}]", median[col].unwrap(), low[col].unwrap(), high[col].unwrap());
     if name.starts_with("lifecycle: ") {
-        println!("{name:<54} {} µs  {} µs  {:.0} B", display(3), display(4), median[5].unwrap());
+        println!(
+            "{name:<54} {} µs  {} µs  {:.0} / {:.0} / {:.0} B (requested / retained / peak)",
+            display(3),
+            display(4),
+            median[5].unwrap(),
+            median[6].unwrap(),
+            median[7].unwrap()
+        );
     } else {
         println!("{name:<54} {} µs  {} ns  {} ns", display(0), display(1), display(2));
     }
@@ -63,38 +72,48 @@ struct Counting;
 thread_local! {
     static COUNT_BYTES: Cell<bool> = const { Cell::new(false) };
     static BYTES: Cell<usize> = const { Cell::new(0) };
+    static LIVE: Cell<usize> = const { Cell::new(0) };
+    static PEAK: Cell<usize> = const { Cell::new(0) };
+}
+
+// Only cursor-owned allocations are created/freed in the measured window. Realloc
+// counts the full successful request, and replaces the old live allocation. Peak
+// measures live Rust layouts; it cannot observe a system allocator's internal copy.
+fn allocation(old: usize, new: usize) {
+    let _ = COUNT_BYTES.try_with(|enabled| {
+        if enabled.get() {
+            BYTES.set(BYTES.get() + new);
+            LIVE.set(LIVE.get() - old + new);
+            PEAK.set(PEAK.get().max(LIVE.get()));
+        }
+    });
 }
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNT_BYTES.try_with(|enabled| {
-            if enabled.get() {
-                BYTES.with(|bytes| bytes.set(bytes.get() + layout.size()));
-            }
-        });
-        unsafe { System.alloc(layout) }
+        let ptr = unsafe { System.alloc(layout) };
+        if !ptr.is_null() {
+            allocation(0, layout.size());
+        }
+        ptr
     }
-
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        allocation(layout.size(), 0);
         unsafe { System.dealloc(ptr, layout) }
     }
-
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNT_BYTES.try_with(|enabled| {
-            if enabled.get() {
-                BYTES.with(|bytes| bytes.set(bytes.get() + layout.size()));
-            }
-        });
-        unsafe { System.alloc_zeroed(layout) }
+        let ptr = unsafe { System.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            allocation(0, layout.size());
+        }
+        ptr
     }
-
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = COUNT_BYTES.try_with(|enabled| {
-            if enabled.get() {
-                BYTES.with(|bytes| bytes.set(bytes.get() + new_size));
-            }
-        });
-        unsafe { System.realloc(ptr, layout, new_size) }
+        let ptr = unsafe { System.realloc(ptr, layout, new_size) };
+        if !ptr.is_null() {
+            allocation(layout.size(), new_size);
+        }
+        ptr
     }
 }
 
@@ -159,7 +178,7 @@ fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, c
         },
         1,
     );
-    record(name, config, [Some(seek), Some(walk), Some(get), None, None, None]);
+    record(name, config, [Some(seek), Some(walk), Some(get), None, None, None, None, None]);
 }
 
 fn phases() {
@@ -186,7 +205,15 @@ fn phases() {
 }
 
 fn lifecycle(name: &str, seq: Seq<usize>, warmup: usize) {
-    let config = format!("{seq:?}; warmup={warmup}");
+    lifecycle_workers(name, seq, warmup, 1);
+}
+
+fn lifecycle_workers(name: &str, seq: Seq<usize>, warmup: usize, workers: usize) {
+    lifecycle_at(name, seq, warmup, workers, None);
+}
+
+fn lifecycle_at(name: &str, seq: Seq<usize>, warmup: usize, workers: usize, seek_range: Option<Range<usize>>) {
+    let config = format!("{seq:?}; warmup={warmup}; workers={workers}; seek_range={seek_range:?}");
     let build = samples(
         |reps| {
             let mut elapsed = Duration::ZERO;
@@ -206,14 +233,21 @@ fn lifecycle(name: &str, seq: Seq<usize>, warmup: usize) {
     .collect();
     let order = Order::new(seq).unwrap();
     BYTES.set(0);
+    LIVE.set(0);
+    PEAK.set(0);
     COUNT_BYTES.set(true);
-    let mut cursor = order.iter(..);
-    cursor.by_ref().take(warmup).for_each(|item| {
-        black_box(item);
-    });
+    let mut cursors = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let mut cursor = order.iter(..);
+        cursor.by_ref().take(warmup).for_each(|item| {
+            black_box(item);
+        });
+        cursors.push(cursor);
+    }
     COUNT_BYTES.set(false);
-    let bytes = BYTES.get();
-    let mut positions = positions(0..order.len());
+    let (bytes, retained, peak) = (BYTES.get(), LIVE.get(), PEAK.get());
+    let cursor = &mut cursors[0];
+    let mut positions = positions(seek_range.unwrap_or(0..order.len()));
     for pos in positions.iter_mut().step_by(2) {
         *pos = 0;
     }
@@ -231,11 +265,24 @@ fn lifecycle(name: &str, seq: Seq<usize>, warmup: usize) {
     .into_iter()
     .map(|ns| ns / 1000.0)
     .collect();
-    record(&format!("lifecycle: {name}"), config, [None, None, None, Some(build), Some(reuse), Some(vec![bytes as f64; SAMPLES])]);
+    record(
+        &format!("lifecycle: {name}"),
+        config,
+        [
+            None,
+            None,
+            None,
+            Some(build),
+            Some(reuse),
+            Some(vec![bytes as f64; SAMPLES]),
+            Some(vec![retained as f64; SAMPLES]),
+            Some(vec![peak as f64; SAMPLES]),
+        ],
+    );
 }
 
 fn lifecycles() {
-    for k in [100, 1000, 10_000] {
+    for k in [100, 1000, 10_000, 100_000] {
         lifecycle(&format!("mix({k} sources)"), Seq::mix((0..k).map(|_| Seq::source(10_000))), 2 * k);
     }
     for k in [1000, 10_000] {
@@ -245,6 +292,37 @@ fn lifecycles() {
             20 * k,
         );
     }
+    for workers in [8, 32] {
+        lifecycle_workers(
+            &format!("mix(10000 sources), {workers} workers"),
+            Seq::mix((0..10_000).map(|_| Seq::source(10_000))),
+            20_000,
+            workers,
+        );
+    }
+    for k in [1000, 10_000] {
+        for (name, weights) in [
+            ("tiny positive weight", (0..k).map(|i| if i == 0 { 1e-300 } else { (i % 13 + 1) as f64 }).collect::<Vec<_>>()),
+            ("wide exponents", (0..k).map(|i| 2.0f64.powi((i % 2000) as i32 - 1000)).collect()),
+            ("equal remainder ties", vec![1.0; k]),
+        ] {
+            lifecycle(
+                &format!("weighted({k}, {name})"),
+                Seq::weighted(k * 10_000 + k / 2, weights.into_iter().map(|w| (Seq::source(10_000), w))),
+                20 * k,
+            );
+        }
+    }
+    // Accepted demand within the rounding tolerance leaves a tiny uniform remainder.
+    // On 64-bit hosts this also exercises rank recovery close to MAX_MIX_LEN.
+    let n = (dataorder::MAX_MIX_LEN / 2).min(usize::MAX as u64) as usize;
+    lifecycle_at(
+        "near-capacity schedule, numerical tail seeks",
+        Seq::mix_with([(Seq::source(1), Sampling::Uniform), (Seq::source(n - 1), Sampling::until(1.0 - 5e-10))]),
+        100,
+        1,
+        Some(n - 20_000..n),
+    );
     lifecycle("mix(100 × mix(10 sources))", Seq::mix((0..100).map(|_| Seq::mix((0..10).map(|_| Seq::source(10_000))))), 4000);
 }
 
@@ -320,7 +398,7 @@ fn main() {
         }
     }
     let report = Report {
-        schema: 1,
+        schema: 2,
         harness: fingerprint(concat!(include_str!("bench.rs"), include_str!("support/measurements.rs")).as_bytes()),
         mode: if mode.is_empty() { "default".into() } else { mode.trim_start_matches("--").into() },
         rows: ROWS.with_borrow_mut(std::mem::take),
@@ -332,6 +410,44 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn allocation_metrics_track_retained_and_peak_bytes() {
+        BYTES.set(0);
+        LIVE.set(0);
+        PEAK.set(0);
+        COUNT_BYTES.set(true);
+        let metrics = || (BYTES.get(), LIVE.get(), PEAK.get());
+        let (first, grown, second, freed, empty);
+        unsafe {
+            let layout = Layout::from_size_align(16, 8).unwrap();
+            let a = ALLOCATOR.alloc(layout);
+            if a.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            first = metrics();
+            let a = ALLOCATOR.realloc(a, layout, 32);
+            if a.is_null() {
+                std::alloc::handle_alloc_error(Layout::from_size_align(32, 8).unwrap());
+            }
+            grown = metrics();
+            let b = ALLOCATOR.alloc_zeroed(layout);
+            if b.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            second = metrics();
+            ALLOCATOR.dealloc(a, Layout::from_size_align(32, 8).unwrap());
+            freed = metrics();
+            ALLOCATOR.dealloc(b, layout);
+            empty = metrics();
+        }
+        COUNT_BYTES.set(false);
+        assert_eq!(first, (16, 16, 16));
+        assert_eq!(grown, (48, 32, 32));
+        assert_eq!(second, (64, 48, 48));
+        assert_eq!(freed, (64, 16, 48));
+        assert_eq!(empty, (64, 0, 48));
+    }
+
     #[test]
     fn random_access_positions_stay_inside_the_named_phase() {
         let early = positions(0..200_000);

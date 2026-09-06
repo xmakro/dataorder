@@ -150,8 +150,8 @@ fn undrawn_cursors_resume_after_range_changes_and_skips() {
 
 #[test]
 fn forward_seeks_land_in_the_target_repetition_and_part() {
-    // Every repetition entered rebuilds the concat's current part cursor (a mix: two
-    // allocations); landing directly enters one repetition.
+    // Every repetition entered rebuilds the concat's current part cursor. Landing
+    // directly enters only one repetition; the bound includes the mix state box.
     let epoch = || {
         Seq::concat([
             Seq::mix([Seq::source(1000).shuffle(1), Seq::source(500).shuffle(2)]),
@@ -169,7 +169,7 @@ fn forward_seeks_land_in_the_target_repetition_and_part() {
         let count = allocations(|| {
             cursor.nth(target - 1);
         });
-        assert!(count <= 8, "nth across 100 000 repetitions made {count} allocations");
+        assert!(count <= 9, "nth across 100 000 repetitions made {count} allocations");
         assert_eq!(cursor.next().map(|(&s, i)| (s, i)), Some(element(&order, target)));
     }
     // A concat of many mixes: entering a part builds its cursor; landing directly builds one.

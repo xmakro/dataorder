@@ -23,7 +23,9 @@ The default build has **no dependencies**.
   iterate from there.
 
 Combine these operations with sampling schedules, repeated epochs and worker sharding.
-The same configuration and seed reproduce the same order, including after a restart.
+The same configuration, source metadata and seed reproduce the same order within the
+crate's ordering compatibility policy. For restarts, also preserve the crate version
+and worker settings; see the [checkpoint example](examples/checkpoint.rs).
 
 [API documentation](https://docs.rs/dataorder) · [Runnable example](examples/demo.rs) ·
 [Performance](#performance)
@@ -179,20 +181,39 @@ fade-outs and rounding at schedule boundaries.
 Use `get_indexed(pos)` or `iter(range).indexed()` to obtain
 `(source_ordinal, dataset, record_index)`. The ordinal indexes `order.sources()` and
 distinguishes equal and zero-sized handles. `Order::prepare(seq, seed)` returns an
-order together with a report of exact weighted quotas and compiled node lengths,
-without enumerating records. The report distinguishes original configuration paths
-for quotas from paths in the simplified compiled tree. Ordinary constructors do not
-collect it. `Seq::check` performs compilation to validate a borrowed configuration;
+order together with a report without enumerating records:
+
+- `nodes` describes the simplified tree, including source offsets, concat boundaries,
+  shuffle seeds and salts, epoch lengths and depths, slices and composed strides.
+- `sources` records original paths, lengths and salts, even for discarded sources.
+  A compiled source node's `source_ordinal` indexes this vector, connecting a folded
+  range back to its original source. Transform parameters use child coordinates;
+  add a source's own offset when resolving its record indices.
+- `weighted` records quotas at original configuration paths. `mixes` records counts,
+  schedules, peak demand and its progress segment, plus whether validation used
+  rounding tolerance or clamped a negative uniform remainder.
+
+Ordinary constructors do not collect this report. Invalid schedules expose further
+context through `Error::sampling_detail()`: non-finite parameters, invalid breakpoints,
+coefficient overflow, or the length, peak rate and limit behind excessive steepness. `Seq::check` performs compilation to validate a borrowed configuration;
 calling it before `Order::new` repeats that work.
 For configuration trees of unknown depth, use consuming `Seq::validate` to return
 the tree on success and dispose of it safely on error. After a borrowed check rejects
 a deep tree, call `Seq::dispose`; ordinary enum destruction is recursive.
 
 `Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
-`map` or `try_map`. The optional `serde` feature adds configuration serialization. When
+`map` or `try_map`. Mapping uses a heap stack and safely cleans up unvisited and
+already-mapped branches after a callback error or panic. The optional `serde` feature adds configuration serialization. When
 using JSON, also enable `serde_json/float_roundtrip` to preserve weights and schedules.
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
+
+For a complete restart pattern, run `cargo run --example checkpoint --features serde`.
+The example stores the whole configuration as its identity, immutable source versions,
+lengths and salts, seeds, shard count/index, the next worker-local offset, and checkpoint
+and crate versions. Restore compares these against independently loaded current metadata
+and rejects mismatches. It advances the checkpoint only after successful processing;
+applications should persist committed work rather than prefetched positions.
 
 ## Performance
 
@@ -222,6 +243,33 @@ See [the benchmark code](examples/bench.rs) for the measured configurations and
 the [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) for how composition
 affects performance.
 
+Cursor memory scales with the number of live parts and independent workers, as well
+as their reached child states. Boxing the mix state reduces storage reserved for every
+child slot, at the cost of one allocation per active mix. On this macOS ARM64 host,
+a 100,000-source cursor retained about 23.9 MB after warmup, down from 31.9 MB before
+that change. In a six-round alternating comparison on the same host, the five-source
+mix's fresh seek increased from 0.305 to 0.350 µs; its walk stayed about 11.9 ns/item.
+The 100-source shuffled mix walked at 24.1 vs 25.0 ns/item. This is a memory/latency
+tradeoff, not a general speedup. CPU-model access was unavailable in the sandbox;
+this comparison explicitly allowed that missing field and used matching compiler
+settings. Six lifecycle rounds on 2026-09-06 measured:
+
+| Mix sources | Worker cursors | Retained bytes | Peak live bytes |
+| --- | --- | --- | --- |
+| 10,000 | 1 | 2,546,816 | 2,546,816 |
+| 10,000 | 8 | 20,374,528 | 20,374,528 |
+| 10,000 | 32 | 81,498,112 | 81,498,112 |
+| 100,000 | 1 | 23,891,840 | 23,891,840 |
+
+These allocator measurements include the cursor vector and cursor-owned allocations,
+exclude the shared order and allocator overhead, and are not RSS. Peak live bytes count
+Rust allocation layouts; they cannot measure a system allocator's internal realloc copy.
+`bench --lifecycle` reports cumulative requests, retained bytes and peak live bytes.
+It also covers wide weight exponents, tiny positive weights, equal remainder ties and
+near-capacity schedules. Exact quota construction can take longer for wide exponents:
+in this campaign, 10,000 parts took about 0.63 ms with weights 1–13 and 2.25 ms with
+one weight changed to `1e-300`.
+
 ## Development
 
 Requires Rust 1.89 or newer.
@@ -239,7 +287,12 @@ The README's Rust examples are tested with the crate's documentation examples.
 The fixture generators use Python's standard library and fixed seeds. Weight quotas
 use exact integer ratios; schedule expectations use rational CDFs and 96-digit
 inverse calculations independent of the Rust implementation. Omit `--check` to
-regenerate the fixtures after changing a generator. CI checks both generated files.
+regenerate the fixtures after changing a generator. The schedule fixtures include
+complementary schedules without uniform parts, interacting ramps, reordered minorities,
+nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`. CI checks both generated
+files. Stateful cursor tests combine seeks, range changes, clones, skips, exhaustion and
+failed operations; failures print a reproducible `DATAORDER_STATE_SEED` and minimize
+the operation history.
 
 For repeated benchmark runs and comparisons, run
 `cargo run --release --example bench_campaign -- --help`.
@@ -248,8 +301,12 @@ alternating which revision runs first. Both checkouts must contain identical
 `examples/bench.rs` and `examples/support/measurements.rs`; copy the harness into
 the older checkout when comparing implementations. The runner checks harness and
 workload fingerprints, complete row sets, and measurement columns before saving.
-It snapshots each executable so shared build directories cannot replace a revision
-between rounds. `table 1 before after` selects labels and the walk column.
+Each compilation uses its own target and intermediate directories, overriding shared
+Cargo output directories from the start of the build. The runner records an executable
+fingerprint, Cargo-selected compiler version and target configuration, and the observed
+profile and compiler arguments for the library and benchmark. `table 1 before after`
+selects labels and the walk column; columns 5, 6 and 7 select requested, retained and
+peak cursor bytes.
 
 Campaigns run unpinned by default. Set `BENCH_CORE=N` to request CPU affinity through
 `taskset`; unavailable affinity is reported before building. Results retain each raw
@@ -257,7 +314,14 @@ run and its five calibrated samples per metric, revision and working-tree status
 compiler, machine information and affinity. Tables show the median of all retained
 samples and their minimum-to-maximum range. Legacy results remain readable one label
 at a time, with their original statistic. Unavailable machine fields are stored as
-`null`. Concurrent campaigns merge their results under a file lock and replace the
-results file atomically.
+`null`. Comparisons reject differing CPU, system, affinity or effective build settings,
+and missing environment provenance. Use `--allow-environment-differences` when such a
+difference is intentional; the runner prints the differences. This does not bypass
+harness or workload checks. Machine metadata cannot account for thermal state or other
+processes, so run timing campaigns on an otherwise idle machine.
+
+Concurrent campaigns commit both comparison labels under one lock and atomically replace
+the results file. Each command prints its own committed snapshot. A later table rejects
+paired labels if one has subsequently been overwritten by a different campaign.
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

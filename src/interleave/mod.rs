@@ -129,6 +129,14 @@ impl Interleave {
     /// # Panics
     /// If `lens` and `sampling` differ in length.
     pub(crate) fn with_sampling(lens: &[u64], sampling: &[Sampling]) -> Result<Self, SamplingError> {
+        Self::with_diagnostics(lens, sampling, None)
+    }
+
+    pub(crate) fn with_diagnostics(
+        lens: &[u64],
+        sampling: &[Sampling],
+        diagnostics: Option<&mut crate::SamplingDiagnostics>,
+    ) -> Result<Self, SamplingError> {
         assert_eq!(lens.len(), sampling.len(), "interleave: one schedule per sequence");
         let k = lens.len();
         let mut total: u64 = 0;
@@ -146,14 +154,30 @@ impl Interleave {
                 Sampling::DelayedLinear { start: d0, full: d1 } => {
                     let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= 1.0 && d0 < 1.0;
                     if !(d0.is_finite() && d1.is_finite() && ordered) {
-                        return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
+                        return Err(SamplingError::InvalidParameter {
+                            seq: i,
+                            sampling: s,
+                            detail: if d0.is_finite() && d1.is_finite() {
+                                crate::SamplingDetail::InvalidBreakpoints
+                            } else {
+                                crate::SamplingDetail::NonFiniteParameter
+                            },
+                        });
                     }
                     Some(Profile::delayed_linear(d0, d1))
                 }
                 Sampling::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
                     let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 + d1 < d2 + d3;
                     if !([d0, d1, d2, d3].iter().all(|d| d.is_finite()) && ordered) {
-                        return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
+                        return Err(SamplingError::InvalidParameter {
+                            seq: i,
+                            sampling: s,
+                            detail: if [d0, d1, d2, d3].iter().all(|d| d.is_finite()) {
+                                crate::SamplingDetail::InvalidBreakpoints
+                            } else {
+                                crate::SamplingDetail::NonFiniteParameter
+                            },
+                        });
                     }
                     Some(Profile::trapezoid(d0, d1, d2, d3))
                 }
@@ -163,10 +187,14 @@ impl Interleave {
                 None => 0,
                 Some(p) => {
                     if n > 0 && !p.is_finite() {
-                        return Err(SamplingError::InvalidParameter { seq: i, sampling: s });
+                        return Err(SamplingError::InvalidParameter {
+                            seq: i,
+                            sampling: s,
+                            detail: crate::SamplingDetail::CoefficientOverflow,
+                        });
                     }
                     if n as f64 * p.max_rate() > MAX_TOTAL_LEN as f64 {
-                        return Err(SamplingError::TooSteep { seq: i });
+                        return Err(SamplingError::TooSteep { seq: i, len: n, peak_rate: p.max_rate() });
                     }
                     if n == 0 {
                         0
@@ -188,12 +216,17 @@ impl Interleave {
             seqs.push(Seq { n, inv_n, phi, profile });
         }
         // Without uniform elements the shared profile is a placeholder that nothing reads.
-        let (uniform, demand, (start, end)) = Profile::uniform(&scheduled, uniform_len as f64, total.max(1) as f64);
+        let mut clamped_uniform = false;
+        let (uniform, demand, (start, end)) =
+            Profile::uniform_with_clamping(&scheduled, uniform_len as f64, total.max(1) as f64, &mut clamped_uniform);
         if !uniform.is_finite() || !demand.is_finite() {
             return Err(SamplingError::Overflow);
         }
         if demand > 1.0 + OVERCOMMIT_TOLERANCE {
             return Err(SamplingError::Overcommitted { demand, start, end });
+        }
+        if let Some(diagnostics) = diagnostics {
+            *diagnostics = crate::SamplingDiagnostics { demand, start, end, used_tolerance: demand > 1.0, clamped_uniform };
         }
         let mut profiles = vec![uniform];
         profiles.extend(scheduled.into_iter().map(|(_, p)| p));

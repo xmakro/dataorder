@@ -1,5 +1,7 @@
 //! Optional diagnostics collected while preparing an order.
 
+use crate::Sampling;
+use crate::float_bits;
 use crate::order::Node;
 
 /// A report from [`Order::prepare`](crate::Order::prepare).
@@ -15,6 +17,12 @@ pub struct Preparation {
     /// Paths refer to the original configuration, including nodes later removed
     /// by a surrounding slice or zero repetition.
     pub weighted: Vec<WeightedAllocation>,
+    /// Every source in original configuration order, including sources removed by
+    /// simplification. Join a compiled node's `source_ordinal` to this vector.
+    pub sources: Vec<PreparedSource>,
+    /// Schedule capacity checks for every original mix or weighted mix, including
+    /// nodes subsequently removed by simplification. Paths are original paths.
+    pub mixes: Vec<PreparedMix>,
 }
 
 /// One node of the final compiled order.
@@ -29,6 +37,8 @@ pub struct PreparedNode {
     pub len: u64,
     /// Index into [`Order::sources`](crate::Order::sources) for a source node.
     pub source_ordinal: Option<usize>,
+    /// Parameters after folding slices, strides and other transformations.
+    pub parameters: PreparedParameters,
 }
 
 /// An operation retained in the compiled tree.
@@ -53,6 +63,110 @@ pub enum PreparedKind {
     Stride,
 }
 
+/// Parameters of a compiled operation; lengths are in [`PreparedNode::len`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PreparedParameters {
+    /// Empty nodes and mixes have no additional positional parameters.
+    None,
+    /// Source indices start at this offset.
+    Source {
+        /// First index within the original source.
+        offset: u64,
+    },
+    /// Starts of the children followed by the total length.
+    Concat {
+        /// Cumulative child boundaries.
+        offsets: Vec<u64>,
+    },
+    /// The shuffle's local seed and folded source salt, before the order seed.
+    Shuffle {
+        /// Configured shuffle seed.
+        seed: u64,
+        /// Compiled source salt.
+        salt: u64,
+    },
+    /// Epoch size and nesting depth used to derive epoch contexts.
+    Repeat {
+        /// Length of one complete epoch.
+        child_len: u64,
+        /// Number of enclosing repeats.
+        depth: u32,
+    },
+    /// A contiguous child range.
+    Slice {
+        /// First child position.
+        start: u64,
+    },
+    /// Child positions `offset + i * step`.
+    Stride {
+        /// Distance between child positions.
+        step: u64,
+        /// First child position.
+        offset: u64,
+    },
+}
+
+/// Original source metadata, read once during compilation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PreparedSource {
+    /// Child indices from the original configuration root.
+    pub path: Vec<usize>,
+    /// Original source length, before any transformations.
+    pub len: u64,
+    /// Salt returned by the source during compilation.
+    pub salt: u64,
+}
+
+/// A capacity check of an original mix, before any enclosing transformations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PreparedMix {
+    /// Child indices from the original configuration root.
+    pub path: Vec<usize>,
+    /// Compiled part lengths or weighted quotas, including empty parts.
+    pub counts: Vec<u64>,
+    /// Schedules in original part order.
+    pub sampling: Vec<Sampling>,
+    /// Peak demand and the numerical tolerance used during validation.
+    pub diagnostics: SamplingDiagnostics,
+}
+
+/// Numerical details of a successful schedule capacity check.
+#[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
+pub struct SamplingDiagnostics {
+    /// Peak combined scheduled rate relative to the mix's available draw rate.
+    /// Zero for an all-uniform mix; excludes empty scheduled parts.
+    pub demand: f64,
+    /// Start of a segment attaining the peak, in normalized progress.
+    pub start: f64,
+    /// End of the segment; the peak may occur at either endpoint.
+    pub end: f64,
+    /// The rounded peak exceeded 1 but remained within the accepted tolerance.
+    pub used_tolerance: bool,
+    /// A negative uniform remainder was clamped to zero. This can be true even
+    /// when the rounded peak equals 1 because the remainder retains extra precision.
+    pub clamped_uniform: bool,
+}
+
+impl PartialEq for SamplingDiagnostics {
+    fn eq(&self, other: &Self) -> bool {
+        [self.demand, self.start, self.end].map(float_bits) == [other.demand, other.start, other.end].map(float_bits)
+            && self.used_tolerance == other.used_tolerance
+            && self.clamped_uniform == other.clamped_uniform
+    }
+}
+impl Eq for SamplingDiagnostics {}
+
+#[derive(Default)]
+pub(crate) struct CompilationReport {
+    pub weighted: Vec<WeightedAllocation>,
+    pub sources: Vec<PreparedSource>,
+    pub mixes: Vec<PreparedMix>,
+}
+
 /// Exact quotas assigned to one original [`Seq::Weighted`](crate::Seq::Weighted) node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -65,7 +179,7 @@ pub struct WeightedAllocation {
 }
 
 impl Preparation {
-    pub(crate) fn new(root: &Node, mut weighted: Vec<WeightedAllocation>) -> Self {
+    pub(crate) fn new(root: &Node, CompilationReport { mut weighted, sources, mut mixes }: CompilationReport) -> Self {
         let mut nodes = Vec::new();
         let mut work = vec![(root, Vec::new())];
         while let Some((node, path)) = work.pop() {
@@ -80,7 +194,16 @@ impl Preparation {
                 Node::Stride { .. } => PreparedKind::Stride,
             };
             let source_ordinal = if let Node::Source { src, .. } = node { Some(*src as usize) } else { None };
-            nodes.push(PreparedNode { path: path.clone(), kind, len: node.len(), source_ordinal });
+            let parameters = match node {
+                Node::Empty | Node::Mix { .. } => PreparedParameters::None,
+                Node::Source { offset, .. } => PreparedParameters::Source { offset: *offset },
+                Node::Concat { offsets, .. } => PreparedParameters::Concat { offsets: offsets.clone() },
+                Node::Shuffle { seed, salt, .. } => PreparedParameters::Shuffle { seed: *seed, salt: *salt },
+                Node::Repeat { child_len, depth, .. } => PreparedParameters::Repeat { child_len: *child_len, depth: *depth },
+                Node::Slice { start, .. } => PreparedParameters::Slice { start: *start },
+                Node::Stride { step, offset, .. } => PreparedParameters::Stride { step: *step, offset: *offset },
+            };
+            nodes.push(PreparedNode { path: path.clone(), kind, len: node.len(), source_ordinal, parameters });
             match node {
                 Node::Concat { children, .. } | Node::Mix { children, .. } => {
                     for (i, child) in children.iter().enumerate().rev() {
@@ -98,6 +221,7 @@ impl Preparation {
             }
         }
         weighted.sort_by(|a, b| a.path.cmp(&b.path));
-        Self { nodes, weighted }
+        mixes.sort_by(|a, b| a.path.cmp(&b.path));
+        Self { nodes, weighted, sources, mixes }
     }
 }
