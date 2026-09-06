@@ -62,7 +62,7 @@ fn seeking_an_existing_cursor_allocates_nothing() {
         cursor.next();
     });
     assert_eq!(count, 0, "seeking an existing cursor allocated {count} times");
-    assert_eq!(cursor.position(), n / 4 + 200_000 + 100_004);
+    assert_eq!(cursor.offset(), n / 4 + 200_000 + 100_004);
 }
 
 /// A cursor first entered near the end reserves its tournament for parts that a later
@@ -103,6 +103,7 @@ fn cursors_allocate_only_when_drawing_an_element() {
             cursor.set_range(..);
             cursor.seek(order.len() / 3);
             assert_eq!(cursor.clone().count(), order.len() - order.len() / 3);
+            assert_eq!(cursor.clone().indexed().count(), order.len() - order.len() / 3);
             assert_eq!(cursor.count(), order.len() - order.len() / 3);
         }
         assert_eq!(order.iter(..).count(), order.len());

@@ -189,12 +189,12 @@ impl Interleave {
         }
         // Without uniform elements the shared profile is a placeholder that nothing reads.
         let u = if uniform_len == 0 { 0.0 } else { uniform_len as f64 / total as f64 };
-        let (uniform, demand) = Profile::uniform(&scheduled, u);
+        let (uniform, demand, (start, end)) = Profile::uniform(&scheduled, u);
         if !uniform.is_finite() || !demand.is_finite() {
             return Err(SamplingError::Overflow);
         }
         if demand > 1.0 + OVERCOMMIT_TOLERANCE {
-            return Err(SamplingError::Overcommitted { demand });
+            return Err(SamplingError::Overcommitted { demand, start, end });
         }
         let mut profiles = vec![uniform];
         profiles.extend(scheduled.into_iter().map(|(_, p)| p));

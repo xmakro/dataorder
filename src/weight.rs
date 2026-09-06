@@ -213,3 +213,24 @@ impl Wide {
         low
     }
 }
+
+#[cfg(test)]
+mod oracle_tests {
+    use super::shares;
+
+    #[test]
+    fn matches_independent_arbitrary_precision_fixtures() {
+        // Includes totals above usize::MAX on 32-bit targets: test the same exact
+        // arithmetic there without relying on the public API's final length limit.
+        for (line, fixture) in include_str!("../tests/fixtures/weight_oracle.txt").lines().enumerate() {
+            if fixture.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<_> = fixture.split('|').collect();
+            let total = fields[0].parse().unwrap();
+            let weights: Vec<_> = fields[1].split(',').map(|s| f64::from_bits(u64::from_str_radix(s, 16).unwrap())).collect();
+            let expected: Vec<u64> = fields[2].split(',').map(|s| s.parse().unwrap()).collect();
+            assert_eq!(shares(total, &weights), expected, "independent fixture line {}", line + 1);
+        }
+    }
+}

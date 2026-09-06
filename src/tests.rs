@@ -339,7 +339,7 @@ fn random_configurations_match_reference() {
         for _ in 0..6 {
             let a = rng.below(n + 1);
             cursor.seek(a);
-            assert_eq!(cursor.position(), a);
+            assert_eq!(cursor.offset(), a);
             let m = rng.below(n - a + 1);
             assert_eq!(cursor.len(), n - a);
             let got = ids(cursor.by_ref().take(m));
@@ -348,10 +348,10 @@ fn random_configurations_match_reference() {
             let b = a + m + rng.below(n - a - m + 1);
             cursor.seek(b);
             assert_eq!(ids(cursor.by_ref().take(3)), reference[b..(b + 3).min(n)], "round {round}: forward seek {b} of {seq:?}");
-            let p = cursor.position();
+            let p = cursor.offset();
             let k = rng.below(5);
             assert_eq!(cursor.nth(k).map(|(s, i)| (s.id, i)), reference.get(p + k).copied(), "round {round}: nth({k}) at {p} of {seq:?}");
-            assert_eq!(cursor.position(), (p + k + 1).min(n));
+            assert_eq!(cursor.offset(), (p + k + 1).min(n));
         }
         // `set_range` re-ranges the same cursor, forward or backward, from wherever it stands.
         for _ in 0..4 {
@@ -360,7 +360,7 @@ fn random_configurations_match_reference() {
             cursor.set_range(a..b);
             assert_eq!(cursor.len(), b - a);
             assert_eq!(ids(cursor.by_ref()), reference[a..b], "round {round}: set_range {a}..{b} of {seq:?}");
-            assert_eq!(cursor.position(), b);
+            assert_eq!(cursor.offset(), b);
         }
         assert_eq!(ids((&order).into_iter()), reference);
         checked += 1;
@@ -538,8 +538,8 @@ fn errors() {
     assert!(matches!(Order::new(over).unwrap_err().kind(), ErrorKind::Overcommitted { .. }));
     let over_early = Seq::mix_with([(src(0, 10), Sampling::until(0.5)), (src(1, 1), Sampling::Uniform)]);
     let err = Order::new(over_early).unwrap_err();
-    assert!(matches!(err.kind(), ErrorKind::Overcommitted { demand } if (demand - 20.0 / 11.0).abs() < 1e-9), "{err}");
-    assert!(err.to_string().starts_with("scheduled mix parts need 181.8% of the draw rate at their peak"));
+    assert!(matches!(err.kind(), ErrorKind::Overcommitted { demand, .. } if (demand - 20.0 / 11.0).abs() < 1e-9), "{err}");
+    assert!(err.to_string().contains("% of the draw rate at their peak (progress"));
     // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(
@@ -846,9 +846,9 @@ fn edge_cases() {
     assert_eq!(c.nth(3), None);
     c.seek(0);
     assert_eq!(c.nth(2).map(|(s, i)| (s.id, i)), Some((0, 2)));
-    assert_eq!(c.position(), 3);
+    assert_eq!(c.offset(), 3);
     assert_eq!(c.nth(1), None);
-    assert_eq!(c.position(), 4);
+    assert_eq!(c.offset(), 4);
     c.seek(0);
     assert_eq!(ids(c), vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
     // `count` and `last` answer without walking, `last` by random access.

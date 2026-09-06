@@ -101,7 +101,7 @@ fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, c
     }
     let get_ns = t.elapsed().as_nanos() as f64 / gets as f64;
     black_box(acc);
-    println!("{name:<44} {seek_us:>8.2} µs {stream_ns:>11.1} ns {get_ns:>9.1} ns");
+    println!("{name:<44} {seek_us:>11.5} µs {stream_ns:>13.3} ns {get_ns:>11.3} ns");
 }
 
 fn phases() {
@@ -157,7 +157,7 @@ fn lifecycle(name: &str, seq: Seq<usize>, warmup: usize) {
         black_box(cursor.next());
     }
     let reuse_us = t.elapsed().as_nanos() as f64 / 400.0 / 1000.0;
-    println!("lifecycle {name:<44} {build_us:>8.2} µs {reuse_us:>8.2} µs {bytes:>10} B");
+    println!("lifecycle {name:<44} {build_us:>11.5} µs {reuse_us:>11.5} µs {bytes:>10} B");
 }
 
 fn lifecycles() {

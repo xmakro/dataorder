@@ -208,7 +208,7 @@ pub(crate) enum SamplingError {
     TooSteep { seq: usize },
     /// The scheduled sequences' rates sum to `demand` (> 1) times the total draw rate at
     /// some progress, leaving nothing for the uniform sequences there.
-    Overcommitted { demand: f64 },
+    Overcommitted { demand: f64, start: f64, end: f64 },
 }
 
 impl fmt::Display for SamplingError {
@@ -218,7 +218,9 @@ impl fmt::Display for SamplingError {
             Self::InvalidParameter { seq, sampling } => write!(f, "sequence {seq}: invalid {sampling:?}"),
             Self::Overflow => write!(f, "combined sampling profile exceeds floating-point range"),
             Self::TooSteep { seq } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
-            Self::Overcommitted { demand } => write!(f, "scheduled sequences need {:.1}% of the draw rate at their peak", demand * 100.0),
+            Self::Overcommitted { demand, start, end } => {
+                write!(f, "scheduled sequences need {}% of the draw rate at their peak (progress {start}..{end})", demand * 100.0)
+            }
         }
     }
 }

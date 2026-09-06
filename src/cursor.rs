@@ -8,8 +8,9 @@
 //! the small mix step is inlined into dispatch, while the larger shuffle step stays
 //! out of line to avoid adding overhead to other node kinds.
 
+use crate::bounds::{BoundsError, resolve};
 use crate::interleave::{Interleave, Iter};
-use crate::order::{Node, Order, get, resolve};
+use crate::order::{Node, Order, get};
 use crate::perm::{self, Key, Shape};
 use std::fmt;
 use std::ops::{Range, RangeBounds};
@@ -58,8 +59,9 @@ impl<'a, T> Cursor<'a, T> {
     }
 
     /// Absolute order position of the next element, or the range end if exhausted.
+    /// Unlike [`Iterator::position`], this does not consume any elements.
     #[must_use]
-    pub fn position(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.pos as usize
     }
 
@@ -82,7 +84,7 @@ impl<'a, T> Cursor<'a, T> {
     /// let order = Order::new(Seq::mix([Seq::source(100).shuffle(1), Seq::source(50)]))?;
     /// let mut cursor = order.iter(100..);
     /// cursor.seek(120);
-    /// assert_eq!(cursor.position(), 120);
+    /// assert_eq!(cursor.offset(), 120);
     /// assert_eq!(cursor.next(), Some(order.get(120)));
     /// cursor.seek(7); // Absolute position, even before the original range start.
     /// assert_eq!(cursor.len(), 150 - 7);
@@ -92,14 +94,25 @@ impl<'a, T> Cursor<'a, T> {
     /// # Panics
     /// If `pos` is beyond the end of the range.
     pub fn seek(&mut self, pos: usize) {
+        self.try_seek(pos).unwrap_or_else(|e| panic!("dataorder: {e}"));
+    }
+
+    /// Checked [`seek`](Self::seek). On error, the cursor is unchanged.
+    ///
+    /// # Errors
+    /// [`BoundsError::SeekOutOfBounds`] when `pos` exceeds the current range end.
+    pub fn try_seek(&mut self, pos: usize) -> Result<(), BoundsError> {
+        if pos as u64 > self.end {
+            return Err(BoundsError::SeekOutOfBounds { pos, end: self.end as usize });
+        }
         let pos = pos as u64;
-        assert!(pos <= self.end, "dataorder: seek to {pos} beyond the end {}", self.end);
         if pos > self.pos {
             self.root.skip(pos - self.pos);
         } else if pos < self.pos {
             self.root.seek(pos, self.order.ctx);
         }
         self.pos = pos;
+        Ok(())
     }
 
     /// Selects a new range of the order and moves to its start.
@@ -123,15 +136,64 @@ impl<'a, T> Cursor<'a, T> {
     /// # Panics
     /// As [`Order::iter`] does for the range.
     pub fn set_range(&mut self, range: impl RangeBounds<usize>) {
-        let range = resolve(range, self.order.len());
+        self.try_set_range(range).unwrap_or_else(|e| panic!("dataorder: {e}"));
+    }
+
+    /// Checked [`set_range`](Self::set_range). On error, the cursor is unchanged.
+    ///
+    /// # Errors
+    /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
+    pub fn try_set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
+        let range = resolve(range, self.order.len())?;
         self.end = range.end as u64;
-        self.seek(range.start);
+        self.try_seek(range.start)
+    }
+
+    /// Includes the source ordinal in each result, even for zero-sized source types.
+    /// Existing position, range and allocated buffers are retained.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::mix([Seq::source(2), Seq::source(2)]))?;
+    /// let ordinals: Vec<_> = order.iter(..).indexed().map(|(ordinal, _, _)| ordinal).collect();
+    /// assert_eq!(ordinals, [0, 1, 0, 1]);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    pub fn indexed(self) -> IndexedCursor<'a, T> {
+        IndexedCursor { inner: self }
+    }
+
+    /// The next element with its ordinal, without recovering identity from a reference.
+    #[inline]
+    fn next_indexed(&mut self) -> Option<(usize, &'a T, usize)> {
+        if self.pos == self.end {
+            return None;
+        }
+        self.pos += 1;
+        let (s, i) = self.root.next();
+        Some((s as usize, &self.order.sources[s as usize], i as usize))
+    }
+
+    /// Skip to the nth element, returning false when the cursor is exhausted.
+    fn skip_n(&mut self, n: usize) -> bool {
+        let n = n as u64;
+        let left = self.end - self.pos;
+        if n >= left {
+            self.root.skip(left);
+            self.pos = self.end;
+            return false;
+        }
+        if n > 0 {
+            self.root.skip(n);
+            self.pos += n;
+        }
+        true
     }
 }
 
 impl<T> fmt::Debug for Cursor<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Cursor").field("position", &self.position()).field("end", &(self.end as usize)).finish()
+        f.debug_struct("Cursor").field("position", &self.offset()).field("end", &(self.end as usize)).finish()
     }
 }
 
@@ -149,29 +211,12 @@ impl<'a, T> Iterator for Cursor<'a, T> {
 
     #[inline]
     fn next(&mut self) -> Option<(&'a T, usize)> {
-        if self.pos == self.end {
-            return None;
-        }
-        self.pos += 1;
-        let (s, i) = self.root.next();
-        Some((&self.order.sources[s as usize], i as usize))
+        self.next_indexed().map(|(_, source, index)| (source, index))
     }
 
     /// Skips `n` elements without visiting them, then yields the next.
     fn nth(&mut self, n: usize) -> Option<(&'a T, usize)> {
-        let n = n as u64;
-        let left = self.end - self.pos;
-        if n >= left {
-            // To the end, so that the root stays where `position` says it is.
-            self.root.skip(left);
-            self.pos = self.end;
-            return None;
-        }
-        if n > 0 {
-            self.root.skip(n);
-            self.pos += n;
-        }
-        self.next()
+        if self.skip_n(n) { self.next() } else { None }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -192,6 +237,94 @@ impl<'a, T> Iterator for Cursor<'a, T> {
 impl<T> ExactSizeIterator for Cursor<'_, T> {}
 
 impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
+
+/// A [`Cursor`] yielding `(source_ordinal, source, index_within_source)`.
+/// Created by [`Cursor::indexed`]. Ordinals index [`Order::sources`] and remain
+/// distinct for equal or zero-sized sources. Skipping, counting and cloning have
+/// the same costs as on the underlying cursor.
+#[must_use = "a cursor is lazy: it yields nothing until iterated"]
+pub struct IndexedCursor<'a, T> {
+    inner: Cursor<'a, T>,
+}
+
+impl<'a, T> IndexedCursor<'a, T> {
+    /// Absolute position of the next element; see [`Cursor::offset`].
+    #[must_use]
+    pub fn offset(&self) -> usize {
+        self.inner.offset()
+    }
+
+    /// Number of elements remaining in the range.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.inner.remaining()
+    }
+
+    /// Moves to an absolute position. Panics beyond the range end; see [`Cursor::seek`].
+    pub fn seek(&mut self, pos: usize) {
+        self.inner.seek(pos);
+    }
+
+    /// Checked seek; leaves the cursor unchanged on error. See [`Cursor::try_seek`].
+    pub fn try_seek(&mut self, pos: usize) -> Result<(), BoundsError> {
+        self.inner.try_seek(pos)
+    }
+
+    /// Selects a new range. Panics on invalid bounds; see [`Cursor::set_range`].
+    pub fn set_range(&mut self, range: impl RangeBounds<usize>) {
+        self.inner.set_range(range);
+    }
+
+    /// Checked range change; leaves the cursor unchanged on error. See [`Cursor::try_set_range`].
+    pub fn try_set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
+        self.inner.try_set_range(range)
+    }
+
+    /// Removes the ordinal adapter, preserving the cursor's position and buffers.
+    pub fn into_cursor(self) -> Cursor<'a, T> {
+        self.inner
+    }
+}
+
+impl<T> Clone for IndexedCursor<'_, T> {
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone() }
+    }
+}
+
+impl<T> fmt::Debug for IndexedCursor<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexedCursor").field("position", &self.offset()).field("remaining", &self.remaining()).finish()
+    }
+}
+
+impl<'a, T> Iterator for IndexedCursor<'a, T> {
+    type Item = (usize, &'a T, usize);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next_indexed()
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if self.inner.skip_n(n) { self.next() } else { None }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+
+    fn count(self) -> usize {
+        self.remaining()
+    }
+
+    fn last(self) -> Option<Self::Item> {
+        if self.inner.pos == self.inner.end { None } else { Some(self.inner.order.get_indexed(self.inner.end as usize - 1)) }
+    }
+}
+
+impl<T> ExactSizeIterator for IndexedCursor<'_, T> {}
+impl<T> std::iter::FusedIterator for IndexedCursor<'_, T> {}
 
 /// Marks a child whose position is unknown after a mix seek or before its first draw.
 const UNSEEKED: u64 = u64::MAX;

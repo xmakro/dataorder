@@ -77,7 +77,7 @@ impl Profile {
         Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)])
     }
 
-    /// Returns the uniform profile and the scheduled parts' peak combined demand.
+    /// Returns the uniform profile, peak combined demand and a segment attaining that peak.
     /// For scheduled fractions `rho_i` and uniform fraction `u`, the uniform rate is
     /// `(1 - sum(rho_i * rate_i)) / u`, clamped to zero. With `u = 0`, no elements
     /// use the returned profile. A peak demand above 1 indicates overcommitment.
@@ -88,7 +88,7 @@ impl Profile {
     /// widely different magnitudes; the rate value uses a compensated sum.
     /// Sorting the boundaries costs `O(s log s)` for `s` scheduled profiles, compared
     /// with `O(s²)` when evaluating every profile at every boundary.
-    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> (Self, f64) {
+    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64) -> (Self, f64, (f64, f64)) {
         // Remove the old contribution and add the new one separately: forming their
         // difference first can round away a small new slope before compensation sees it.
         let mut events = Vec::new();
@@ -105,6 +105,7 @@ impl Profile {
         let rate = |total: f64| if u > 0.0 { (1.0 - total).max(0.0) / u } else { 0.0 };
         let (mut total, mut slope) = (Compensated::default(), Expansion::default());
         let (mut windows, mut peak, mut next, mut t) = (Vec::new(), 0.0f64, 0, 0.0);
+        let mut peak_interval = (0.0, 1.0);
         while t < 1.0 {
             while next < events.len() && events[next].0 <= t {
                 total.add(events[next].1);
@@ -113,13 +114,19 @@ impl Profile {
             }
             let t1 = if next < events.len() { events[next].0.min(1.0) } else { 1.0 };
             let r0 = rate(total.value());
+            if total.value() > peak {
+                peak_interval = (t, t1);
+            }
             peak = peak.max(total.value());
             total.add(slope.value() * (t1 - t));
+            if total.value() > peak {
+                peak_interval = (t, t1);
+            }
             peak = peak.max(total.value());
             windows.push((t, t1, r0, rate(total.value())));
             t = t1;
         }
-        (if u > 0.0 { Self::from_rates(windows) } else { Self::delayed_linear(0.0, 0.0) }, peak)
+        (if u > 0.0 { Self::from_rates(windows) } else { Self::delayed_linear(0.0, 0.0) }, peak, peak_interval)
     }
 
     /// The rate just after `t` (`before == false`) or just before it.
@@ -343,7 +350,7 @@ mod tests {
             (0.05, Profile::trapezoid(0.5, 0.6, 0.8, 0.9)),
         ];
         let u = 0.35;
-        let (fu, peak) = Profile::uniform(&scheduled, u);
+        let (fu, peak, _) = Profile::uniform(&scheduled, u);
         assert!((0.97..1.0).contains(&peak), "peak {peak}");
         for t in grid() {
             let total = u * fu.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
@@ -354,7 +361,8 @@ mod tests {
         let end = (1.0 - 0.2 / 0.7 - 0.25 * 2.0 / 1.2 - 0.05 * 2.0 / 1.6) / u;
         assert!((fu.rate_at(1.0, true) - end).abs() < 1e-12);
         // The peak is where the summed rate is highest, not at the end.
-        let (_, peak) = Profile::uniform(&[(0.6, Profile::trapezoid(0.0, 0.0, 0.5, 0.5)), (0.2, Profile::delayed_linear(0.5, 0.5))], 0.2);
+        let (_, peak, _) =
+            Profile::uniform(&[(0.6, Profile::trapezoid(0.0, 0.0, 0.5, 0.5)), (0.2, Profile::delayed_linear(0.5, 0.5))], 0.2);
         assert!((peak - 1.2).abs() < 1e-12, "peak {peak}");
     }
 
@@ -384,7 +392,7 @@ mod tests {
                 scheduled.push((0.3 / s as f64 / p.max_rate(), p));
             }
             let u = 0.5;
-            let (fu, peak) = Profile::uniform(&scheduled, u);
+            let (fu, peak, _) = Profile::uniform(&scheduled, u);
             let direct = uniform_direct(&scheduled, u);
             assert!(peak <= 0.31, "peak {peak}");
             assert_eq!(fu.segs.len(), direct.segs.len());
@@ -413,7 +421,7 @@ mod tests {
     fn narrow_triangles_preserve_mass_and_adjacent_quantiles() {
         for d in [1e-8, 1e-12, 1e-16, 1e-20, 1e-300] {
             let p = Profile::trapezoid(0.0, d, d, 1.0);
-            let (uniform, peak) = Profile::uniform(&[(0.25, p.clone())], 0.75);
+            let (uniform, peak, _) = Profile::uniform(&[(0.25, p.clone())], 0.75);
             assert!(p.is_finite() && uniform.is_finite());
             assert!((peak - 0.5).abs() < 1e-14);
             for t in grid() {
@@ -425,13 +433,13 @@ mod tests {
         let profiles =
             [Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0), Profile::delayed_linear(0.0, 1e-200), Profile::delayed_linear(0.0, 1.0)];
         let scheduled: Vec<_> = profiles.into_iter().map(|p| (0.1, p)).collect();
-        let (uniform, _) = Profile::uniform(&scheduled, 0.7);
+        let (uniform, _, _) = Profile::uniform(&scheduled, 0.7);
         for t in grid() {
             let mass = 0.7 * uniform.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
             assert!((mass - t).abs() < 2e-15, "t={t}, mass={mass}");
         }
         for n in [1e6, 1e9, 1e12, (1u64 << 46) as f64] {
-            let (p, _) = Profile::uniform(&[(1.0 / (n + 1.0), Profile::trapezoid(0.0, 0.0, 0.0, 1.0))], n / (n + 1.0));
+            let (p, _, _) = Profile::uniform(&[(1.0 / (n + 1.0), Profile::trapezoid(0.0, 0.0, 0.0, 1.0))], n / (n + 1.0));
             for center in grid() {
                 let mut y = center;
                 let mut previous = p.quantile(y, &mut 0);

@@ -1,10 +1,11 @@
 //! Sequence configuration and builders. Each node is a source, a transform or a
 //! combination of other sequences; [`Order::new`] validates and compiles the tree.
 
+use crate::bounds::{BoundsError, boundaries};
 use crate::{Error, MAX_DEPTH, Order, Sampling, Source, float_bits};
 use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 
 /// A description of how to order sources of type `T`.
 ///
@@ -63,6 +64,11 @@ pub enum Seq<T> {
     /// `weight / sum_of_weights * total` down, then give the remaining positions to
     /// the largest fractional remainders. Ties go to the lowest part index. This
     /// uses the exact binary values of the weights and makes the counts sum to `total`.
+    /// Increasing `total` need not increase every count: weights `[5, 3, 1]` receive
+    /// `[2, 1, 1]` at total 4, but `[3, 2, 0]` at total 5. Changing the total or
+    /// weights can change the entire order, including its prefix. To extend an
+    /// existing order while preserving its prefix, retain its original configuration
+    /// and concatenate additional data.
     ///
     /// Weights must be finite and nonnegative. A positive `total` requires at least
     /// one positive weight, and a part assigned a positive count must not be empty.
@@ -371,22 +377,25 @@ impl<T> Seq<T> {
     /// would be needed (an exclusive start or an inclusive end at `usize::MAX`).
     #[must_use]
     pub fn slice(self, range: impl RangeBounds<usize>) -> Self {
-        let bump = |x: usize| x.checked_add(1).expect("dataorder: slice bound overflows usize");
-        let start = match range.start_bound() {
-            Bound::Included(&s) => s,
-            Bound::Excluded(&s) => bump(s),
-            Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            Bound::Included(&e) => Some(bump(e)),
-            Bound::Excluded(&e) => Some(e),
-            Bound::Unbounded => None,
-        };
+        self.try_slice(range).unwrap_or_else(|e| match e {
+            BoundsError::StartOverflow | BoundsError::EndOverflow => panic!("dataorder: slice bound overflows usize"),
+            BoundsError::Reversed { .. } => panic!("dataorder: slice end before start"),
+            _ => panic!("dataorder: {e}"),
+        })
+    }
+
+    /// Builds a slice, reporting reversed or overflowing bounds without panicking.
+    /// Bounds against the child length are still validated by [`Order::new`].
+    ///
+    /// # Errors
+    /// [`BoundsError::Reversed`], [`BoundsError::StartOverflow`] or [`BoundsError::EndOverflow`].
+    pub fn try_slice(self, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
+        let (start, end) = boundaries(range)?;
         let skipped = if start == 0 { self } else { self.skip(start) };
-        match end {
-            Some(end) => skipped.take(end.checked_sub(start).expect("dataorder: slice end before start")),
+        Ok(match end {
+            Some(end) => skipped.take(end - start),
             None => skipped,
-        }
+        })
     }
 
     /// The first `n` positions (an error when the order is built if there are fewer).
@@ -434,8 +443,17 @@ impl<T> Seq<T> {
 
     /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
     /// sequence together cover it exactly once, and shard `i` holds position `i` of every
-    /// consecutive block of `count` positions, so a mix's schedule is preserved across
-    /// workers. A shard of a sequence shorter than `count` may be empty.
+    /// consecutive block of `count` positions. This preserves the global schedule
+    /// across workers collectively; it does not balance each worker's dataset mix.
+    /// A shard of a sequence shorter than `count` may be empty, and shard lengths
+    /// can differ by one when the sequence length is not divisible by `count`.
+    ///
+    /// For two equal uniform parts, the mix alternates A, B, A, B. Two workers then
+    /// receive only A and only B respectively, even if each part was shuffled.
+    /// Shuffling the completed mix before sharding breaks this pattern, but scatters
+    /// scheduled phases and pays a mix seek per element. Sharding each part before
+    /// mixing can give each worker both datasets, but changes the global order and
+    /// requires each worker's schedules to be feasible, as described below.
     ///
     /// Sharding a mix keeps one in `count` interleaved positions. The mix advances
     /// past unselected positions, or seeks for long skips. Across `count` workers,
@@ -557,6 +575,8 @@ impl<T> Seq<T> {
 impl<T: Source> Seq<T> {
     /// Validates the configuration and returns its length without consuming it.
     /// Performs the same checks as [`Order::new`], using the sources' lengths.
+    /// This builds and discards a compiled order; calling it before `Order::new`
+    /// repeats compilation. Use [`Order::prepare`] to compile once with diagnostics.
     ///
     /// ```
     /// use dataorder::{ErrorKind, Seq};

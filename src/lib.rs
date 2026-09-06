@@ -77,7 +77,9 @@
 //! repeating a mix restarts its schedules each epoch. To schedule over several epochs,
 //! repeat the parts and mix them once. [`Seq::shard`] partitions the resulting positions
 //! among workers; its documentation explains the cost and the difference between
-//! sharding a mix and sharding its parts.
+//! sharding a mix and sharding its parts. The global position partition does not
+//! guarantee a balanced dataset mix on each worker: two equal interleaved parts
+//! sharded two ways send one part exclusively to each worker.
 //!
 //! # Shuffles and repetitions
 //!
@@ -132,6 +134,16 @@
 //! that part; a shuffle of at most one element and a single repetition need no wrapper.
 //! A cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.
+//! [`Order::prepare`] optionally reports exact weighted quotas and the final compiled
+//! node lengths. It collects no output elements; ordinary constructors skip that report.
+//!
+//! [`Order::try_get`] returns `None` for an invalid position. [`Order::try_iter`],
+//! [`Cursor::try_seek`], [`Cursor::try_set_range`] and [`Seq::try_slice`] report
+//! [`BoundsError`] instead of panicking on invalid bounds. Failed cursor operations
+//! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;
+//! `position(predicate)` remains the standard consuming iterator search.
+//! [`Order::get_indexed`] and [`Cursor::indexed`] include the source ordinal in their
+//! results, so equal and zero-sized sources can be distinguished without pointer identity.
 //!
 //! # Cost
 //!
@@ -224,11 +236,13 @@
 #![allow(clippy::suboptimal_flops)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+mod bounds;
 mod cursor;
 mod error;
 mod interleave;
 mod order;
 mod perm;
+mod preparation;
 mod seq;
 mod source;
 mod sum;
@@ -236,16 +250,19 @@ mod sum;
 mod tests;
 mod weight;
 
-pub use cursor::Cursor;
+pub use bounds::BoundsError;
+pub use cursor::{Cursor, IndexedCursor};
 pub use error::{Error, ErrorKind};
 pub use interleave::Sampling;
 pub use order::Order;
+pub use preparation::{Preparation, PreparedKind, PreparedNode, WeightedAllocation};
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::{Source, salt, salt_path};
 
 /// Float bits for equality and hashing, treating `-0.0` and `0.0` as equal.
 pub(crate) fn float_bits(x: f64) -> u64 {
-    (x + 0.0).to_bits()
+    let bits = x.to_bits();
+    if bits << 1 == 0 { 0 } else { bits }
 }
 
 /// Maximum configuration depth accepted by [`Order::new`], counting the root as level 1.

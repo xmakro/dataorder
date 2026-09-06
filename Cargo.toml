@@ -2,7 +2,7 @@
 name = "dataorder"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "Deterministic, seekable dataset ordering: shuffle, mix, repeat and shard without storing an index array"
 keywords = ["shuffle", "dataset", "data-loading", "interleave", "permutation"]
 categories = ["algorithms", "data-structures"]

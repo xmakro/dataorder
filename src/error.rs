@@ -134,6 +134,10 @@ pub enum ErrorKind {
     Overcommitted {
         /// Peak combined rate of the scheduled parts, relative to the mix's draw rate.
         demand: f64,
+        /// Start of a progress segment attaining the peak (normalized to 0..1).
+        start: f64,
+        /// End of that segment; the peak may occur at either endpoint.
+        end: f64,
     },
     /// The weight of a weighted mix part is negative or not finite.
     InvalidWeight {
@@ -164,7 +168,9 @@ impl fmt::Display for ErrorKind {
             Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),
             Self::SamplingOverflow => write!(f, "combined sampling profile exceeds floating-point range"),
             Self::TooSteep => write!(f, "mix part too long for the steepness of its schedule"),
-            Self::Overcommitted { demand } => write!(f, "scheduled mix parts need {:.1}% of the draw rate at their peak", demand * 100.0),
+            Self::Overcommitted { demand, start, end } => {
+                write!(f, "scheduled mix parts need {}% of the draw rate at their peak (progress {start}..{end})", demand * 100.0)
+            }
             Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
             Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
             Self::EmptyWeightedPart => write!(f, "weighted mix part has a share but no elements"),
@@ -181,7 +187,7 @@ impl SamplingError {
             Self::InvalidParameter { seq, sampling } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
             Self::Overflow => (ErrorKind::SamplingOverflow, None),
             Self::TooSteep { seq } => (ErrorKind::TooSteep, Some(seq)),
-            Self::Overcommitted { demand } => (ErrorKind::Overcommitted { demand }, None),
+            Self::Overcommitted { demand, start, end } => (ErrorKind::Overcommitted { demand, start, end }, None),
         }
     }
 }

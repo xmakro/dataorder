@@ -120,6 +120,10 @@ so you can nest mixes and concatenations.
 A plain mix uses every input element once, drawing more often from longer sequences.
 A weighted mix repeats or truncates each input sequence to its assigned count; the
 counts sum exactly to `total`. Each input keeps its order unless you add `.shuffle(seed)`.
+Largest-remainder rounding can reduce a part's count when `total` grows: weights
+`[5, 3, 1]` receive `[2, 1, 1]` at total 4 and `[3, 2, 0]` at total 5. Changing the
+total or weights need not preserve the prefix. Keep the original configuration and
+concatenate additional data when the existing prefix must stay fixed.
 
 Schedules control **when** elements appear, while lengths or weights control **how
 many** appear. For example, this order draws 75% from one dataset and introduces
@@ -150,18 +154,36 @@ fade-outs and rounding at schedule boundaries.
   iteration. To make a schedule span several epochs, repeat its input sequence;
   repeating the whole mix restarts its schedules each epoch.
 - **Workers partition positions.** Apply `.shard(count, index)` to the completed
-  sequence to divide its positions without overlap. Sharding the input sequences
+  sequence to divide its positions without overlap. The global schedule is preserved
+  collectively; each worker need not receive a balanced dataset mix. Two equal
+  interleaved datasets split across two workers send one dataset to each worker,
+  even when both inputs are shuffled. Shuffling the completed mix breaks that pattern
+  but scatters its scheduled phases and adds a mix seek per element. Sharding the input sequences
   before mixing produces a different order and can make an otherwise valid schedule
-  infeasible.
+  infeasible. Shard lengths can differ by one; callers needing equal worker lengths
+  must choose their truncation or padding policy.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
   Adding an outer repeat can change later epochs of repeats inside it; see the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. Accessing an invalid
-  position with `get`, or an invalid range with `iter`, panics.
+  position with `get`, or an invalid range with `iter`, panics. Use `try_get` for an
+  optional result and `try_iter`, `try_seek`, `try_set_range`, or `Seq::try_slice` for
+  fallible range operations. Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
+  `offset()` reports the next absolute position; `position(predicate)` is the usual
+  consuming iterator search.
+
+Use `get_indexed(pos)` or `iter(range).indexed()` to obtain
+`(source_ordinal, dataset, record_index)`. The ordinal indexes `order.sources()` and
+distinguishes equal and zero-sized handles. `Order::prepare(seq, seed)` returns an
+order together with a report of exact weighted quotas and compiled node lengths,
+without enumerating records. The report distinguishes original configuration paths
+for quotas from paths in the simplified compiled tree. Ordinary constructors do not
+collect it. `Seq::check` performs compilation to validate a borrowed configuration;
+calling it before `Order::new` repeats that work.
 
 `Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
 `map` or `try_map`. The optional `serde` feature adds configuration serialization. When
@@ -195,14 +217,23 @@ affects performance.
 
 ## Development
 
+Requires Rust 1.89 or newer.
+
 ```sh
 cargo run --release --example demo
 cargo test --locked --all-features
+cargo test --locked --all-features --examples
 cargo doc --locked --no-deps --all-features
 ```
 
 The README's Rust examples are tested with the crate's documentation examples.
 For repeated benchmark runs and comparisons, run
 `cargo run --release --example bench_campaign -- --help`.
+Campaigns run unpinned by default. Set `BENCH_CORE=N` to request CPU affinity through
+`taskset`; unavailable affinity is reported before building. Results retain each raw
+run, revision and working-tree status, compiler, machine information and affinity,
+alongside the minimum comparison table. Unavailable machine fields are stored as
+`null`. Concurrent campaigns merge their results
+under a file lock and replace the results file atomically.
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

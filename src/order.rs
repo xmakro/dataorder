@@ -4,13 +4,15 @@
 //! with lengths, concat offsets, interleave profiles and shuffle shapes. [`get`]
 //! follows that tree to resolve a position without keeping iteration state.
 
+use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
+use crate::preparation::{Preparation, WeightedAllocation};
 use crate::seq::{MixPart, WeightedPart};
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
-use std::ops::{Bound, Range, RangeBounds};
+use std::ops::RangeBounds;
 
 /// A compiled node. Empty subtrees are folded to [`Node::Empty`], so every child of a
 /// `Concat`, `Mix` and every child of a transform has elements. Source indices still
@@ -131,8 +133,36 @@ impl<T: Source> Order<T> {
     /// # Errors
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
+        Self::build(seq, seed, None)
+    }
+
+    /// Compiles with `seed` and returns weighted quotas and final compiled node lengths.
+    /// The report is separate from the order and can be dropped after inspection.
+    /// No records are enumerated. Unlike [`new`](Self::new), this collects diagnostic
+    /// paths and quota copies during compilation.
+    ///
+    /// ```
+    /// use dataorder::{Order, PreparedKind, Seq};
+    /// let seq = Seq::weighted(1_000_000_000, [(Seq::source(10), 3.0), (Seq::source(20), 1.0)]);
+    /// let (order, report) = Order::prepare(seq, 42)?;
+    /// assert_eq!(report.weighted[0].counts, [750_000_000, 250_000_000]);
+    /// assert_eq!(report.nodes[0].kind, PreparedKind::Mix);
+    /// assert_eq!(report.nodes[0].len, order.len() as u64);
+    /// # Ok::<(), dataorder::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As for [`Order::new`].
+    pub fn prepare(seq: Seq<T>, seed: u64) -> Result<(Self, Preparation), Error> {
+        let mut weighted = Vec::new();
+        let order = Self::build(seq, seed, Some(&mut weighted))?;
+        let report = Preparation::new(&order.root, weighted);
+        Ok((order, report))
+    }
+
+    fn build(seq: Seq<T>, seed: u64, weighted: Option<&mut Vec<WeightedAllocation>>) -> Result<Self, Error> {
         let (seq, sources) = separate_sources(seq);
-        let mut c = Compiler { sources, salts: Vec::new(), path: Vec::new() };
+        let mut c = Compiler { sources, salts: Vec::new(), path: Vec::new(), weighted };
         let root = c.compile(seq, 0, 1)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::new(ErrorKind::OrderTooLong { len: root.len() }, Vec::new()));
@@ -201,7 +231,8 @@ impl<T> Order<T> {
     /// Returns a source's index in [`sources`](Order::sources).
     /// Uses the reference's location, so it takes constant time and distinguishes
     /// sources even when their values compare equal. For zero-sized source types,
-    /// references cannot be distinguished and this always returns 0.
+    /// references cannot be distinguished and this always returns 0. Use
+    /// [`get_indexed`](Self::get_indexed) or [`Cursor::indexed`] for explicit ordinals.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -249,9 +280,34 @@ impl<T> Order<T> {
     /// might be out of range.
     #[must_use]
     pub fn get(&self, pos: usize) -> (&T, usize) {
-        assert!(pos < self.len(), "dataorder: position {pos} out of range");
+        self.try_get(pos).unwrap_or_else(|| panic!("dataorder: position {pos} out of range"))
+    }
+
+    /// Returns the element at `pos`, or `None` when `pos >= len()`.
+    /// Has the same lookup cost as [`get`](Self::get).
+    #[must_use]
+    pub fn try_get(&self, pos: usize) -> Option<(&T, usize)> {
+        self.try_get_indexed(pos).map(|(_, source, index)| (source, index))
+    }
+
+    /// Returns `(source_ordinal, source, index_within_source)` at `pos`.
+    /// The ordinal indexes [`sources`](Self::sources), including for zero-sized types.
+    ///
+    /// # Panics
+    /// If `pos >= len()`; use [`try_get_indexed`](Self::try_get_indexed) for checked access.
+    #[must_use]
+    pub fn get_indexed(&self, pos: usize) -> (usize, &T, usize) {
+        self.try_get_indexed(pos).unwrap_or_else(|| panic!("dataorder: position {pos} out of range"))
+    }
+
+    /// Checked [`get_indexed`](Self::get_indexed); returns `None` outside the order.
+    #[must_use]
+    pub fn try_get_indexed(&self, pos: usize) -> Option<(usize, &T, usize)> {
+        if pos >= self.len() {
+            return None;
+        }
         let (s, i) = get(&self.root, pos as u64, self.ctx);
-        (&self.sources[s as usize], i as usize)
+        Some((s as usize, &self.sources[s as usize], i as usize))
     }
 
     /// Returns a cursor over the positions in `range`.
@@ -277,25 +333,16 @@ impl<T> Order<T> {
     /// If the range ends after `len()`, ends before it starts, or has a bound at
     /// `usize::MAX` where one more would be needed.
     pub fn iter(&self, range: impl RangeBounds<usize>) -> Cursor<'_, T> {
-        Cursor::new(self, resolve(range, self.len()))
+        self.try_iter(range).unwrap_or_else(|e| panic!("dataorder: {e}"))
     }
-}
 
-/// `range` as `start..end` within `0..len`, with the panics [`Order::iter`] documents.
-pub(crate) fn resolve(range: impl RangeBounds<usize>, len: usize) -> Range<usize> {
-    let start = match range.start_bound() {
-        Bound::Included(&s) => s,
-        Bound::Excluded(&s) => s.checked_add(1).expect("dataorder: range start overflows usize"),
-        Bound::Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Bound::Included(&e) => e.checked_add(1).expect("dataorder: range end overflows usize"),
-        Bound::Excluded(&e) => e,
-        Bound::Unbounded => len,
-    };
-    assert!(start <= end, "dataorder: range {start}..{end} ends before it starts");
-    assert!(end <= len, "dataorder: range end {end} out of range for {len} positions");
-    start..end
+    /// Returns a cursor, reporting invalid bounds without panicking.
+    ///
+    /// # Errors
+    /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
+    pub fn try_iter(&self, range: impl RangeBounds<usize>) -> Result<Cursor<'_, T>, BoundsError> {
+        Ok(Cursor::new(self, resolve(range, self.len())?))
+    }
 }
 
 impl<T: fmt::Debug> fmt::Debug for Order<T> {
@@ -361,12 +408,14 @@ pub(crate) fn get(mut node: &Node, mut pos: u64, mut ctx: u64) -> (u32, u64) {
     }
 }
 
-struct Compiler<T> {
+struct Compiler<'a, T> {
     sources: Vec<T>,
     /// Salt and length of every source, by index, for the salts of the shuffles above them.
     salts: Vec<(u64, u64)>,
     /// Child indices from the root to the node being compiled, for error reports.
     path: Vec<usize>,
+    /// Optional report; ordinary builds do not allocate diagnostic paths or quotas.
+    weighted: Option<&'a mut Vec<WeightedAllocation>>,
 }
 
 /// Move source values out before recursive compilation: a `Seq<T>` contains T inline, so
@@ -447,7 +496,7 @@ fn separate_sources<T>(seq: Seq<T>) -> (Seq<usize>, Vec<T>) {
     (done.pop().unwrap(), sources)
 }
 
-impl<T: Source> Compiler<T> {
+impl<T: Source> Compiler<'_, T> {
     /// An error at the node being compiled, or at its child `part`.
     fn err_at(&self, kind: ErrorKind, part: Option<usize>) -> Error {
         let mut path = self.path.clone();
@@ -645,6 +694,9 @@ impl<T: Source> Compiler<T> {
                 return Err(self.err_at(kind, part));
             }
         };
+        if let Some(weighted) = &mut self.weighted {
+            weighted.push(WeightedAllocation { path: self.path.clone(), counts: shares.clone() });
+        }
         let mut children = Vec::with_capacity(parts.len());
         let mut parts = parts.into_iter().zip(shares);
         while let Some((part, share)) = parts.next() {
