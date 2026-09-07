@@ -7,6 +7,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+mod windows;
+
 pub fn timeout(value: Option<&str>) -> Result<Duration> {
     let seconds = value.unwrap_or("1800").parse::<u64>().map_err(|_| "BENCH_TIMEOUT_SECS must be a positive integer")?;
     if seconds == 0 {
@@ -45,12 +48,34 @@ impl Drop for Capture {
 struct Running {
     child: Child,
     finished: bool,
+    #[cfg(windows)]
+    job: windows::Job,
 }
 
 impl Running {
+    fn spawn(command: &mut Command) -> Result<Self> {
+        #[cfg(windows)]
+        let job = {
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+            let job = windows::Job::new()?;
+            command.creation_flags(CREATE_SUSPENDED);
+            job
+        };
+        let running = Self {
+            child: command.spawn()?,
+            finished: false,
+            #[cfg(windows)]
+            job,
+        };
+        #[cfg(windows)]
+        running.job.assign_and_resume(&running.child)?;
+        Ok(running)
+    }
+
     fn terminate(&mut self) {
-        // Each Unix command starts a fresh process group. On Windows taskkill /T
-        // follows its descendants. Always fall back to killing/reaping the child.
+        // Groups/jobs retain descendants after the original parent has exited.
+        // Always fall back to killing/reaping the direct child as well.
         #[cfg(unix)]
         let _ = Command::new("/bin/kill")
             .args(["-KILL", "--", &format!("-{}", self.child.id())])
@@ -58,11 +83,7 @@ impl Running {
             .stderr(Stdio::null())
             .status();
         #[cfg(windows)]
-        let _ = Command::new("taskkill")
-            .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        self.job.terminate();
         let _ = self.child.kill();
         let _ = self.child.wait();
         self.finished = true;
@@ -88,14 +109,13 @@ pub fn run(command: &mut Command, limit: Duration, diagnostics: &Path) -> Result
         command.process_group(0);
     }
     let result = (|| -> Result<Output> {
-        let mut running = Running { child: command.spawn()?, finished: false };
+        let started = Instant::now();
+        let mut running = Running::spawn(command)?;
         // Close the parent's capture handles too, so successful log directories
         // can be removed immediately on Windows as well as Unix.
         command.stdout(Stdio::null()).stderr(Stdio::null());
-        let started = Instant::now();
         let status = loop {
             if let Some(status) = running.child.try_wait()? {
-                running.finished = true;
                 break status;
             }
             if started.elapsed() >= limit {
@@ -105,8 +125,11 @@ pub fn run(command: &mut Command, limit: Duration, diagnostics: &Path) -> Result
             std::thread::sleep(Duration::from_millis(10).min(limit.saturating_sub(started.elapsed())));
         };
         if !status.success() {
+            // Keep cleanup armed: try_wait may have reaped the direct child,
+            // while descendants still own files or continue background work.
             return Err(format!("failed ({status})").into());
         }
+        running.finished = true;
         Ok(Output { status, stdout: fs::read(&stdout)?, stderr: fs::read(&stderr)? })
     })();
     result.map_err(|error| {
@@ -146,9 +169,17 @@ mod tests {
             eprintln!("failure marker");
             std::process::exit(7);
         }
-        if mode == "hang" {
+        if mode == "hang" || mode == "failure-descendant" {
             let mut child = helper("descendant", &directory).spawn().unwrap();
             eprintln!("parent marker");
+            if mode == "failure-descendant" {
+                let started = Instant::now();
+                while !directory.join("ready").exists() {
+                    assert!(started.elapsed() < Duration::from_secs(10), "descendant did not start");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::process::exit(7);
+            }
             let _ = child.wait();
         } else {
             let lock =
@@ -156,7 +187,10 @@ mod tests {
             lock.lock().unwrap();
             fs::write(directory.join("ready"), "ready").unwrap();
             eprintln!("descendant marker");
-            loop {
+            // Bound even an unfixed regression so a failed test cannot leave an
+            // indefinitely running background process.
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(30) {
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
@@ -186,12 +220,30 @@ mod tests {
         let log = fs::read_dir(&diagnostics).unwrap().next().unwrap().unwrap().path();
         let stderr = fs::read_to_string(log.join("stderr.log")).unwrap();
         assert!(stderr.contains("parent marker") && stderr.contains("descendant marker"));
+        assert_descendant_stopped(&root.directory);
+    }
+
+    #[test]
+    fn failed_parent_terminates_descendants_and_keeps_output() {
+        let root = Capture::new(&std::env::temp_dir().join("dataorder-process-tests")).unwrap();
+        let diagnostics = root.directory.join("logs");
+        let error = run(&mut helper("failure-descendant", &root.directory), Duration::from_secs(15), &diagnostics)
+            .unwrap_err().to_string();
+        assert!(error.contains("failed") && !error.contains("timed out"), "{error}");
+        assert!(root.directory.join("ready").exists());
+        let log = fs::read_dir(&diagnostics).unwrap().next().unwrap().unwrap().path();
+        let stderr = fs::read_to_string(log.join("stderr.log")).unwrap();
+        assert!(stderr.contains("parent marker") && stderr.contains("descendant marker"));
+        assert_descendant_stopped(&root.directory);
+    }
+
+    fn assert_descendant_stopped(directory: &Path) {
         // Acquiring the descendant's lock proves it exited, without PID-reuse or
         // zombie-process ambiguities. Allow time for the OS to finish termination.
-        let lock = OpenOptions::new().read(true).write(true).open(root.directory.join("descendant.lock")).unwrap();
+        let lock = OpenOptions::new().read(true).write(true).open(directory.join("descendant.lock")).unwrap();
         let started = Instant::now();
         while lock.try_lock().is_err() {
-            assert!(started.elapsed() < Duration::from_secs(2), "descendant survived the timeout");
+            assert!(started.elapsed() < Duration::from_secs(2), "descendant survived subprocess cleanup");
             std::thread::sleep(Duration::from_millis(10));
         }
     }

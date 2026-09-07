@@ -40,8 +40,16 @@ struct Configuration {
 }
 impl Configuration {
     fn validate(mut self) -> Result<Self, String> {
-        // Consuming validation also dismantles a rejected, excessively deep tree.
-        self.sequence = self.sequence.validate().map_err(|e| e.to_string())?;
+        // Validate the worker's order: on 32-bit targets the unsharded sequence
+        // can exceed usize even though this worker's positions fit. Consuming
+        // validation also dismantles rejected trees before any recursive clone.
+        let sharded = self.sequence.try_shard(self.workers, self.worker).map_err(|e| e.to_string())?;
+        let Seq::Stride { inner, .. } = sharded.validate().map_err(|e| e.to_string())? else {
+            unreachable!("try_shard preserves its configuration wrapper");
+        };
+        // Keep the original configuration as the checkpoint identity. Validation
+        // returns the configuration, not its simplified compiled representation.
+        self.sequence = *inner;
         Ok(self)
     }
 
@@ -162,6 +170,30 @@ fn main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoints_shards_of_orders_larger_than_u32() {
+        let source_len = 1usize << 30;
+        for worker in 0..4 {
+            let config = Configuration {
+                sequence: Seq::source(Dataset { name: "large".into(), version: "v1".into(), records: source_len, salt: 0 }).repeat(8),
+                seed: 0,
+                workers: 4,
+                worker,
+            };
+            #[cfg(target_pointer_width = "32")]
+            assert!(matches!(config.sequence.check().unwrap_err().kind(), dataorder::ErrorKind::OrderTooLong { .. }));
+            let mut running = Worker::new(config.clone()).unwrap();
+            assert_eq!(running.configuration, config);
+            assert_eq!(running.order.len(), 1usize << 31);
+            running.next_offset = running.order.len() - 2;
+            let mut resumed = Worker::restore(&running.checkpoint().unwrap(), config.clone()).unwrap();
+            let mut tail = Vec::new();
+            assert_eq!(resumed.process_batch(3, |_, index| { tail.push(index); Ok(()) }).unwrap(), 2);
+            assert_eq!(tail, [source_len - 8 + worker, source_len - 4 + worker]);
+            assert_eq!(Worker::restore(&resumed.checkpoint().unwrap(), config).unwrap().next_offset, 1usize << 31);
+        }
+    }
 
     #[test]
     fn round_trip_resumes_exactly_including_the_end() {

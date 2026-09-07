@@ -659,7 +659,7 @@ impl<'a> NodeCursor<'a> {
 /// is unknown. Skipping the mix leaves child cursors behind; the next draw from a
 /// child catches it up. Children are stored inline to avoid an extra pointer load
 /// per tree level, at the cost of reserving a full cursor slot for every part.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
     children: &'a [Node],
@@ -668,6 +668,18 @@ pub(crate) struct MixCursor<'a> {
     next_j: Vec<u64>,
     cursors: Vec<NodeCursor<'a>>,
     ctx: u64,
+}
+
+impl Clone for MixCursor<'_> {
+    fn clone(&self) -> Self {
+        // Retain spare slots from previously visited larger concat children.
+        // Removed child states stay removed; only their vector capacity survives.
+        let mut next_j = Vec::with_capacity(self.next_j.capacity());
+        next_j.extend_from_slice(&self.next_j);
+        let mut cursors = Vec::with_capacity(self.cursors.capacity());
+        cursors.extend_from_slice(&self.cursors);
+        Self { il: self.il, children: self.children, iter: self.iter.clone(), pos: self.pos, next_j, cursors, ctx: self.ctx }
+    }
 }
 
 impl<'a> MixCursor<'a> {

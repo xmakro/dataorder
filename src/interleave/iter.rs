@@ -9,13 +9,23 @@ use std::ops::Range;
 
 /// Iterator returned by [`Interleave::iter`]; yields `(part, index_within_part)`.
 /// Further calls to [`seek`](Iter::seek) reuse its buffers.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Iter<'a> {
     il: &'a Interleave,
     tree: TournamentTree<Slot>,
     /// Scratch for the seek's per-sequence counts, kept so that a seek allocates nothing.
     counts: Vec<u64>,
     remaining: u64,
+}
+
+impl Clone for Iter<'_> {
+    fn clone(&self) -> Self {
+        // Rebinding to a smaller mix shortens counts without relinquishing the
+        // storage a later seek into the larger mix can reuse.
+        let mut counts = Vec::with_capacity(self.counts.capacity());
+        counts.extend_from_slice(&self.counts);
+        Self { il: self.il, tree: self.tree.clone(), counts, remaining: self.remaining }
+    }
 }
 
 impl<'a> Iter<'a> {

@@ -256,8 +256,8 @@ fn validate_environment(a: &Value, b: &Value, label: &str, previous: &str, allow
         if a["cpu"].is_null() || b["cpu"].is_null() {
             differences.push("CPU identity is unavailable".into());
         }
-        if a["build"]["invocations_verified"] != true || b["build"]["invocations_verified"] != true {
-            differences.push("compiler invocations are unverified (wrapper or older provenance)".into());
+        if !build_provenance::invocations_verified(&a["build"]) || !build_provenance::invocations_verified(&b["build"]) {
+            differences.push("compiler invocations are unverified (compiler identity, wrapper or older provenance)".into());
         }
     }
     if !differences.is_empty() {
@@ -379,8 +379,8 @@ impl Campaign {
         affinity.validate(&directory)?;
         let mut metadata = provenance(&directory, mode, &affinity)?;
         let build = build_provenance::Build::prepare(&directory, &Path::new(env!("CARGO_MANIFEST_DIR")).join("target/bench-builds"))?;
-        if build.settings["invocations_verified"] != true {
-            let message = "compiler wrapper or custom launcher prevents verifying effective rustc arguments";
+        if !build_provenance::invocations_verified(&build.settings) {
+            let message = "compiler invocation does not directly use the independently resolved rustup compiler";
             if !allow_environment_differences {
                 return Err(format!("{message}; use --allow-environment-differences to explicitly accept unverified builds").into());
             }
@@ -493,7 +493,7 @@ mod tests {
     use super::*;
 
     fn test_environment() -> Value {
-        json!({"schema":1,"cpu":"cpu","system":"system","os":"os","arch":"arch","affinity":null,"build":{"compiler":"compiler","target_cfg":["cfg"],"profiles":{},"codegen":{},"invocations_verified":true}})
+        json!({"schema":1,"cpu":"cpu","system":"system","os":"os","arch":"arch","affinity":null,"build":{"compiler":"compiler","target_cfg":["cfg"],"profiles":{},"codegen":{},"invocations_verified":true,"verification_method":"rustup-compiler-path-v1"}})
     }
 
     #[test]
@@ -512,6 +512,10 @@ mod tests {
             assert!(validate_environment(&wrapped, &wrapped, "a", "b", false).is_err());
             assert!(validate_environment(&wrapped, &wrapped, "a", "b", true).is_ok());
         }
+        let mut legacy = original.clone();
+        legacy["environment"]["build"].as_object_mut().unwrap().remove("verification_method");
+        assert!(validate_environment(&legacy, &legacy, "a", "b", false).is_err());
+        assert!(validate_environment(&legacy, &legacy, "a", "b", true).is_ok());
     }
 
     #[test]

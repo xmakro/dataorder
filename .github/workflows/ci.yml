@@ -35,6 +35,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - run: cargo test --locked --release --all-features --target i686-unknown-linux-gnu
       - run: cargo test --locked --all-features --target i686-unknown-linux-gnu
+      - run: cargo test --locked --all-features --example checkpoint --target i686-unknown-linux-gnu
+      - run: cargo test --locked --release --all-features --example checkpoint --target i686-unknown-linux-gnu
   lint:
     runs-on: ubuntu-latest
     steps:

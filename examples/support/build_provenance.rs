@@ -10,6 +10,21 @@ use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const VERIFICATION_METHOD: &str = "rustup-compiler-path-v1";
+
+pub fn invocations_verified(settings: &Value) -> bool {
+    settings["verification_method"] == VERIFICATION_METHOD && settings["invocations_verified"] == true
+}
+
+// Resolve independently of Cargo's build.rustc / RUSTC setting. Trust the user's
+// rustup-selected toolchain, not an arbitrary launcher named rustc. Without this
+// independent identity, comparisons require the existing explicit override.
+fn trusted_rustc(checkout: &Path) -> Option<PathBuf> {
+    let output = checked_output(Command::new("rustup").args(["which", "rustc"]).current_dir(checkout)).ok()?;
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    path.is_absolute().then(|| path.canonicalize().ok()).flatten()
+}
+
 pub struct Build {
     directory: PathBuf,
     pub executable: PathBuf,
@@ -46,6 +61,7 @@ impl Build {
 
     pub fn prepare(checkout: &Path, parent: &Path) -> Result<Self> {
         let mut build = Self::new(parent)?;
+        let trusted = trusted_rustc(checkout);
         let version = checked_output(build.command(checkout, "rustc").args(["--", "-vV"]))?;
         let compiler = probe_output(version.stdout)?;
         if !compiler.lines().any(|line| line.starts_with("release: ")) {
@@ -77,7 +93,7 @@ impl Build {
         let mut codegen = BTreeMap::new();
         let mut direct = BTreeMap::new();
         for stderr in [version.stderr, cfg.stderr, output.stderr] {
-            capture_settings(&String::from_utf8(stderr)?, &mut codegen, &mut direct)?;
+            capture_settings(&String::from_utf8(stderr)?, trusted.as_deref(), &mut codegen, &mut direct)?;
         }
         if !["dataorder", "bench"].iter().all(|name| codegen.contains_key(*name) && profiles.contains_key(*name)) {
             return Err("could not verify compiler arguments for both dataorder and bench; benchmark not run".into());
@@ -86,7 +102,7 @@ impl Build {
         // sends to rustc. Equal displayed flags cannot verify wrapped builds.
         let invocations_verified = ["dataorder", "bench"].iter().all(|name| direct.get(*name) == Some(&true));
         build.settings = json!({"compiler":compiler, "target_cfg":target_cfg, "profiles":profiles,
-            "codegen":codegen, "invocations_verified": invocations_verified});
+            "codegen":codegen, "invocations_verified": invocations_verified, "verification_method": VERIFICATION_METHOD});
         Ok(build)
     }
 }
@@ -101,7 +117,12 @@ fn probe_output(bytes: Vec<u8>) -> Result<String> {
 /// Capture only compilation settings, never the environment prefix Cargo prints
 /// in verbose output. Output paths and Cargo's revision-specific metadata are not
 /// build-setting differences. Preserve flag order because later flags can win.
-fn capture_settings(log: &str, into: &mut BTreeMap<String, Vec<String>>, direct: &mut BTreeMap<String, bool>) -> Result<()> {
+fn capture_settings(
+    log: &str,
+    trusted: Option<&Path>,
+    into: &mut BTreeMap<String, Vec<String>>,
+    direct: &mut BTreeMap<String, bool>,
+) -> Result<()> {
     for line in log.lines() {
         let Some(command) = line.trim().strip_prefix("Running `").and_then(|s| s.strip_suffix('`')) else { continue };
         let Some((prefix, arguments)) = command.split_once(" --crate-name ") else { continue };
@@ -110,7 +131,7 @@ fn capture_settings(log: &str, into: &mut BTreeMap<String, Vec<String>>, direct:
         if args.iter().any(|s| s == "-vV" || s == "--print") {
             continue;
         }
-        let verified = direct_rustc(prefix)?;
+        let verified = direct_rustc(prefix, trusted)?;
         direct.entry(name.to_owned()).and_modify(|old| *old &= verified).or_insert(verified);
         let mut selected = Vec::new();
         let mut args = args.iter().skip(1);
@@ -136,12 +157,15 @@ fn capture_settings(log: &str, into: &mut BTreeMap<String, Vec<String>>, direct:
 
 /// Recognize an unwrapped rustc invocation conservatively. Inspect environment
 /// assignments only to skip them; never retain their names or values in provenance.
-fn direct_rustc(prefix: &str) -> Result<bool> {
+fn direct_rustc(prefix: &str, trusted: Option<&Path>) -> Result<bool> {
     let words = words(prefix)?;
     let program = words.iter().position(|word| {
         !word.split_once('=').is_some_and(|(key, _)| !key.is_empty() && key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
     });
-    Ok(program.is_some_and(|i| i + 1 == words.len() && matches!(words[i].rsplit(['/', '\\']).next(), Some("rustc" | "rustc.exe"))))
+    Ok(program.is_some_and(|i| {
+        let path = Path::new(&words[i]);
+        i + 1 == words.len() && path.is_absolute() && trusted.is_some_and(|trusted| path.canonicalize().is_ok_and(|p| p == trusted))
+    }))
 }
 
 fn record_setting(into: &mut Vec<String>, flag: &str, value: &str) {

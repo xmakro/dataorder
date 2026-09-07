@@ -133,6 +133,28 @@ fn cloned_cursors_revive_parts_without_allocating() {
     assert_eq!(cursor.next(), None);
 }
 
+#[test]
+fn cloned_cursors_preserve_capacity_after_rebinding_to_smaller_mixes() {
+    let part = |k| Seq::mix((0..k).map(|i| Seq::source(10).shuffle(i as u64)));
+    let order = Order::new(Seq::concat([part(1000), part(2)]).repeat(2)).unwrap();
+    let mut cursor = order.iter(..);
+    cursor.next();
+    cursor.seek(10_000);
+    cursor.next();
+    let mut cloned = cursor.clone().indexed();
+    let expected = order.get_indexed(0);
+    let repeated = order.get_indexed(10_020);
+    let count = allocations(|| {
+        cloned.seek(0);
+        assert_eq!(cloned.next(), Some(expected));
+        cloned.set_range(10_020..);
+        assert_eq!(cloned.next(), Some(repeated));
+    });
+    assert_eq!(count, 0, "a cloned cursor lost reusable capacity: {count} allocations");
+    assert_eq!(cursor.offset(), 10_001);
+    assert_eq!(cursor.next(), Some(order.get(10_001)));
+}
+
 /// Empty ranges, counts and untouched clones need no runtime tree. `last` pays only for
 /// its single random access, without first building a cursor over the beginning.
 #[test]
