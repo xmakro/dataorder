@@ -9,9 +9,6 @@
   removing correction-factor arithmetic and custom significand splitting. Smooth
   rate curves, exact quotas, and seek/walk agreement are preserved.
 
-- Replace the custom wide-integer weight allocator with a `num-bigint` fallback,
-  preserving the `u128` fast path and exact quota results.
-
 - Checkpoints accept worker shards that fit on 32-bit targets even when their original
   sequence is larger. Cloned mix cursors preserve reusable vector capacity after moving
   to smaller concat children.

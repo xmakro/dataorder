@@ -1,1 +1,4 @@
 /target
+
+# Local scheduling research is not part of the crate.
+/experiments/
