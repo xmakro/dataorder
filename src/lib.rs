@@ -233,15 +233,16 @@
 //! configuration format is a breaking change: a new minor version while the crate is 0.x.
 //! Save [`ORDERING_VERSION`] in checkpoints for a conservative exact-version check.
 //!
-//! Calculations use IEEE 754 binary64 without fused operations. Targets with hardware
-//! or software binary64 agree; x87-only `i586` targets using extended precision are
-//! excluded. Golden tests pin order fingerprints through the public API, and CI checks
-//! 64-bit and 32-bit x86 and 64-bit ARM.
+//! Calculations use IEEE 754 binary64, with explicit fused multiply-adds to retain
+//! rounding residuals during construction. Other multiply/add expressions remain
+//! separate. Targets with hardware or software binary64 agree; x87-only `i586`
+//! targets using extended precision are excluded. Golden tests pin order fingerprints
+//! through the public API, and CI checks 64-bit and 32-bit x86 and 64-bit ARM.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, unreachable_pub, clippy::doc_markdown, clippy::redundant_clone, clippy::use_self)]
-// Keep separate multiply and add operations: fusing them changes rounding and can
-// change the order. Clippy must not suggest `mul_add` here.
+// Only explicitly written `mul_add` operations are fused. Fusing other expressions
+// changes rounding and can change the order; Clippy must not suggest doing so.
 #![allow(clippy::suboptimal_flops)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

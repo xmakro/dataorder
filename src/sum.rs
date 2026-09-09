@@ -14,11 +14,6 @@ impl Compensated {
         Self { hi: value, lo: 0.0 }
     }
 
-    /// Preserve the residual of a division before subtracting a fraction near one.
-    pub(crate) fn ratio(n: f64, d: f64) -> Self {
-        Self::new(n).divided_by(Self::new(d))
-    }
-
     pub(crate) fn divided_by(self, denominator: Self) -> Self {
         let hi = self.hi / denominator.hi;
         let product = denominator.scaled(hi);
@@ -34,31 +29,15 @@ impl Compensated {
         difference
     }
 
-    /// Dekker's product residual, without fused arithmetic. Splitting by masking
-    /// low significand bits avoids overflowing the usual splitter multiplication.
+    /// Rounded product and its residual, using explicitly fused arithmetic.
     fn product(a: f64, b: f64) -> Self {
         let hi = a * b;
-        let split = |x: f64| {
-            let high = f64::from_bits(x.to_bits() & !((1u64 << 27) - 1));
-            (high, x - high)
-        };
-        let (ah, al) = split(a);
-        let (bh, bl) = split(b);
-        let lo = al * bl - (((hi - ah * bh) - al * bh) - ah * bl);
-        Self { hi, lo }
+        Self { hi, lo: a.mul_add(b, -hi) }
     }
 
     pub(crate) fn scaled(self, scale: f64) -> Self {
         let mut product = Self::product(self.hi, scale);
         product.add(self.lo * scale);
-        product
-    }
-
-    pub(crate) fn multiply(self, other: Self) -> Self {
-        let mut product = self.scaled(other.hi);
-        for term in self.scaled(other.lo).terms() {
-            product.add(term);
-        }
         product
     }
 
@@ -123,6 +102,24 @@ impl Expansion {
             for term in width.scaled(partial).terms() {
                 into.add(term);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Compensated;
+
+    #[test]
+    fn products_preserve_residuals_across_scales() {
+        let e = f64::EPSILON;
+        for exponent in [-500, 0, 500] {
+            let a = f64::from_bits(((1023 + exponent) as u64) << 52) * (1.0 + e);
+            let b = f64::from_bits(((1023 - exponent) as u64) << 52) * (1.0 - e);
+            let product = Compensated::new(a).scaled(b);
+            // The exact product is 1 - epsilon^2, whose rounded high term is 1.
+            assert_eq!(product.value(), 1.0);
+            assert_eq!(product.remaining(1.0), e * e);
         }
     }
 }

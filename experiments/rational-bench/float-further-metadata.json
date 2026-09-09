@@ -1,0 +1,107 @@
+{
+  "date_utc": "2026-09-08T05:20:22.714572+00:00",
+  "cpu": "Apple M2 Pro",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "production_version": "0.3.0",
+  "published": false,
+  "baseline_metadata": "float-metadata.json",
+  "adopted_sha256": {
+    "Cargo.toml": "e970ee0851b44f9d1076522f588cbadfbdc816c71d44bf301862d247f3527e03",
+    "Cargo.lock": "f8582bfe62aa260db438144c4df8ff27d9df379dcb127198db33de18280f7c0c",
+    "src/lib.rs": "e65ff1ee403fea17127277cd153d2219aa1cb6b9a1baf40a8f38d67787fb65bc",
+    "src/sum.rs": "31c0709b205beb288a8f9a21b0124f01beb4f062cf0930a4f8ffe2789b9934a4",
+    "src/weight.rs": "9c0522befa1eb2f316b068e89f54ce1e309ee8a5e4967131038d02bc40048391",
+    "src/interleave/iter.rs": "65c7e8750f52b33218e1c0edd51c4a6f78cea729cd50090465d696bc47171a92",
+    "src/interleave/mod.rs": "041218b424c3181fdd94ee877f859cb51ae512ea32c47d33f6c7a87825fcc54a",
+    "src/interleave/profile.rs": "6536c78b1266d7ae4a126ebb887c5f13ede95bb92aba1f25e06557902e7de7cb",
+    "src/interleave/sampling.rs": "d3dbf7d417dff04b7287dad361bdd68e6077077021f9cb782611a8d48b846fc2",
+    "src/interleave/tests.rs": "9ddc42891e4e4a1bb6ff307debb2bc23d07d8e59fc82bd28abd6be58dc4f0744",
+    "src/interleave/tournament.rs": "2f021271c3d6cd32f2977989958c998b7948984c9bae2bfc7856e338fcae4d00"
+  },
+  "checks": {
+    "release_tests": {
+      "passed": true,
+      "log": "float-further-release_tests.log"
+    },
+    "debug_tests": {
+      "passed": true,
+      "log": "float-further-debug_tests.log"
+    },
+    "doctests": {
+      "passed": true,
+      "log": "float-further-doctests.log"
+    },
+    "msrv_tests": {
+      "passed": true,
+      "log": "float-further-msrv_tests.log"
+    },
+    "clippy": {
+      "passed": true,
+      "log": "float-further-clippy.log"
+    },
+    "x86_64_check": {
+      "passed": true,
+      "log": "float-further-x86_64_check.log"
+    },
+    "i686_check": {
+      "passed": true,
+      "log": "float-further-i686_check.log"
+    },
+    "package_files": {
+      "passed": true,
+      "log": "float-further-package_files.log"
+    },
+    "reproducer_compile": {
+      "passed": true,
+      "log": "float-further-reproducer_compile.log"
+    },
+    "experiment_compile": {
+      "passed": true,
+      "log": "float-further-experiment_compile.log"
+    },
+    "format_and_diff": {
+      "passed": true,
+      "commands": [
+        "cargo fmt --all -- --check",
+        "git diff --check"
+      ]
+    }
+  },
+  "notes": [
+    "The timed final interleave and sum module snapshots byte-match the adopted source. The measurement host crate was version 0.2.0; the timed final engine modules are the adopted 0.3.0 source. Only SamplingDetail comes from the public host crate; Seq/Order wrappers are excluded.",
+    "The baseline profile differs from the original only in its import path to the preserved baseline compensated arithmetic module.",
+    "Paired measurements alternate two implementations for five samples calibrated to at least 20 ms. The swapped-module controls report raw baseline/candidate ratios, which must be inverted to express candidate/baseline.",
+    "Positioned walking excludes seeking; construction includes allocation and destruction. Fresh seek plus first item excludes construction. Source I/O, shuffling, and public wrappers are not measured.",
+    "Compilation, tests, and benchmarks ran sequentially. No CPU affinity or isolation from external load was used.",
+    "Final three-source scheduled fixtures explicitly contain non-uniform schedules. Exploratory three-source fixtures accidentally contained only uniform sources and are not used in the final results.",
+    "FMA semantics were checked against the official Rust documentation. x86_64 and i686 were compile-checked only; runtime tests and timing were on ARM macOS.",
+    "Runtime fields, continuous rate definitions, and accepted numeric range remain unchanged. Some rounded orderings change, so the unpublished development version is 0.3.0.",
+    "The rejected direct-evaluation prototype passed the existing release library/integration suite before the two final construction stress regressions were added."
+  ],
+  "artifact_sha256": {
+    "FLOAT_FURTHER.md": "8be97cac46d53403b623277905b656a7ce671221fdcde059381159a813c8c9b3",
+    "float-direct-build-results.json": "c6449cd9dd1d9d76c33c782d82962cd79dd94c35e76708f57a3d9ed7e5c2940f",
+    "float-direct-tests.log": "8ec415540d32d7625bdf28d48c44a6dd76ea06f28a4778534f03b5cc689d29be",
+    "float-direct.patch": "df355ff5853a7b95c060df3005f16c4ef54319cb7dfabd706f5486ddc0d173ab",
+    "float-further-benchmark.log": "b22a5a84bb14211b535cd7555cb0252da860335fc4ea31dfa7ee905d9d48a49d",
+    "float-further-build-benchmark.log": "410e7569b430e9fc557e5156e2d7e67bef4d42b063745c1c682253d59fd2fa43",
+    "float-further-build-results.json": "d4ee0bebbf5f784b35f236a725d25040d2acb216be96106af0b1e053dc29f30e",
+    "float-further-clippy.log": "c5e5b5d767cf92a855aded0cbca99e9f058376d744dc4a0a78e126e6bb1711d7",
+    "float-further-debug_tests.log": "7446aea987db7c3578fe13238a11f63f1dc498544212ad0a23272cf47c075ef0",
+    "float-further-doctests.log": "10fb034e41cf963c762358d2577c0f5cdd71e972e3a099116395397935d2007e",
+    "float-further-experiment_compile.log": "f76943365dd27c8a98b1eca1d5ed2afbbe810f792088399048051385a81f7324",
+    "float-further-i686_check.log": "10b440b436d605ac1f759b51510d26db22e08cc5751a66d38b3d353723992161",
+    "float-further-msrv_tests.log": "2436079cff29e4ef27ccbaf9ba0b21cd621fe9f7c0c123e7c0d1043c9fe57d5c",
+    "float-further-package_files.log": "d9220fcb5e840d305352f4d990ba449c35436571aa4f1127543db40acae61227",
+    "float-further-release_tests.log": "791ee859199f7091052406e6fb8728e0aa2f6ed45e42a68145e2452fd7ef48ca",
+    "float-further-reproducer_compile.log": "1b86647812a52a0be762e0b255ac4555f9681c0ef16b368d9464c4e337596764",
+    "float-further-results.json": "fdcd5e96df18fdde94927118175e7386f2bbed3968716f9c575abbd51822b599",
+    "float-further-reversed-build-results.json": "5181b5a1c1f4215df5402953dff74469beea04c4cd7558f23138c698b640e262",
+    "float-further-reversed-results.json": "42bfa45f1941f3a8e751f7444bebc3abf39f096daa32ca52982d99240b4850d9",
+    "float-further-x86_64_check.log": "4b7d99b52dfeb2136887e4471c276af3dbd9bfd5696e04cbbd97cf5e10a7f45d",
+    "float-further.patch": "e01408e26b74ebb4cf8cbd83f3b6a7a7439a593101fde1c3f0160366fc1f1094",
+    "float_further_build.rs": "6c2800e8a406795a7918bb2b20b2b3e60a15fa5d4d372bf42f753e24f1e8a384",
+    "float_further_reproduce.py": "1423ad7715aec279cd8a29445ba4bb2b141292388c7399e6a2cd2b93b11d1737",
+    "float_further_walk.rs": "c51d567ba0cbbd3fa2f2c71f97cd56c176e44dba68a16a8ac7ce94e9d64950a7"
+  }
+}

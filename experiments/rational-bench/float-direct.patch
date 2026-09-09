@@ -1,0 +1,117 @@
+--- a/src/interleave/profile.rs
++++ b/src/interleave/profile.rs
+@@ -91,79 +91,45 @@
+         Self::uniform_with_clamping(scheduled, u, total_len, &mut false)
+     }
+ 
+-    /// Returns the uniform profile, peak combined demand and a segment attaining that peak.
+-    /// For scheduled lengths `n_i` and uniform length `u`, the uniform rate is
+-    /// `(1 - sum(n_i / total * rate_i)) / (u / total)`, clamped to zero. With `u = 0`, no elements
+-    /// use the returned profile. A peak demand above 1 indicates overcommitment.
+-    ///
+-    /// Sweep the scheduled segment boundaries in order. Between boundaries, the
+-    /// total rate is linear, so only its current value and slope need updating.
+-    /// Adding and removing slopes uses an expansion to retain contributions across
+-    /// widely different magnitudes; fractions, products and the rate value retain
+-    /// their rounding residuals until the uniform remainder has been subtracted.
+-    /// Sorting the boundaries costs `O(s log s)` for `s` scheduled profiles, compared
+-    /// with `O(s²)` when evaluating every profile at every boundary.
+-    /// Also records whether a negative uniform remainder was clamped to zero.
++    /// Evaluate scheduled rates independently at each distinct boundary. This
++    /// avoids accumulating cancelling slopes, at O(s * distinct_boundaries) cost.
+     pub(crate) fn uniform_with_clamping(scheduled: &[(f64, Self)], u: f64, total_len: f64, clamped: &mut bool) -> (Self, f64, (f64, f64)) {
+-        // Remove the old contribution and add the new one separately: forming their
+-        // difference first can round away a small new slope before compensation sees it.
+-        let mut events = Vec::new();
+-        for (n, p) in scheduled {
+-            // Scheduled segments have endpoints at zero or their shared peak;
+-            // use that peak directly instead of reconstructing it from a correction.
+-            let peak = p.peak.scaled(*n).divided_by(Compensated::new(total_len));
+-            let endpoint = |r| if r == 0.0 { Compensated::default() } else { peak };
+-            let (mut prev_r1, mut prev_m) = (Compensated::default(), Compensated::default());
+-            for seg in &p.segs {
+-                let m = if seg.r0 == seg.r1 {
+-                    Compensated::default()
++        let peaks: Vec<_> = scheduled.iter().map(|(n,p)| p.peak.scaled(*n).divided_by(Compensated::new(total_len))).collect();
++        let mut points = vec![0.0, 1.0];
++        points.extend(scheduled.iter().flat_map(|(_,p)| p.segs.iter().map(|s| s.start)));
++        points.sort_by(f64::total_cmp);
++        points.dedup();
++        let demand = |t: f64, before: bool| {
++            let mut total = Compensated::default();
++            for ((_, p), peak) in scheduled.iter().zip(&peaks) {
++                let i = p.starts.partition_point(|&x| if before { x < t } else { x <= t }).saturating_sub(1);
++                let s = &p.segs[i];
++                let fraction = if s.r0 == s.r1 {
++                    Compensated::new(if s.r0 == 0.0 { 0.0 } else { 1.0 })
+                 } else {
+-                    let (from, to) = if seg.r0 == 0.0 { (seg.start, seg.end) } else { (seg.end, seg.start) };
+-                    peak.divided_by(Compensated::difference(to, from))
++                    let distance = if s.r0 == 0.0 { Compensated::difference(t, s.start) } else { Compensated::difference(s.end, t) };
++                    distance.divided_by(Compensated::difference(s.end, s.start))
+                 };
+-                events.push((seg.start, prev_r1.scaled(-1.0), prev_m.scaled(-1.0)));
+-                events.push((seg.start, endpoint(seg.r0), m));
+-                (prev_r1, prev_m) = (endpoint(seg.r1), m);
+-            }
+-        }
+-        events.sort_by(|a, b| a.0.total_cmp(&b.0));
+-        let mut rate = |total: Compensated| {
+-            if u > 0.0 {
+-                let remainder = total.remaining(1.0);
+-                *clamped |= remainder < 0.0;
+-                remainder.max(0.0) / (u / total_len)
+-            } else {
+-                0.0
+-            }
++                for term in fraction.terms() {
++                    for contribution in peak.scaled(term).terms() { total.add(contribution); }
++                }
++            }
++            total
+         };
+-        let (mut total, mut slope) = (Compensated::default(), Expansion::default());
+-        let (mut windows, mut peak, mut next, mut t) = (Vec::new(), 0.0f64, 0, 0.0);
+-        let mut peak_interval = (0.0, 1.0);
+-        while t < 1.0 {
+-            while next < events.len() && events[next].0 <= t {
+-                for term in events[next].1.terms() {
+-                    total.add(term);
+-                }
+-                for term in events[next].2.terms() {
+-                    slope.add(term);
+-                }
+-                next += 1;
+-            }
+-            let t1 = if next < events.len() { events[next].0.min(1.0) } else { 1.0 };
+-            let r0 = rate(total);
+-            if total.value() > peak {
+-                peak_interval = (t, t1);
+-            }
+-            peak = peak.max(total.value());
+-            slope.add_scaled(&mut total, Compensated::difference(t1, t));
+-            if total.value() > peak {
+-                peak_interval = (t, t1);
+-            }
+-            peak = peak.max(total.value());
+-            windows.push((t, t1, r0, rate(total)));
+-            t = t1;
+-        }
+-        (if u > 0.0 { Self::from_rates(windows) } else { Self::delayed_linear(0.0, 0.0) }, peak, peak_interval)
++        let mut rate = |d: Compensated| {
++            if u == 0.0 { return 0.0; }
++            let remainder = d.remaining(1.0);
++            *clamped |= remainder < 0.0;
++            remainder.max(0.0) / (u / total_len)
++        };
++        let (mut windows, mut peak, mut interval) = (Vec::new(), 0.0f64, (0.0, 1.0));
++        for w in points.windows(2) {
++            let (a,b) = (demand(w[0], false), demand(w[1], true));
++            let maximum = a.value().max(b.value());
++            if maximum > peak { peak = maximum; interval = (w[0], w[1]); }
++            windows.push((w[0], w[1], rate(a), rate(b)));
++        }
++        (if u > 0.0 { Self::from_rates(windows) } else { Self::delayed_linear(0.0, 0.0) }, peak, interval)
+     }
+ 
+     /// The rate just after `t` (`before == false`) or just before it.

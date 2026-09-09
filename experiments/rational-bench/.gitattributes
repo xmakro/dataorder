@@ -1,0 +1,3 @@
+# Patch context and raw command output intentionally preserve whitespace.
+*.patch -whitespace
+*.log -whitespace

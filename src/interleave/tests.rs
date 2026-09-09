@@ -602,3 +602,11 @@ fn bench_seek_and_walk() {
         }
     }
 }
+
+#[test]
+fn rising_remainder_resolves_a_midpoint_tie() {
+    let il = Interleave::with_sampling(&[15, 5], &[Uniform, Sampling::trapezoid(0.0, 0.0, 0.0, 1.0)]).unwrap();
+    // At t=1/2, the scheduled CDF is 3/4 and the uniform CDF is 5/12.
+    // These are exactly the quantiles of (1,3) and (0,6); part 0 wins the tie.
+    assert_eq!(il.iter(9..11).collect::<Vec<_>>(), [(0, 6), (1, 3)]);
+}

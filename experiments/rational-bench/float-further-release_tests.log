@@ -1,0 +1,196 @@
+
+running 77 tests
+test interleave::profile::tests::large_counts_and_tiny_ramps_preserve_capacity ... ok
+test interleave::profile::tests::a_tiny_uniform_remainder_stays_normalized ... ok
+test interleave::profile::tests::delayed_linear_shape ... ok
+test interleave::profile::tests::quantile_uses_the_left_endpoint_of_flat_shares ... ok
+test interleave::iter::tests::returning_to_zero_clears_the_previous_counts ... ok
+test interleave::profile::tests::trapezoid_shape ... ok
+test interleave::profile::tests::uniform_absorbs_exactly ... ok
+test interleave::tests::bench_seek_and_walk ... ignored, benchmark: run with --ignored --nocapture
+test interleave::tests::a_quantile_on_a_flat_share_is_drawn_before_the_plateau ... ok
+test interleave::tests::empty_and_trivial ... ok
+test interleave::tests::equal_lengths_round_robin_in_input_order ... ok
+test interleave::tests::fading_sequences_stop_and_free_the_rest ... ok
+test interleave::profile::tests::many_complementary_ramps_keep_a_single_uniform_item ... ok
+test interleave::tests::rejects_bad_configurations ... ok
+test interleave::tests::ramp_rate_rises_linearly ... ok
+test interleave::profile::tests::narrow_triangles_preserve_mass_and_adjacent_quantiles ... ok
+test interleave::tests::rising_remainder_resolves_a_midpoint_tie ... ok
+test interleave::tests::keys_are_monotone_within_sequences ... ok
+test interleave::tests::schedules_are_followed ... ok
+test interleave::tests::uniform_sequences_absorb_the_slack ... ok
+test interleave::tests::is_a_permutation_preserving_order ... ok
+test interleave::tournament::tests::bench_vs_binary_heap ... ignored, benchmark: run with --ignored --nocapture
+test interleave::tournament::tests::empty_tree ... ok
+test interleave::tournament::tests::last_survivor_has_no_tournament_path ... ok
+test interleave::tests::empty_sequences_do_not_affect_the_order ... ok
+test interleave::tournament::tests::matches_binary_heap ... ok
+test interleave::profile::tests::quantile_inverts_share_and_is_monotone ... ok
+test perm::tests::seeds_and_contexts_differ ... ok
+test perm::tests::huge_domain_is_a_bijection_locally ... ok
+test interleave::tests::matches_brute_force_sort ... ok
+test interleave::tests::uniform_balance ... ok
+test source::tests::stable_path_salt_vectors ... ok
+test interleave::tests::reseeking_matches_fresh_iterators ... ok
+test source::tests::stable_salt_vectors ... ok
+test sum::tests::products_preserve_residuals_across_scales ... ok
+test tests::cloned_cursor_continues_independently ... ok
+test tests::cycles ... ok
+test tests::depth_limit ... ok
+test tests::edge_cases ... ok
+test perm::tests::public_seeds_with_patterned_consecutive_images ... ok
+test tests::empty_parts_do_not_affect_shuffles_above ... ok
+test tests::errors ... ok
+test tests::folds ... ok
+test tests::empty_mix_parts_do_not_affect_the_order ... ok
+test tests::huge_lengths ... ok
+test tests::get_out_of_range_panics - should panic ... ok
+test tests::iter_past_the_end_panics - should panic ... ok
+test tests::map_keeps_the_order ... ok
+test tests::orders_longer_than_usize_are_rejected ... ok
+test tests::large_configurations_match_reference ... ok
+test tests::reversed_iter_range_panics - should panic ... ok
+test tests::reversed_slice_panics - should panic ... ok
+test tests::seek_past_the_end_panics - should panic ... ok
+test tests::seq_eq_and_hash ... ok
+test tests::shard_index_out_of_range_panics - should panic ... ok
+test tests::shards_partition_the_sequence ... ok
+test tests::shuffle_is_a_permutation_and_reshuffles_per_epoch ... ok
+test tests::slice_bound_overflow_panics - should panic ... ok
+test tests::slice_bounds ... ok
+test tests::source_index_of_a_foreign_source_panics - should panic ... ok
+test interleave::tests::subranges_and_seams ... ok
+test tests::types_are_send_and_sync ... ok
+test perm::tests::bijection ... ok
+test tests::weighted_mix ... ok
+test tests::weighted_shares_sum_and_round ... ok
+test weight::oracle_tests::matches_independent_arbitrary_precision_fixtures ... ok
+test tests::steep_schedule_at_scale ... ok
+test tests::weight_quotas_survive_small_terms_and_reordering ... ok
+test interleave::tests::huge_lengths_seek_consistently ... ok
+test tests::random_configurations_match_reference ... ok
+test interleave::tests::every_seek_matches_the_slice ... ok
+test tests::deep_configurations_are_rejected_on_a_small_stack ... ok
+test perm::tests::small_domains_mix_over_seeds ... ok
+test interleave::tests::random_configurations ... ok
+test interleave::profile::tests::sweep_matches_direct_evaluation ... ok
+test perm::tests::statistics ... ok
+test perm::tests::statistics_over_many_seeds_and_lengths ... ok
+
+test result: ok. 75 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.86s
+
+
+running 6 tests
+test errors_name_kind_and_path ... ok
+test serde_round_trip ... ok
+test hand_built_configuration ... ok
+test sources_through_pointers_and_lengths ... ok
+test cursors_seek_skip_and_clone ... ok
+test serde_depth_depends_on_the_variants ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 14 tests
+test count_and_last_on_a_large_shuffled_source ... ok
+test cloned_cursors_revive_parts_without_allocating ... ok
+test empty_ranges_defer_new_children_and_preserve_old_buffers ... ok
+test cloned_cursors_preserve_capacity_after_rebinding_to_smaller_mixes ... ok
+test last_reuses_an_initialized_mix_for_both_cursor_types ... ok
+test seeking_backward_revives_parts_without_allocating ... ok
+test seeking_an_existing_cursor_allocates_nothing ... ok
+test cursors_allocate_only_when_drawing_an_element ... ok
+test undrawn_cursors_resume_after_range_changes_and_skips ... ok
+test unary_traversals_do_not_allocate_temporary_child_lists ... ok
+test concat_recycles_mix_buffers_across_epochs_and_seeks ... ok
+test shuffles_reuse_every_reached_mix_including_concat_children ... ok
+test empty_parts_do_not_allocate_runtime_state ... ok
+test forward_seeks_land_in_the_target_repetition_and_part ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 4 tests
+test failure_history_shrinking_keeps_only_relevant_operations ... ok
+test boundary_skip_rebinds_retained_child_before_backward_seek ... ok
+test recycled_children_replace_every_transform_parameter ... ok
+test operation_sequences_match_random_access ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 2 tests
+test golden_name_and_path_salted_orders ... ok
+test golden_orders ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test large_orders_keep_baseline_outputs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test isolated_case ... ok
+test empty_compaction_preserves_identity_and_error_paths ... ok
+test json_preserves_float_bits_and_large_weighted_orders ... ok
+test nested_slice_boundaries_remove_unreachable_salts ... ok
+test sharding_parts_requires_worker_schedule_feasibility ... ok
+test weighted_apportionment_preserves_dyadic_scale ... ok
+test weighted_apportionment_keeps_tiny_terms_that_break_ties ... ok
+test zero_weight_parts_never_receive_an_element ... ok
+
+running 1 test
+
+running 1 test
+
+running 1 test
+test isolated_case ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+test isolated_case ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+
+running 1 test
+test large_inline_sources_fit_a_thread_stack ... ok
+test finite_profiles_and_seeks_terminate ... ok
+test weighted_apportionment_preserves_exact_remainder_ties ... ok
+test isolated_case ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.04s
+
+test public_validation_and_disposal_reject_deep_trees_safely ... ok
+test isolated_case ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.05s
+
+test mapping_and_error_cleanup_use_a_heap_stack ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 9 tests
+test equality_preserves_nan_payload_sign_and_signaling_bits ... ok
+test overcommit_diagnostic_explains_small_excess_and_location ... ok
+test checked_access_preserves_cursor_on_errors ... ok
+test preparation_reports_original_quotas_and_compiled_lengths ... ok
+test indexed_results_distinguish_zero_sized_sources ... ok
+test standard_iterator_position_is_available ... ok
+test sharding_preserves_global_partition_not_worker_mixture ... ok
+test sampling_diagnostics_distinguish_reasons_and_report_successful_tolerance ... ok
+test preparation_explains_folded_ranges_and_original_sources ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test schedules_match_independent_cdfs_and_minority_ranks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

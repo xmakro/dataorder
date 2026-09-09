@@ -6,8 +6,8 @@
 //! Its result must stay monotone under rounding for exact seeks to work.
 //! It is explicitly inlined because every iteration step computes a key.
 //!
-//! Keep multiply and add separate: `mul_add` changes rounding and would change
-//! the reproducible orders promised by the crate.
+//! Keep lookup's multiply and add operations separate to preserve reproducible
+//! rounding. Construction retains residuals through the arithmetic in `crate::sum`.
 
 use crate::sum::{Compensated, Expansion};
 
@@ -20,9 +20,8 @@ pub(crate) struct Profile {
     /// touches fewer cache lines than searching full segment records.
     starts: Vec<f64>,
     shares: Vec<f64>,
-    /// Correction from the rounded scheduled peak to its extended-precision value.
-    /// Used only when building a uniform remainder, never during lookup.
-    rate_correction: Compensated,
+    /// Scheduled peak with its rounding residual, used only during construction.
+    peak: Compensated,
 }
 
 /// A linear rate from `r0` to `r1` over `[start, end]`.
@@ -61,7 +60,7 @@ impl Profile {
         }
         let starts = segs.iter().map(|s| s.start).collect();
         let shares = segs.iter().map(|s| s.share).collect();
-        Self { segs, starts, shares, rate_correction: Compensated::new(1.0) }
+        Self { segs, starts, shares, peak: Compensated::new(1.0) }
     }
 
     /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the
@@ -83,7 +82,7 @@ impl Profile {
         let peak = Compensated::new(2.0).divided_by(width);
         let r = peak.value();
         let mut profile = Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)]);
-        profile.rate_correction = peak.divided_by(Compensated::new(r));
+        profile.peak = peak;
         profile
     }
 
@@ -110,13 +109,21 @@ impl Profile {
         // difference first can round away a small new slope before compensation sees it.
         let mut events = Vec::new();
         for (n, p) in scheduled {
-            let rho = Compensated::ratio(*n, total_len).multiply(p.rate_correction);
+            // Scheduled segments have endpoints at zero or their shared peak;
+            // use that peak directly instead of reconstructing it from a correction.
+            let peak = p.peak.scaled(*n).divided_by(Compensated::new(total_len));
+            let endpoint = |r| if r == 0.0 { Compensated::default() } else { peak };
             let (mut prev_r1, mut prev_m) = (Compensated::default(), Compensated::default());
             for seg in &p.segs {
-                let m = rho.scaled(seg.r1 - seg.r0).divided_by(Compensated::difference(seg.end, seg.start));
+                let m = if seg.r0 == seg.r1 {
+                    Compensated::default()
+                } else {
+                    let (from, to) = if seg.r0 == 0.0 { (seg.start, seg.end) } else { (seg.end, seg.start) };
+                    peak.divided_by(Compensated::difference(to, from))
+                };
                 events.push((seg.start, prev_r1.scaled(-1.0), prev_m.scaled(-1.0)));
-                events.push((seg.start, rho.scaled(seg.r0), m));
-                (prev_r1, prev_m) = (rho.scaled(seg.r1), m);
+                events.push((seg.start, endpoint(seg.r0), m));
+                (prev_r1, prev_m) = (endpoint(seg.r1), m);
             }
         }
         events.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -196,8 +203,8 @@ impl Profile {
     ///
     /// Nondecreasing in `y` even under rounding: the segment index is monotone because
     /// shares are and the result is clamped to its segment. Constant and falling segments
-    /// use monotone operations, as do zero-start ramps; other rising segments canonicalize
-    /// their inverse against a monotone polynomial.
+    /// use monotone operations, as do zero-start ramps; other rising segments invert
+    /// the remaining area from the right endpoint with a decreasing quotient.
     #[inline(always)]
     pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
         // The last segment whose starting share is strictly below `y` (or the first
@@ -229,7 +236,18 @@ impl Profile {
         } else {
             let root = (s.r0 * s.r0 + s.c4 * z).max(0.0).sqrt();
             if s.c > 0.0 {
-                if s.r0 == 0.0 { root * s.inv_2c } else { s.rising_inverse(z, root) }
+                if s.r0 == 0.0 {
+                    root * s.inv_2c
+                } else {
+                    if z == 0.0 {
+                        return s.start;
+                    }
+                    // Invert the remaining area from the right endpoint. As z grows,
+                    // the numerator decreases and the denominator increases, so the
+                    // distance decreases monotonically even under rounding.
+                    let mass = (s.r0 + s.r1) / 2.0 * (s.end - s.start);
+                    return (s.end - 2.0 * (mass - z).max(0.0) / (s.r1 + root)).clamp(s.start, s.end);
+                }
             } else if s.r0 + root > 0.0 {
                 2.0 * z / (s.r0 + root)
             } else {
@@ -237,43 +255,6 @@ impl Profile {
             }
         };
         (s.start + x).clamp(s.start, s.end)
-    }
-}
-
-impl Segment {
-    /// Invert the increasing polynomial without subtracting nearly equal roots. The
-    /// quotient alone can round nonmonotonically at adjacent floats, so canonicalize to
-    /// the first representable x whose (monotone) polynomial reaches z. Usually this
-    /// takes one or two neighboring floats; a bitwise bisection bounds even a bad guess.
-    #[inline]
-    fn rising_inverse(&self, z: f64, root: f64) -> f64 {
-        if z == 0.0 {
-            return 0.0;
-        }
-        let polynomial = |x: f64| x * (self.r0 + self.c * x);
-        let (mut lo, mut hi) = (0.0f64, self.end - self.start);
-        let mut x = (2.0 * z / (self.r0 + root)).min(hi);
-        for _ in 0..4 {
-            if polynomial(x) < z {
-                lo = x;
-                if x == hi {
-                    return hi;
-                }
-                x = x.next_up().min(hi);
-            } else {
-                hi = x;
-                let prev = x.next_down().max(0.0);
-                if polynomial(prev) < z {
-                    return x;
-                }
-                x = prev;
-            }
-        }
-        while hi.to_bits() - lo.to_bits() > 1 {
-            let mid = f64::from_bits(lo.to_bits() + (hi.to_bits() - lo.to_bits()) / 2);
-            if polynomial(mid) < z { lo = mid } else { hi = mid }
-        }
-        hi
     }
 }
 
@@ -559,6 +540,41 @@ mod tests {
                 let y = i as f64 / 1000.0;
                 assert_eq!(p.quantile(y, &mut far).to_bits(), p.quantile(y, &mut zero).to_bits());
             }
+        }
+    }
+    #[test]
+    fn many_complementary_ramps_keep_a_single_uniform_item() {
+        let total = (1u64 << 46) - 1;
+        for pairs in [1u64, 7, 100, 1000] {
+            let half = (total - 1) / 2;
+            let mut scheduled = Vec::new();
+            for i in 0..pairs {
+                let n = half / pairs + u64::from(i < half % pairs);
+                scheduled.push((n as f64, Profile::delayed_linear(0.0, 1.0)));
+                scheduled.push((n as f64, Profile::trapezoid(0.0, 0.0, 0.0, 1.0)));
+            }
+            let (uniform, peak, _) = Profile::uniform(&scheduled, 1.0, total as f64);
+            assert!(peak <= 1.0);
+            assert!(uniform.is_finite());
+            for i in 0..=100 {
+                let t = i as f64 / 100.0;
+                assert!((uniform.share(t) - t).abs() < 8.0 * f64::EPSILON);
+            }
+        }
+    }
+
+    #[test]
+    fn large_counts_and_tiny_ramps_preserve_capacity() {
+        let total = (1u64 << 46) - 1;
+        let n = 1u64 << 40;
+        let scheduled = [(n as f64, Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0)), (n as f64, Profile::delayed_linear(0.0, 1e-200))];
+        let u = (total - 2 * n) as f64;
+        let (uniform, peak, _) = Profile::uniform(&scheduled, u, total as f64);
+        assert!(uniform.is_finite() && peak < 1.0);
+        for i in 0..=100 {
+            let t = i as f64 / 100.0;
+            let mass = (u * uniform.share(t) + scheduled.iter().map(|(n, p)| n * p.share(t)).sum::<f64>()) / total as f64;
+            assert!((mass - t).abs() < 8.0 * f64::EPSILON);
         }
     }
 }

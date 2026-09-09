@@ -1,0 +1,54 @@
+    Finished `release` profile [optimized] target(s) in 0.03s
+   Doc-tests dataorder
+
+running 46 tests
+test src/interleave/sampling.rs - interleave::sampling::Sampling::fading (line 152) ... ok
+test src/interleave/sampling.rs - interleave::sampling::Sampling::trapezoid (line 164) ... ok
+test src/error.rs - error::Error (line 11) ... ok
+test src/lib.rs - (line 26) ... ok
+test src/cursor.rs - cursor::Cursor<'a,T>::set_range (line 135) ... ok
+test src/interleave/sampling.rs - interleave::sampling::Sampling::delayed (line 115) ... ok
+test src/cursor.rs - cursor::Cursor<'a,T>::seek (line 88) ... ok
+test src/cursor.rs - cursor::Cursor<'a,T>::indexed (line 168) ... ok
+test src/error.rs - error::ErrorKind (line 123) ... ok
+test src/interleave/sampling.rs - interleave::sampling::Sampling::until (line 140) ... ok
+test src/interleave/sampling.rs - interleave::sampling::Sampling (line 29) ... ok
+test src/interleave/sampling.rs - interleave::sampling::Sampling::ramp (line 128) ... ok
+test src/lib.rs - MAX_MIX_LEN (line 302) ... ok
+test src/lib.rs - ReadmeDoctests (line 366) ... ok
+test src/lib.rs - MAX_DEPTH (line 287) ... ok
+test src/lib.rs - ReadmeDoctests (line 455) ... ok
+test src/order.rs - order::Order<T>::get (line 270) ... ok
+test src/lib.rs - ReadmeDoctests (line 395) ... ok
+test src/order.rs - order::Order<T>::iter (line 324) ... ok
+test src/order.rs - order::Order<T>::new (line 102) ... ok
+test src/order.rs - order::Order<T>::prepare (line 145) ... ok
+test src/seq.rs - seq::Seq<T>::check (line 627) ... ok
+test src/order.rs - order::Order<T>::set_seed (line 198) ... ok
+test src/order.rs - order::Order<T>::with_seed (line 124) ... ok
+test src/order.rs - order::Order<T>::source_index (line 238) ... ok
+test src/seq.rs - seq::Seq<T>::concat (line 226) ... ok
+test src/seq.rs - seq::Seq<T>::cycle (line 352) ... ok
+test src/seq.rs - seq::Seq<T>::mix_with (line 256) ... ok
+test src/seq.rs - seq::Seq<T>::mix (line 240) ... ok
+test src/seq.rs - seq::Seq<T>::map (line 521) ... ok
+test src/seq.rs - seq::Seq<T>::shuffle (line 315) ... ok
+test src/seq.rs - seq::Seq<T>::repeat (line 333) ... ok
+test src/seq.rs - seq::Seq<T>::skip (line 426) ... ok
+test src/seq.rs - seq::Seq<T>::shard (line 479) ... ok
+test src/seq.rs - seq::Seq<T>::slice (line 371) ... ok
+test src/seq.rs - seq::Seq<T>::stride (line 441) ... ok
+test src/seq.rs - seq::Seq<T>::take (line 412) ... ok
+test src/seq.rs - seq::Seq<T>::dispose (line 564) ... ok
+test src/seq.rs - seq::Seq<T>::try_map (line 543) ... ok
+test src/seq.rs - seq::Seq<T>::weighted (line 275) ... ok
+test src/seq.rs - seq::Seq<T>::validate (line 599) ... ok
+test src/seq.rs - seq::Seq<T>::weighted_with (line 296) ... ok
+test src/source.rs - source::Source (line 15) ... ok
+test src/source.rs - source::salt (line 56) ... ok
+test src/seq.rs - seq::Seq<T>::try_shard (line 499) ... ok
+test src/source.rs - source::salt_path (line 72) ... ok
+
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+all doctests ran in 0.82s; merged doctests compilation took 0.54s

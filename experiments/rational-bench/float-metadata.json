@@ -1,0 +1,55 @@
+{
+  "date_utc": "2026-09-08T04:17:14.221949+00:00",
+  "cpu": "Apple M2 Pro",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "baseline_git_revision": "fb1d3b0833ad5f66ea048fb5b8494b4557f25968",
+  "baseline_sha256": {
+    "Cargo.toml": "eb583c185dec2c4fcf5786b42f7fbb86778eef632672d55ebf704afc447b2430",
+    "Cargo.lock": "689219f57aee32682937b6272185af4ce0d83bf6e704ef28549271e02806eb7f",
+    "src/sum.rs": "d6164de49b9a7dc9316bfa6623a41dfb2b623ae966ef523451e894c0414d5e36",
+    "src/weight.rs": "9c0522befa1eb2f316b068e89f54ce1e309ee8a5e4967131038d02bc40048391",
+    "src/interleave/iter.rs": "65c7e8750f52b33218e1c0edd51c4a6f78cea729cd50090465d696bc47171a92",
+    "src/interleave/mod.rs": "041218b424c3181fdd94ee877f859cb51ae512ea32c47d33f6c7a87825fcc54a",
+    "src/interleave/profile.rs": "2ead129844ab6b1b730e491e939b664a397d9b17619d89e9a92825c3785d3ee4",
+    "src/interleave/sampling.rs": "d3dbf7d417dff04b7287dad361bdd68e6077077021f9cb782611a8d48b846fc2",
+    "src/interleave/tests.rs": "ec2f47bb02589db51039d74dc2a492348707b29a575d6d3c0d8182418b533aff",
+    "src/interleave/tournament.rs": "2f021271c3d6cd32f2977989958c998b7948984c9bae2bfc7856e338fcae4d00"
+  },
+  "candidate_profile_sha256": "7f48ab0a4c2b205e3eee0e994819922fb45774305c954679074b3f12289c1f20",
+  "artifact_sha256": {
+    "float-benchmark.log": "cdd5104b3a9f70bd7fb8f203b66fdd1492678cdc55b1c60e646c7c46db40ec1d",
+    "float-compatibility.json": "86f79f7360a01f6679333164f5ccb616e2c7ea38974b19c1b1046c260505b883",
+    "float-doctests.log": "a04445209c02015c91c133a6f0f4b85278ae683b474cf23716e80df8b3e07cc0",
+    "float-inverse.patch": "8dc10bafae09dc8d9bcba4ff61847f570e7ee4cc085d69f6b39c4a5294b4e3b2",
+    "float-msrv.log": "d8189bf1658e835e5f3038a58e22b919e3197f73a03badb2210daa6d60c5165d",
+    "float-numeric-summary.json": "9cd9fdc1f07ae7d68b9ec1281b25d8ec3b04afa19936e474ac42a97c38155b20",
+    "float-numeric-test.rs": "19e4794b4391a16b230aa4755fb63a6dad651b32d2511f4115ac7149ab44d5f3",
+    "float-numeric.json": "7883c9adf836d145881c750e614c2c0849ec2dd060b69d8fbbbfd64f9caaa3ee",
+    "float-results.json": "e6605c2c4d9dbdc478880788e8770ed8b7c3c1953df0813d5f889c029f00eb12",
+    "float-reversed-benchmark.log": "4d34c382d7fc305cb447dce6ac6ec84589739d5a3b9c5d6e296e3cee4594d18e",
+    "float-reversed-results.json": "3d804c213495e1d619fe8adbb7b9a34c308c3aefbb607267b39ea4b162c3173e",
+    "float-tests.log": "1a572e79c769f36d8c816695264f34a219787ca304423d2a5a6943c9204c9602",
+    "float_bench.rs": "01b6fdbf4d2e8595ea320d074bb5bb9ba1b32015b28c68b9575d82189ff4cb55",
+    "float_reproduce.py": "695347e8597c747aea6d2dacff3296654d3ebdb3c81919c98b29bdcb5afc7780"
+  },
+  "checks": {
+    "final_release_all_features_library_and_integration_tests": "passed",
+    "final_release_all_features_doctests": "passed",
+    "final_rust_1_89_release_interleave_tests": "passed",
+    "adjacent_quantiles_checked": 22528,
+    "decimal_reference_samples": 704,
+    "compatibility_cases": 2401,
+    "compatibility_differing_cases": 69
+  },
+  "production_changed": false,
+  "notes": [
+    "Patch requires a new ordering version; existing golden tests alone did not detect compatibility differences.",
+    "Five alternating paired samples, calibrated to 20 ms measured work; second run swaps module assignments.",
+    "Positioned walks exclude seek. Build and fresh seek are measured independently.",
+    "Runtime field layouts and construction logic are unchanged.",
+    "No benchmark overlapped compilation or verification. No CPU affinity or external load isolation.",
+    "Raw reversed results label the candidate before and baseline after; invert ratios when interpreting.",
+    "Independent numeric comparison checks finite endpoint resolution; sampled errors are not a universal bound."
+  ],
+  "reproducer_note": "Updated to recover the measured baseline from its recorded Git revision and the saved dirty Cargo/weight files after the 0.3.0 production changes."
+}

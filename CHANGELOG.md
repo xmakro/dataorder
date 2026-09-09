@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Breaking (0.3.0):** simplify the rising-rate inverse using remaining area from
+  the segment endpoint. This removes numerical repair searches and changes some
+  item orders near ties. Resume existing checkpoints with their original crate version.
+- Schedule construction uses the precise peak directly and fused product residuals,
+  removing correction-factor arithmetic and custom significand splitting. Smooth
+  rate curves, exact quotas, and seek/walk agreement are preserved.
+
+- Replace the custom wide-integer weight allocator with a `num-bigint` fallback,
+  preserving the `u128` fast path and exact quota results.
+
 - Checkpoints accept worker shards that fit on 32-bit targets even when their original
   sequence is larger. Cloned mix cursors preserve reusable vector capacity after moving
   to smaller concat children.

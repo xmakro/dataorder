@@ -1,6 +1,6 @@
 [package]
 name = "dataorder"
-version = "0.3.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Deterministic, seekable dataset ordering: shuffle, mix, repeat and shard without storing an index array"

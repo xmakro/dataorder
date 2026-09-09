@@ -1,0 +1,39 @@
+
+running 34 tests
+test interleave::tests::bench_seek_and_walk ... ignored, benchmark: run with --ignored --nocapture
+test interleave::profile::tests::quantile_uses_the_left_endpoint_of_flat_shares ... ok
+test interleave::profile::tests::delayed_linear_shape ... ok
+test interleave::tests::a_quantile_on_a_flat_share_is_drawn_before_the_plateau ... ok
+test interleave::profile::tests::uniform_absorbs_exactly ... ok
+test interleave::profile::tests::trapezoid_shape ... ok
+test interleave::profile::tests::a_tiny_uniform_remainder_stays_normalized ... ok
+test interleave::iter::tests::returning_to_zero_clears_the_previous_counts ... ok
+test interleave::tests::empty_and_trivial ... ok
+test interleave::tests::fading_sequences_stop_and_free_the_rest ... ok
+test interleave::tests::equal_lengths_round_robin_in_input_order ... ok
+test interleave::profile::inverse_audit::rising_inverse_extremes ... ok
+test interleave::tests::rejects_bad_configurations ... ok
+test interleave::profile::tests::narrow_triangles_preserve_mass_and_adjacent_quantiles ... ok
+test interleave::tests::ramp_rate_rises_linearly ... ok
+test interleave::tests::rising_remainder_resolves_a_midpoint_tie ... ok
+test interleave::tests::keys_are_monotone_within_sequences ... ok
+test interleave::tests::schedules_are_followed ... ok
+test interleave::tests::uniform_sequences_absorb_the_slack ... ok
+test interleave::tests::empty_sequences_do_not_affect_the_order ... ok
+test interleave::tournament::tests::bench_vs_binary_heap ... ignored, benchmark: run with --ignored --nocapture
+test interleave::tournament::tests::empty_tree ... ok
+test interleave::tournament::tests::last_survivor_has_no_tournament_path ... ok
+test interleave::tests::is_a_permutation_preserving_order ... ok
+test interleave::tests::reseeking_matches_fresh_iterators ... ok
+test interleave::tests::matches_brute_force_sort ... ok
+test interleave::tests::uniform_balance ... ok
+test interleave::profile::tests::quantile_inverts_share_and_is_monotone ... ok
+test interleave::tournament::tests::matches_binary_heap ... ok
+test interleave::tests::subranges_and_seams ... ok
+test interleave::tests::huge_lengths_seek_consistently ... ok
+test interleave::tests::every_seek_matches_the_slice ... ok
+test interleave::tests::random_configurations ... ok
+test interleave::profile::tests::sweep_matches_direct_evaluation ... ok
+
+test result: ok. 32 passed; 0 failed; 2 ignored; 0 measured; 41 filtered out; finished in 0.15s
+
