@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
+#[path = "process/windows.rs"]
 mod windows;
 
 pub fn timeout(value: Option<&str>) -> Result<Duration> {
@@ -185,8 +186,8 @@ mod tests {
             let lock =
                 OpenOptions::new().read(true).write(true).create(true).truncate(false).open(directory.join("descendant.lock")).unwrap();
             lock.lock().unwrap();
-            fs::write(directory.join("ready"), "ready").unwrap();
             eprintln!("descendant marker");
+            fs::write(directory.join("ready"), "ready").unwrap();
             // Bound even an unfixed regression so a failed test cannot leave an
             // indefinitely running background process.
             let started = Instant::now();
@@ -227,8 +228,7 @@ mod tests {
     fn failed_parent_terminates_descendants_and_keeps_output() {
         let root = Capture::new(&std::env::temp_dir().join("dataorder-process-tests")).unwrap();
         let diagnostics = root.directory.join("logs");
-        let error = run(&mut helper("failure-descendant", &root.directory), Duration::from_secs(15), &diagnostics)
-            .unwrap_err().to_string();
+        let error = run(&mut helper("failure-descendant", &root.directory), Duration::from_secs(15), &diagnostics).unwrap_err().to_string();
         assert!(error.contains("failed") && !error.contains("timed out"), "{error}");
         assert!(root.directory.join("ready").exists());
         let log = fs::read_dir(&diagnostics).unwrap().next().unwrap().unwrap().path();

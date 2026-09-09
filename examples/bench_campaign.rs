@@ -48,7 +48,7 @@ Unpinned by default. BENCH_CORE=N requests taskset affinity; none disables it.
 Builds use private target directories. Comparisons reject mismatched environments.
 Use --allow-environment-differences to explicitly compare compilers, flags or machines.
 Raw samples, workload fingerprints and effective build provenance are saved.
-Compiler wrappers require --allow-environment-differences; their effective flags are unverified.
+Only direct invocations of the rustup-resolved compiler are verified; other builds require --allow-environment-differences.
 BENCH_TIMEOUT_SECS sets a positive per-command deadline (default: 1800 seconds).
 Failed command output is retained in target/bench-diagnostics; timed-out process trees are terminated.
 Results: target/bench-campaign.json in the campaign runner's crate.";

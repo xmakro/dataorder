@@ -330,14 +330,16 @@ difference is intentional; the runner prints the differences. This does not bypa
 harness or workload checks. Machine metadata cannot account for thermal state or other
 processes, so run timing campaigns on an otherwise idle machine.
 
-Compiler wrappers and custom launchers require `--allow-environment-differences`:
-Cargo's displayed arguments cannot establish which flags a wrapper actually passed
-to the compiler. These builds are recorded as unverified, even when their displayed
-settings match. Comparisons with older provenance lacking this verification also
-require the override.
+Compiler verification trusts the toolchain independently resolved by `rustup which
+rustc` and checks that Cargo invokes that compiler directly. Compiler wrappers, custom
+launchers (including those named `rustc`), and builds without a resolvable rustup
+compiler require `--allow-environment-differences`: Cargo's displayed arguments cannot
+establish which flags a launcher actually passed to the compiler. These builds are
+recorded as unverified, even when their displayed settings match. Comparisons with
+older provenance lacking compiler path verification also require the override.
 
 `BENCH_TIMEOUT_SECS` sets a positive deadline for each external command (default:
-1800 seconds). Timed-out process trees are terminated. Failed commands retain their
+1800 seconds). Process trees are terminated on timeouts and command failures. Failed commands retain their
 stdout and stderr under `target/bench-diagnostics`; the error prints the directory.
 Incomplete campaigns do not replace saved comparison results.
 

@@ -215,11 +215,16 @@ mod tests {
 
     #[test]
     fn captures_effective_flags_without_environment_or_artifact_paths() {
+        let root = Build::new(&std::env::temp_dir().join("dataorder-compiler-path-tests")).unwrap();
+        let compiler = root.directory.join("rustc");
+        fs::write(&compiler, "trusted compiler fixture").unwrap();
         let mut settings = BTreeMap::new();
         let mut direct = BTreeMap::new();
-        let log = r#"Running `PRIVATE_ENV=do-not-save /tool/rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=3 -C opt-level=0 -Clto=thin --cfg 'feature="serde"' -C metadata=revision --out-dir /private/build -L dependency=/private/build/deps`
-Running `rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=3 --print cfg`"#;
-        capture_settings(log, &mut settings, &mut direct).unwrap();
+        let log = format!(
+            r#"Running `PRIVATE_ENV=do-not-save {compiler:?} --crate-name bench --edition=2024 examples/bench.rs -C opt-level=3 -C opt-level=0 -Clto=thin --cfg 'feature="serde"' -C metadata=revision --out-dir /private/build -L dependency=/private/build/deps`
+Running `rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=3 --print cfg`"#
+        );
+        capture_settings(&log, Some(&compiler), &mut settings, &mut direct).unwrap();
         assert_eq!(direct["bench"], true);
         assert_eq!(settings["bench"], ["--edition=2024", "-C opt-level=3", "-C opt-level=0", "-C lto=thin", "--cfg feature=\"serde\""]);
         assert_eq!(
@@ -231,23 +236,42 @@ Running `rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=
 
     #[test]
     fn wrappers_cannot_be_certified_from_cargos_displayed_flags() {
+        let root = Build::new(&std::env::temp_dir().join("dataorder-compiler-path-tests")).unwrap();
+        let compiler = root.directory.join("trusted rustc.exe");
+        fs::write(&compiler, "trusted compiler fixture").unwrap();
+        let launcher = root.directory.join("rustc");
+        fs::write(&launcher, "untrusted launcher fixture").unwrap();
         for prefix in [
-            "PRIVATE_ENV=hidden /wrapper /tool/rustc",
-            "/wrapper /workspace-wrapper /tool/rustc",
-            r#""C:\wrapper path\cache.exe" "C:\tool\rustc.exe""#,
-            "/custom-compiler",
+            format!("PRIVATE_ENV=hidden /wrapper {compiler:?}"),
+            format!("/wrapper /workspace-wrapper {compiler:?}"),
+            r#""C:\wrapper path\cache.exe" "C:\tool\rustc.exe""#.to_owned(),
+            "/custom-compiler".to_owned(),
+            format!("{launcher:?}"),
+            "rustc".to_owned(),
         ] {
             let mut settings = BTreeMap::new();
             let mut direct = BTreeMap::new();
-            capture_settings(&format!("Running `{prefix} --crate-name bench -C opt-level=3`"), &mut settings, &mut direct).unwrap();
+            capture_settings(&format!("Running `{prefix} --crate-name bench -C opt-level=3`"), Some(&compiler), &mut settings, &mut direct)
+                .unwrap();
             assert!(!direct["bench"], "{prefix}");
             assert_eq!(settings["bench"], ["-C opt-level=3"]);
         }
-        assert!(direct_rustc(r#"PRIVATE_ENV='hidden value' "C:\tool path\rustc.exe""#).unwrap());
+        let prefix = format!("PRIVATE_ENV='hidden value' {compiler:?}");
+        assert!(direct_rustc(&prefix, Some(&compiler)).unwrap());
+        assert!(!direct_rustc(&prefix, None).unwrap());
     }
 
     #[test]
     fn real_wrapper_flag_changes_require_an_override() {
+        real_flag_changes_require_an_override("rustc-wrapper");
+    }
+
+    #[test]
+    fn real_launcher_named_rustc_requires_an_override() {
+        real_flag_changes_require_an_override("rustc");
+    }
+
+    fn real_flag_changes_require_an_override(setting: &str) {
         let root = Build::new(&std::env::temp_dir().join("dataorder-wrapper-tests")).unwrap();
         let dir = &root.directory;
         for subdir in ["src", "examples", ".cargo"] {
@@ -258,12 +282,21 @@ Running `rustc --crate-name bench --edition=2024 examples/bench.rs -C opt-level=
         fs::write(dir.join("src/lib.rs"), "pub fn go(x:u64)->u64{(0..x).map(|i|i*i).sum()}").unwrap();
         fs::write(dir.join("examples/bench.rs"), "fn main(){std::hint::black_box(dataorder::go(std::hint::black_box(100)));}").unwrap();
         let wrapper_source = dir.join("wrapper.rs");
+        let compiler = if setting == "rustc" {
+            let sysroot = checked_output(Command::new("rustc").args(["--print", "sysroot"])).unwrap();
+            let compiler = PathBuf::from(String::from_utf8(sysroot.stdout).unwrap().trim())
+                .join("bin")
+                .join(format!("rustc{}", std::env::consts::EXE_SUFFIX));
+            format!("let compiler = {compiler:?};")
+        } else {
+            "let compiler = args.next().unwrap();".to_owned()
+        };
         fs::write(
             &wrapper_source,
             r#"
 fn main() {
     let mut args = std::env::args_os().skip(1);
-    let compiler = args.next().unwrap();
+    COMPILER
     let mut args: Vec<_> = args.collect();
     if args.iter().any(|a| a == "--crate-name") && !args.iter().any(|a| a == "-vV" || a == "--print") {
         args.push("-C".into());
@@ -272,15 +305,17 @@ fn main() {
     let status = std::process::Command::new(compiler).args(args).status().unwrap();
     std::process::exit(status.code().unwrap_or(1));
 }
-"#,
+"#
+            .replace("COMPILER", &compiler),
         )
         .unwrap();
         let mut settings = Vec::new();
         for level in ["0", "3"] {
             fs::write(dir.join("level"), level).unwrap();
-            let wrapper = dir.join(format!("wrapper{level}{}", std::env::consts::EXE_SUFFIX));
+            // The launcher deliberately has the trusted compiler's basename.
+            let wrapper = dir.join(format!("{}{}", if setting == "rustc" { "rustc" } else { "wrapper" }, std::env::consts::EXE_SUFFIX));
             checked_output(Command::new("rustc").arg(&wrapper_source).arg("-o").arg(&wrapper)).unwrap();
-            fs::write(dir.join(".cargo/config.toml"), format!("[build]\nrustc-wrapper={}\n", serde_json::to_string(&wrapper).unwrap()))
+            fs::write(dir.join(".cargo/config.toml"), format!("[build]\n{setting}={}\n", serde_json::to_string(&wrapper).unwrap()))
                 .unwrap();
             let build = Build::prepare(dir, &dir.join("builds")).unwrap();
             assert_eq!(build.settings["invocations_verified"], false);

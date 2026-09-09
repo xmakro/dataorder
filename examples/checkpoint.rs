@@ -189,7 +189,15 @@ mod tests {
             running.next_offset = running.order.len() - 2;
             let mut resumed = Worker::restore(&running.checkpoint().unwrap(), config.clone()).unwrap();
             let mut tail = Vec::new();
-            assert_eq!(resumed.process_batch(3, |_, index| { tail.push(index); Ok(()) }).unwrap(), 2);
+            assert_eq!(
+                resumed
+                    .process_batch(3, |_, index| {
+                        tail.push(index);
+                        Ok(())
+                    })
+                    .unwrap(),
+                2
+            );
             assert_eq!(tail, [source_len - 8 + worker, source_len - 4 + worker]);
             assert_eq!(Worker::restore(&resumed.checkpoint().unwrap(), config).unwrap().next_offset, 1usize << 31);
         }

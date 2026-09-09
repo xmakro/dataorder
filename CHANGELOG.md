@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Checkpoints accept worker shards that fit on 32-bit targets even when their original
+  sequence is larger. Cloned mix cursors preserve reusable vector capacity after moving
+  to smaller concat children.
+- Compiler verification checks an independently resolved rustup compiler path, rejecting
+  custom launchers named `rustc` and older verification records without an override.
+  Failed benchmark commands terminate descendants, including after the parent exits;
+  Windows subprocesses start suspended and enter a job before running.
 - Checkpoint batches stream through one cursor and commit successful progress after
   resuming. Worker creation rejects configurations the checkpoint parser cannot read.
   `ORDERING_VERSION` exposes the linked crate's version for conservative checkpoints.
