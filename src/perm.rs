@@ -258,7 +258,7 @@ mod tests {
 
     fn public_perm(n: usize, seed: u64) -> Vec<u64> {
         let order = Order::new(Seq::source(n).shuffle(seed)).unwrap();
-        order.iter(..).unwrap().map(|(_, index)| index as u64).collect()
+        order.iter(..).unwrap().map(|item| item.record_index as u64).collect()
     }
 
     #[test]

@@ -26,10 +26,10 @@ fn src(id: u32, len: usize) -> Seq<Src> {
 }
 
 /// FNV-1a over the elements: a stable fingerprint of an order.
-fn fingerprint<'a>(it: impl Iterator<Item = (&'a Src, usize)>) -> u64 {
+fn fingerprint<'a>(it: impl Iterator<Item = dataorder::Item<'a, Src>>) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
-    for (s, i) in it {
-        for b in (s.id as u64).to_le_bytes().into_iter().chain((i as u64).to_le_bytes()) {
+    for item in it {
+        for b in (item.source.id as u64).to_le_bytes().into_iter().chain((item.record_index as u64).to_le_bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100_0000_01b3);
         }
@@ -111,8 +111,8 @@ fn golden_orders() {
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle(7)).unwrap();
     const FIRST: [usize; 6] = [629, 114, 228, 812, 639, 604];
-    assert_eq!(order.iter(0..6).unwrap().map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
-    assert!((0..6).all(|k| order.get(k).unwrap().1 == FIRST[k]));
+    assert_eq!(order.iter(0..6).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
+    assert!((0..6).all(|k| order.get(k).unwrap().record_index == FIRST[k]));
 }
 
 #[test]
@@ -139,11 +139,11 @@ fn golden_name_and_path_salted_orders() {
     const EXPECTED: u64 = 15_852_656_108_745_184_545;
     for as_path in [false, true] {
         let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin", as_path }).shuffle(7), 42).unwrap();
-        assert_eq!(order.iter(..12).unwrap().map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
+        assert_eq!(order.iter(..12).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
         let actual = order
             .iter(..)
             .unwrap()
-            .flat_map(|(_, i)| (i as u64).to_le_bytes())
+            .flat_map(|item| (item.record_index as u64).to_le_bytes())
             .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
         assert_eq!(actual, EXPECTED, "as_path={as_path}");
     }

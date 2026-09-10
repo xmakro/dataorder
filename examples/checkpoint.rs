@@ -93,8 +93,8 @@ impl Worker {
     // Seek once per batch, then stream using the cursor's reusable state.
     fn process_batch(&mut self, limit: usize, mut process: impl FnMut(&Dataset, usize) -> Result<(), String>) -> Result<usize, String> {
         let mut processed = 0;
-        for (source, index) in self.order.iter(self.next_offset..).map_err(|e| e.to_string())?.take(limit) {
-            process(source, index)?;
+        for item in self.order.iter(self.next_offset..).map_err(|e| e.to_string())?.take(limit) {
+            process(item.source, item.record_index)?;
             self.next_offset += 1;
             processed += 1;
         }
@@ -205,12 +205,14 @@ mod tests {
     #[test]
     fn round_trip_resumes_exactly_including_the_end() {
         let config = configuration();
-        let expected: Vec<_> = config.order().unwrap().iter(..).unwrap().map(|(s, i)| (s.name.clone(), i)).collect();
+        let expected: Vec<_> =
+            config.order().unwrap().iter(..).unwrap().map(|item| (item.source.name.clone(), item.record_index)).collect();
         let mut worker = Worker::new(config.clone()).unwrap();
         for split in 0..=expected.len() {
             let json = worker.checkpoint().unwrap();
             let resumed = Worker::restore(&json, config.clone()).unwrap();
-            let rest: Vec<_> = resumed.order.iter(resumed.next_offset..).unwrap().map(|(s, i)| (s.name.clone(), i)).collect();
+            let rest: Vec<_> =
+                resumed.order.iter(resumed.next_offset..).unwrap().map(|item| (item.source.name.clone(), item.record_index)).collect();
             assert_eq!(rest, expected[split..]);
             worker.process_batch(1, |_, _| Ok(())).unwrap();
         }
@@ -230,7 +232,7 @@ mod tests {
         let mut worker = Worker::new(config.clone()).unwrap();
         assert_eq!(worker.process_batch(4, |_, _| Ok(())).unwrap(), 4);
         let mut resumed = Worker::restore(&worker.checkpoint().unwrap(), config.clone()).unwrap();
-        let expected: Vec<_> = resumed.order.iter(4..6).unwrap().map(|(s, i)| (s.name.clone(), i)).collect();
+        let expected: Vec<_> = resumed.order.iter(4..6).unwrap().map(|item| (item.source.name.clone(), item.record_index)).collect();
         let mut processed = Vec::new();
         let error = resumed
             .process_batch(5, |source, index| {

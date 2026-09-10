@@ -24,7 +24,7 @@ fn shard(name: &'static str, len: usize) -> Seq<Shard> {
 }
 
 fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
-    cursor.map(|(s, i)| (s.name, i)).collect()
+    cursor.map(|item| (item.source.name, item.record_index)).collect()
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn cursors_seek_skip_and_clone() {
     let all = names(order.iter(..).unwrap());
     assert_eq!(all.len(), order.len());
     let mut cursor = order.iter(..).unwrap();
-    assert_eq!(cursor.nth(10).map(|(s, i)| (s.name, i)), Some(all[10]));
+    assert_eq!(cursor.nth(10).map(|item| (item.source.name, item.record_index)), Some(all[10]));
     cursor.seek(100).unwrap();
     let ahead = cursor.clone();
     assert_eq!(names(cursor), all[100..]);
@@ -91,8 +91,8 @@ fn cursors_seek_skip_and_clone() {
     back.seek(52).unwrap();
     assert_eq!(names(back), all[52..60]);
     for (i, e) in (&order).into_iter().enumerate() {
-        assert_eq!((e.0.name, e.1), all[i]);
-        assert_eq!(order.get(i).unwrap(), (e.0, e.1));
+        assert_eq!((e.source.name, e.record_index), all[i]);
+        assert_eq!(order.get(i).unwrap(), e);
     }
 }
 
@@ -120,7 +120,7 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(boxed.salt(), dataorder::salt("s"));
     assert_eq!((&&shared).salt(), shared.salt());
     let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle(1)).unwrap();
-    let letters: String = order.iter(..).unwrap().map(|(v, i)| v[i]).collect();
+    let letters: String = order.iter(..).unwrap().map(|item| item.source[item.record_index]).collect();
     assert_eq!(letters.len(), 5);
     assert_eq!(Seq::source(&[1u8, 2, 3][..]).check(), Ok(3));
     assert_eq!(Seq::source([0u8; 4]).check(), Ok(4));

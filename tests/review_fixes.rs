@@ -1,16 +1,15 @@
 //! Public regressions for review findings and access APIs.
-use dataorder::{BoundsError, ErrorKind, Order, Sampling, Seq, Source};
+use dataorder::{BoundsError, ErrorKind, Item, Order, Sampling, Seq, Source};
 use std::ops::Bound;
 
 #[test]
 fn standard_iterator_position_is_available() {
     let order = Order::new(Seq::source(10)).unwrap();
     let mut cursor = order.iter(..).unwrap();
-    assert_eq!(cursor.position(|(_, i)| i == 3), Some(3));
+    assert_eq!(cursor.position(|item| item.record_index == 3), Some(3));
     assert_eq!(cursor.offset(), 4);
-    let mut indexed = cursor.indexed();
-    assert_eq!(indexed.position(|(_, _, i)| i == 6), Some(2));
-    assert_eq!(indexed.offset(), 7);
+    assert_eq!(cursor.position(|item| item.record_index == 6), Some(2));
+    assert_eq!(cursor.offset(), 7);
 }
 
 #[test]
@@ -25,10 +24,9 @@ fn checked_access_preserves_cursor_on_errors() {
     let order = Order::new(Seq::mix([Seq::source(10).shuffle(1), Seq::source(7)])).unwrap();
     assert_eq!(order.get(16), (&order).into_iter().nth(16));
     assert_eq!(order.get(17), None);
-    assert_eq!(order.get_indexed(usize::MAX), None);
+    assert_eq!(order.get(usize::MAX), None);
     let empty = Order::new(Seq::source(0)).unwrap();
     assert_eq!(empty.get(0), None);
-    assert_eq!(empty.get_indexed(0), None);
     assert_eq!((&empty).into_iter().next(), None);
     assert_eq!(order.iter(..=usize::MAX).unwrap_err(), BoundsError::EndOverflow);
     assert_eq!(order.iter((Bound::Excluded(usize::MAX), Bound::Unbounded)).unwrap_err(), BoundsError::StartOverflow);
@@ -51,12 +49,12 @@ fn checked_access_preserves_cursor_on_errors() {
     c.set_range(..).unwrap();
     assert_eq!(c.next(), order.get(0));
     let huge = Order::new(Seq::source(usize::MAX)).unwrap();
-    assert_eq!(huge.iter(usize::MAX - 1..).unwrap().next().unwrap().1, usize::MAX - 1);
+    assert_eq!(huge.iter(usize::MAX - 1..).unwrap().next().unwrap().record_index, usize::MAX - 1);
     assert_eq!(huge.iter(usize::MAX..).unwrap().count(), 0);
 }
 
 #[test]
-fn indexed_results_distinguish_zero_sized_sources() {
+fn items_distinguish_zero_sized_sources() {
     #[derive(Debug, PartialEq)]
     struct Zero;
     impl Source for Zero {
@@ -66,19 +64,19 @@ fn indexed_results_distinguish_zero_sized_sources() {
     }
     let order = Order::new(Seq::mix([Seq::source(Zero), Seq::source(Zero)])).unwrap();
     let expected: Vec<_> = (0..4).flat_map(|i| [(0, i), (1, i)]).collect();
-    let mut cursor = order.iter(..).unwrap().indexed();
-    assert_eq!(cursor.clone().map(|(s, _, i)| (s, i)).collect::<Vec<_>>(), expected);
+    let mut cursor = order.iter(..).unwrap();
+    assert_eq!(cursor.clone().map(|item| (item.source_ordinal, item.record_index)).collect::<Vec<_>>(), expected);
     for (pos, &(s, i)) in expected.iter().enumerate() {
-        assert_eq!(order.get_indexed(pos), Some((s, &Zero, i)));
+        assert_eq!(order.get(pos), Some(Item { source_ordinal: s, source: &Zero, record_index: i }));
     }
-    assert_eq!(cursor.nth(3), Some((1, &Zero, 1)));
+    assert_eq!(cursor.nth(3), Some(Item { source_ordinal: 1, source: &Zero, record_index: 1 }));
     assert_eq!(cursor.offset(), 4);
     assert!(cursor.seek(9).is_err());
     assert!(cursor.set_range(..9).is_err());
     assert_eq!(cursor.offset(), 4);
     cursor.seek(0).unwrap();
-    assert_eq!(cursor.next(), Some((0, &Zero, 0)));
-    assert_eq!(cursor.clone().last(), Some((1, &Zero, 3)));
+    assert_eq!(cursor.next(), Some(Item { source_ordinal: 0, source: &Zero, record_index: 0 }));
+    assert_eq!(cursor.clone().last(), Some(Item { source_ordinal: 1, source: &Zero, record_index: 3 }));
     assert_eq!(cursor.clone().count(), 7);
     cursor.set_range(2..4).unwrap();
     assert_eq!(cursor.nth(usize::MAX), None);
@@ -86,7 +84,26 @@ fn indexed_results_distinguish_zero_sized_sources() {
     assert_eq!(cursor.next(), None);
     cursor.set_range(..).unwrap();
     cursor.seek(2).unwrap();
-    assert_eq!(cursor.into_cursor().offset(), 2);
+    assert_eq!(cursor.offset(), 2);
+}
+
+#[test]
+fn items_copy_without_cloning_source_handles() {
+    struct Handle(usize);
+    impl Source for Handle {
+        fn len(&self) -> usize {
+            self.0
+        }
+    }
+    let order = Order::new(Seq::concat([Seq::source(Handle(0)), Seq::source(Handle(4)), Seq::source(Handle(4))])).unwrap();
+    for (pos, item) in (&order).into_iter().enumerate() {
+        // Handle has neither Copy nor Clone; copying an item only copies its reference.
+        for copy in [item, item, order.get(pos).unwrap()] {
+            assert_eq!(copy.source_ordinal, 1 + pos / 4);
+            assert_eq!(copy.record_index, pos % 4);
+            assert!(std::ptr::eq(copy.source, &order.sources()[copy.source_ordinal]));
+        }
+    }
 }
 
 #[test]
@@ -94,7 +111,7 @@ fn sharding_preserves_global_partition_not_worker_mixture() {
     let seq = Seq::mix([Seq::source(4).shuffle(1), Seq::source(4).shuffle(2)]);
     for worker in 0..2 {
         let order = Order::new(seq.clone().shard(2, worker).unwrap()).unwrap();
-        assert!(order.iter(..).unwrap().indexed().all(|(ordinal, _, _)| ordinal == worker));
+        assert!(order.iter(..).unwrap().all(|item| item.source_ordinal == worker));
     }
 }
 

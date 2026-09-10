@@ -152,7 +152,7 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::concat([Seq::source(2), Seq::source(3)]))?;
-    /// let elements: Vec<(usize, usize)> = order.iter(..)?.map(|(&s, i)| (s, i)).collect();
+    /// let elements: Vec<(usize, usize)> = order.iter(..)?.map(|item| (*item.source, item.record_index)).collect();
     /// assert_eq!(elements, [(2, 0), (2, 1), (3, 0), (3, 1), (3, 2)]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -167,7 +167,7 @@ impl<T> Seq<T> {
     /// use dataorder::{Order, Seq};
     /// // Each part keeps its order and is spread evenly: the longer one appears twice as often.
     /// let order = Order::new(Seq::mix([Seq::source(4), Seq::source(2)]))?;
-    /// let sources: Vec<usize> = order.iter(..)?.map(|(&s, _)| s).collect();
+    /// let sources: Vec<usize> = order.iter(..)?.map(|item| *item.source).collect();
     /// assert_eq!(sources, [4, 4, 2, 4, 4, 2]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -189,7 +189,7 @@ impl<T> Seq<T> {
     /// let order = Order::new(seq)?;
     /// // At virtual time 0.5, half of the 700 uniform elements have appeared.
     /// // The delayed source begins around output position 350, not 500.
-    /// let first = order.iter(..)?.position(|(&source, _)| source == 300).unwrap();
+    /// let first = order.iter(..)?.position(|item| *item.source == 300).unwrap();
     /// assert!((349..=351).contains(&first));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -203,7 +203,7 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(100).shuffle(1))?;
-    /// let mut indices: Vec<usize> = order.iter(..)?.map(|(_, i)| i).collect();
+    /// let mut indices: Vec<usize> = order.iter(..)?.map(|item| item.record_index).collect();
     /// assert_ne!(indices[..5], [0, 1, 2, 3, 4]);
     /// indices.sort_unstable();
     /// assert_eq!(indices, (0..100).collect::<Vec<_>>());
@@ -221,8 +221,8 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(1000).shuffle(1).repeat(2))?;
-    /// let first: Vec<_> = order.iter(..1000)?.map(|(_, i)| i).collect();
-    /// let mut second: Vec<_> = order.iter(1000..)?.map(|(_, i)| i).collect();
+    /// let first: Vec<_> = order.iter(..1000)?.map(|item| item.record_index).collect();
+    /// let mut second: Vec<_> = order.iter(1000..)?.map(|item| item.record_index).collect();
     /// assert_ne!(first, second);
     /// second.sort_unstable();
     /// assert_eq!(second, (0..1000).collect::<Vec<_>>());
@@ -245,7 +245,7 @@ impl<T> Seq<T> {
     /// assert!(order.iter(..)?.eq(epochs.iter(..2500)?));
     /// let longest = Order::new(Seq::source(1000).shuffle(1).cycle(usize::MAX))?;
     /// assert_eq!(longest.len(), usize::MAX);
-    /// assert!(longest.get(usize::MAX - 1).unwrap().1 < 1000);
+    /// assert!(longest.get(usize::MAX - 1).unwrap().record_index < 1000);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
@@ -259,7 +259,7 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).slice(3..=5)?)?;
-    /// assert_eq!(order.iter(..)?.map(|(_, i)| i).collect::<Vec<_>>(), [3, 4, 5]);
+    /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [3, 4, 5]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -310,7 +310,7 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).stride(4, 1))?;
-    /// assert_eq!(order.iter(..)?.map(|(_, i)| i).collect::<Vec<_>>(), [1, 5, 9]);
+    /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [1, 5, 9]);
     /// assert!(Order::new(Seq::source(10).stride(4, 12))?.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -345,8 +345,8 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let seq = Seq::source(10).shuffle(1);
-    /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..)?.map(|(_, i)| i).collect();
-    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1)?)?.iter(..)?.map(|(_, i)| i).collect();
+    /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..)?.map(|item| item.record_index).collect();
+    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1)?)?.iter(..)?.map(|item| item.record_index).collect();
     /// assert_eq!(shard, [all[1], all[5], all[9]]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

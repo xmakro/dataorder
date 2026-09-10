@@ -76,10 +76,33 @@ impl Node {
     }
 }
 
+/// A record selected by [`Order::get`] or [`Cursor`].
+///
+/// The ordinal identifies the source within this order's [`sources`](Order::sources),
+/// even when source values are equal or zero-sized. It is local to the order, not a
+/// persistent dataset ID. The item borrows its source and is cheap to copy.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Item<'a, T> {
+    /// Index into [`Order::sources`], including sources removed during compilation.
+    pub source_ordinal: usize,
+    /// The source handle owned by the order.
+    pub source: &'a T,
+    /// Index of the record within this source, not its position in the order.
+    pub record_index: usize,
+}
+
+impl<T> Copy for Item<'_, T> {}
+
+impl<T> Clone for Item<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 /// A validated sequence with random access and seekable iteration.
 ///
 /// Build one from a [`Seq`] with [`Order::new`]. It owns the source handles and
-/// returns `(&source, index_within_source)` pairs through [`get`](Order::get) and
+/// returns [`Item`] values through [`get`](Order::get) and
 /// [`iter`](Order::iter). It stores the compiled structure, not the output elements.
 ///
 /// Lengths and positions are `usize` in the API and `u64` internally. On a 32-bit
@@ -190,34 +213,7 @@ impl<T> Order<T> {
         self.sources
     }
 
-    /// Returns a source's index in [`sources`](Order::sources).
-    /// Uses the reference's location, so it takes constant time and distinguishes
-    /// sources even when their values compare equal. For zero-sized source types,
-    /// references cannot be distinguished and this returns `None`. Use
-    /// [`get_indexed`](Self::get_indexed) or [`Cursor::indexed`] for explicit ordinals.
-    ///
-    /// ```
-    /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::mix([Seq::source(3), Seq::source(3)]))?;
-    /// let parts: Vec<usize> = order.iter(..)?.map(|(s, _)| order.source_index(s).unwrap()).collect();
-    /// assert_eq!(parts, [0, 1, 0, 1, 0, 1]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// Returns `None` if `source` is not a reference into this order's sources.
-    #[must_use]
-    pub fn source_index(&self, source: &T) -> Option<usize> {
-        let size = std::mem::size_of::<T>();
-        if size == 0 {
-            return None;
-        }
-        let (base, at) = (self.sources.as_ptr() as usize, std::ptr::from_ref(source) as usize);
-        let offset = at.checked_sub(base)?;
-        (offset / size < self.sources.len() && offset.is_multiple_of(size)).then_some(offset / size)
-    }
-
-    /// Returns the source and source index at order position `pos`, or `None`
-    /// when `pos >= len()`.
+    /// Returns the [`Item`] at order position `pos`, or `None` when `pos >= len()`.
     ///
     /// Walks the path to a source. A concat searches its offsets in `O(log k)`; a mix
     /// seeks the interleave and allocates (see the crate's [cost model](crate#cost)), and
@@ -228,28 +224,20 @@ impl<T> Order<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(5).shuffle(1)]))?;
-    /// let (source, index) = order.get(2).unwrap();
-    /// assert_eq!((*source, index), (3, 2));
-    /// assert_eq!(*order.get(3).unwrap().0, 5);
+    /// let item = order.get(2).unwrap();
+    /// assert_eq!(item.source_ordinal, 0);
+    /// assert_eq!((*item.source, item.record_index), (3, 2));
+    /// assert_eq!(*order.get(3).unwrap().source, 5);
     /// assert_eq!(order.get(order.len()), None);
     /// # Ok::<(), dataorder::Error>(())
     /// ```
-    ///
     #[must_use]
-    pub fn get(&self, pos: usize) -> Option<(&T, usize)> {
-        self.get_indexed(pos).map(|(_, source, index)| (source, index))
-    }
-
-    /// Returns `(source_ordinal, source, index_within_source)` at `pos`.
-    /// The ordinal indexes [`sources`](Self::sources), including for zero-sized types.
-    /// Returns `None` when `pos >= len()`.
-    #[must_use]
-    pub fn get_indexed(&self, pos: usize) -> Option<(usize, &T, usize)> {
+    pub fn get(&self, pos: usize) -> Option<Item<'_, T>> {
         if pos >= self.len() {
             return None;
         }
         let (s, i) = get(&self.root, pos as u64, self.ctx);
-        Some((s as usize, &self.sources[s as usize], i as usize))
+        Some(Item { source_ordinal: s as usize, source: &self.sources[s as usize], record_index: i as usize })
     }
 
     /// Returns a cursor over the positions in `range`.
@@ -265,8 +253,8 @@ impl<T> Order<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).shuffle(3))?;
-    /// let all: Vec<usize> = order.iter(..)?.map(|(_, i)| i).collect();
-    /// assert_eq!(order.iter(4..7)?.map(|(_, i)| i).collect::<Vec<_>>(), all[4..7]);
+    /// let all: Vec<usize> = order.iter(..)?.map(|item| item.record_index).collect();
+    /// assert_eq!(order.iter(4..7)?.map(|item| item.record_index).collect::<Vec<_>>(), all[4..7]);
     /// assert_eq!(order.iter(8..)?.count(), 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -294,7 +282,7 @@ impl<T: Source> TryFrom<Seq<T>> for Order<T> {
 }
 
 impl<'a, T> IntoIterator for &'a Order<T> {
-    type Item = (&'a T, usize);
+    type Item = Item<'a, T>;
     type IntoIter = Cursor<'a, T>;
 
     /// The whole order, without fallible range validation.

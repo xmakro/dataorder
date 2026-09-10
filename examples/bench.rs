@@ -158,8 +158,8 @@ fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, c
                 let t = Instant::now();
                 let cursor = ongoing.get_or_insert_with(|| order.iter(walk_start..walk_start + count).unwrap());
                 let mut acc = 0u64;
-                for (s, i) in cursor.take(count) {
-                    acc = acc.wrapping_add((*s ^ i) as u64);
+                for item in cursor.take(count) {
+                    acc = acc.wrapping_add((*item.source ^ item.record_index) as u64);
                 }
                 black_box(acc);
                 elapsed += t.elapsed();

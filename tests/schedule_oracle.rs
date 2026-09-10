@@ -36,9 +36,9 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
         for sample in samples {
             let pos = sample[0].as_u64().unwrap() as usize;
             let expected = (sample[1].as_u64().unwrap() as usize, sample[2].as_u64().unwrap() as usize);
-            let (source, index) = order.get(pos).unwrap();
+            let dataorder::Item { source, record_index: index, .. } = order.get(pos).unwrap();
             assert_eq!((source.ordinal, index), expected, "case {case}, position {pos}");
-            let (source, index) = order.iter(pos..).unwrap().next().unwrap();
+            let dataorder::Item { source, record_index: index, .. } = order.iter(pos..).unwrap().next().unwrap();
             assert_eq!((source.ordinal, index), expected, "cursor: case {case}, position {pos}");
             // Every small fixture is a complete walk. Large fixtures contain short
             // independently generated windows: seek only across gaps, then exercise
@@ -46,7 +46,7 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
             if next_position != Some(pos) {
                 walking.set_range(pos..).unwrap();
             }
-            let (source, index) = walking.next().unwrap();
+            let dataorder::Item { source, record_index: index, .. } = walking.next().unwrap();
             assert_eq!((source.ordinal, index), expected, "walk: case {case}, position {pos}");
             next_position = pos.checked_add(1);
         }

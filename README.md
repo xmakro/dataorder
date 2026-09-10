@@ -52,8 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resume deep into the second epoch without replaying the earlier positions.
     let resume = 1_200_000_000;
-    for (dataset_len, index) in order.iter(resume..resume + 10)? {
-        println!("record {index} from a dataset of {dataset_len} records");
+    for item in order.iter(resume..resume + 10)? {
+        println!("record {} from a dataset of {} records", item.record_index, item.source);
     }
     assert_eq!(order.iter(resume..)?.next(), order.get(resume));
     Ok(())
@@ -62,7 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The position in an order differs from the index within a dataset: position
 1,200,000,000 above selects one of the original billion records. `get(pos)` returns
-an optional dataset handle and record index; `iter(range)?` yields those pairs in order.
+`Option<Item>`; `iter(range)?` yields the same `Item` values in order. Each item
+contains `source_ordinal`, `source` (a reference to the dataset handle), and `record_index`.
 
 ## Using your datasets
 
@@ -88,9 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let code = Seq::source(Dataset { path: "code.bin", records: 200 }).shuffle(2);
     let order = Order::new(Seq::mix([web, code]))?;
 
-    for (dataset, index) in order.iter(..10)? {
+    for item in order.iter(..10)? {
         // Use your own loader to read this record.
-        println!("{}: record {index}", dataset.path);
+        println!("{}: record {}", item.source.path, item.record_index);
     }
     Ok(())
 }
@@ -156,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
-    let first_delayed = order.iter(..)?.position(|(s, _)| order.source_index(s) == Some(1)).unwrap();
+    let first_delayed = order.iter(..)?.position(|item| item.source_ordinal == 1).unwrap();
     // Half of the 750 uniform items have appeared by virtual time 0.5.
     // The delayed source starts around output position 375, not 500.
     assert!((374..=377).contains(&first_delayed));
@@ -203,8 +204,8 @@ resume existing checkpoints with their original crate version.
   Adding an outer repeat can change later epochs of repeats inside it; see the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
-  kind and node path. `take` and `skip` past the end are errors. `get` and
-  `get_indexed` return `None` for invalid positions. `iter`, `seek`, `set_range`,
+  kind and node path. `take` and `skip` past the end are errors. `get`
+  returns `None` for invalid positions. `iter`, `seek`, `set_range`,
   and `Seq::slice` return `Result` for range operations. `Seq::shard` returns
   `Result` after checking worker counts and indices.
   Failed cursor operations leave their state unchanged.
@@ -213,9 +214,9 @@ resume existing checkpoints with their original crate version.
   `offset()` reports the next absolute position; `position(predicate)` is the usual
   consuming iterator search.
 
-Use `get_indexed(pos)` or `iter(range)?.indexed()` to obtain
-`(source_ordinal, dataset, record_index)`. The ordinal indexes `order.sources()` and
-distinguishes equal and zero-sized handles.
+Every item's `source_ordinal` indexes `order.sources()` and distinguishes equal and
+zero-sized handles. Ordinals follow the original configuration, including sources
+whose nodes were removed during compilation. They are local to the order, not persistent dataset IDs.
 
 Invalid schedules expose further context through `Error::sampling_detail()`:
 non-finite parameters, invalid breakpoints, coefficient overflow, or the length,

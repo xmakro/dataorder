@@ -6,7 +6,7 @@ fn order(parts: &[(usize, Sampling)]) -> Order<usize> {
 }
 
 fn entries(order: &Order<usize>) -> Vec<(usize, usize)> {
-    order.iter(..).unwrap().map(|(s, j)| (order.source_index(s).unwrap(), j)).collect()
+    order.iter(..).unwrap().map(|item| (item.source_ordinal, item.record_index)).collect()
 }
 
 fn check_seeks(order: &Order<usize>) {
@@ -15,11 +15,11 @@ fn check_seeks(order: &Order<usize>) {
     for start in (0..=order.len()).rev() {
         let end = (start + 11).min(order.len());
         cursor.set_range(start..end).unwrap();
-        let window: Vec<_> = cursor.by_ref().map(|(s, j)| (order.source_index(s).unwrap(), j)).collect();
+        let window: Vec<_> = cursor.by_ref().map(|item| (item.source_ordinal, item.record_index)).collect();
         assert_eq!(window, all[start..end], "seek {start}");
         if start < order.len() {
-            let (s, j) = order.get(start).unwrap();
-            assert_eq!((order.source_index(s).unwrap(), j), all[start]);
+            let item = order.get(start).unwrap();
+            assert_eq!((item.source_ordinal, item.record_index), all[start]);
         }
     }
 }

@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** use `Item { source_ordinal, source, record_index }` for both
+  `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,
+  `Order::source_index`, `Cursor::indexed` and `IndexedCursor`. Every result
+  identifies its source explicitly, including equal and zero-sized handles.
+
 - **Breaking:** remove `Seq::Weighted`, `Seq::weighted`, `Seq::weighted_with`,
   `WeightedPart`, and the `InvalidWeight`, `ZeroWeights` and `EmptyWeightedPart`
   error kinds. Choose exact counts with `Seq::mix([a.cycle(a_count), b.cycle(b_count)])`
@@ -12,10 +17,9 @@
 - **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
   `Seq::map` or `Seq::try_map` before compilation.
 - **Breaking:** make checked access the default and remove the corresponding `try_`
-  aliases. `Order::get` and `get_indexed` return `Option`; `Order::iter`, cursor
+  aliases. `Order::get` returns `Option`; `Order::iter`, cursor
   `seek`/`set_range`, and `Seq::slice`/`shard` return `Result`. Invalid cursor
-  operations preserve its state. `Order::source_index` returns `None` for foreign
-  references or zero-sized source types; use indexed results for explicit ordinals.
+  operations preserve its state.
 
 - **Breaking:** reduce `MAX_DEPTH` from 256 to 16 and remove `Seq::dispose`.
   `Seq` remains an enum. Compilation, mapping and cleanup now use ordinary recursion

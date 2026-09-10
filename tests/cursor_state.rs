@@ -103,14 +103,14 @@ fn position(raw: usize, end: usize) -> usize {
 }
 
 fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
-    let mut cursor = order.iter(..).unwrap().indexed();
+    let mut cursor = order.iter(..).unwrap();
     let (mut pos, mut end) = (0, order.len());
     for (step, op) in ops.iter().enumerate() {
         let fail = || format!("operation {step}: {op:?}, position={pos}, end={end}");
         match *op {
             Op::Next | Op::Nth(_) => {
                 let n = if let Op::Nth(n) = *op { n } else { 0 };
-                let expected = (n < end - pos).then(|| order.get_indexed(pos + n).unwrap());
+                let expected = (n < end - pos).then(|| order.get(pos + n).unwrap());
                 let actual = if matches!(op, Op::Next) { cursor.next() } else { cursor.nth(n) };
                 if actual != expected {
                     return Err(format!("{}: {actual:?} != {expected:?}", fail()));
@@ -128,7 +128,7 @@ fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
             }
             Op::Clone => cursor = cursor.clone(),
             Op::Last => {
-                let expected = (pos < end).then(|| order.get_indexed(end - 1).unwrap());
+                let expected = (pos < end).then(|| order.get(end - 1).unwrap());
                 if cursor.clone().last() != expected {
                     return Err(fail());
                 }
@@ -234,11 +234,11 @@ fn boundary_skip_rebinds_retained_child_before_backward_seek() {
         Seq::source(3),
     ]))
     .unwrap();
-    let mut cursor = order.iter(..).unwrap().indexed();
+    let mut cursor = order.iter(..).unwrap();
     cursor.next(); // Initialize buffers for the first child.
     cursor.seek(31).unwrap(); // End of the second child; retain the first child's buffers.
     cursor.seek(10).unwrap(); // Same child index, but the retained buffers must be rebound.
-    assert_eq!(cursor.next(), Some(order.get_indexed(10).unwrap()));
+    assert_eq!(cursor.next(), Some(order.get(10).unwrap()));
 }
 
 #[test]
@@ -254,9 +254,9 @@ fn recycled_children_replace_every_transform_parameter() {
     };
     let seq = Seq::concat([nested(1, 11), nested(55, 19), Seq::source(3), nested(99, 7)]).repeat(3);
     let order = Order::with_seed(seq, 42).unwrap();
-    let expected: Vec<_> = (0..order.len()).map(|pos| order.get_indexed(pos).unwrap()).collect();
-    assert_eq!(order.iter(..).unwrap().indexed().collect::<Vec<_>>(), expected);
-    let mut cursor = order.iter(..).unwrap().indexed();
+    let expected: Vec<_> = (0..order.len()).map(|pos| order.get(pos).unwrap()).collect();
+    assert_eq!(order.iter(..).unwrap().collect::<Vec<_>>(), expected);
+    let mut cursor = order.iter(..).unwrap();
     for pos in (0..order.len()).rev().step_by(3).chain((0..order.len()).step_by(7)) {
         cursor.seek(pos).unwrap();
         let mut copy = cursor.clone();

@@ -2,7 +2,8 @@
 //!
 //! Shuffle and mix billions of records without storing a full index array. Ordering
 //! memory grows with the sources and sequence structure, not the number of records.
-//! Each lookup returns a source and an index within it, leaving record loading to you.
+//! Each lookup returns an [`Item`] with a source ordinal, source reference and record
+//! index, leaving record loading to you.
 //!
 //! - **Shuffle on demand:** each shuffled index takes O(1) time on average and O(1) space.
 //! - **Seek into a mix:** counting and binary searches locate each part's position
@@ -34,15 +35,16 @@
 //! // Start anywhere, without replaying the earlier positions.
 //! let resume = 1_200_000_000;
 //! let mut cursor = order.iter(resume..resume + 10)?;
-//! let (source, index) = cursor.next().unwrap();
-//! assert_eq!(*source, 1_000_000_000);
-//! assert!(index < 1_000_000_000);
-//! assert_eq!((source, index), order.get(resume).unwrap());
+//! let item = cursor.next().unwrap();
+//! assert_eq!(item.source_ordinal, 0);
+//! assert_eq!(*item.source, 1_000_000_000);
+//! assert!(item.record_index < 1_000_000_000);
+//! assert_eq!(item, order.get(resume).unwrap());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! Position 1,200,000,000 belongs to the *order*; the returned index belongs to the original
-//! source. [`Order::iter`] returns the same pairs as calling [`Order::get`] at each
+//! source. [`Order::iter`] returns the same items as calling [`Order::get`] at each
 //! position in its range, regardless of previous iteration or seeks.
 //!
 //! Implement [`Source`] for your dataset handles, or use slices, arrays or vectors.
@@ -145,8 +147,8 @@
 //! [`BoundsError`] instead of panicking on invalid bounds. Failed cursor operations
 //! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;
 //! `position(predicate)` remains the standard consuming iterator search.
-//! [`Order::get_indexed`] and [`Cursor::indexed`] include the source ordinal in their
-//! results, so equal and zero-sized sources can be distinguished without pointer identity.
+//! Every [`Item`] includes its source's ordinal in [`Order::sources`], so equal and
+//! zero-sized sources can be distinguished. Ordinals are local to an order.
 //!
 //! # Cost
 //!
@@ -260,10 +262,10 @@ mod source;
 mod tests;
 
 pub use bounds::BoundsError;
-pub use cursor::{Cursor, IndexedCursor};
+pub use cursor::Cursor;
 pub use error::{Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
-pub use order::Order;
+pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};
 pub use source::{Source, salt, salt_path};
 
