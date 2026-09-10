@@ -55,7 +55,7 @@ fn unary_traversals_do_not_allocate_temporary_child_lists() {
     // temporary singleton child list for each unary node.
     assert!(count < 1000, "compilation allocated {count} times");
     let seq = make();
-    let count = allocations(|| drop(seq.map(|n| n + 1)));
+    let count = allocations(|| drop(seq.map_sources(|n| n + 1)));
     // Mapping rebuilds each transform's box and preserves the tree.
     assert!(count < parts * depth + 1000, "mapping allocated {count} times");
 }

@@ -237,13 +237,14 @@ excessive steepness. Both `Error::kind()` and `Error::into_kind()` retain these 
 
 `Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders
 defer configuration validation to `Order::new`, where `T: Source` is required.
-Use `map` or `try_map` to resolve sources before compiling. Configurations support
-up to 16 levels (`MAX_DEPTH`); tree operations and ordinary Rust cleanup recurse
-with depth. Arbitrarily deep hand-built trees are unsupported.
+Use `map_sources` or `try_map_sources` to resolve sources before compiling.
+Configurations support up to 16 levels (`MAX_DEPTH`); tree operations and ordinary
+Rust cleanup recurse with depth. Arbitrarily deep hand-built trees are unsupported.
 
 `Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
-`map` or `try_map`. The optional `serde` feature adds configuration serialization. When
-using JSON, also enable `serde_json/float_roundtrip` to preserve schedule parameters.
+`map_sources` or `try_map_sources`. The optional `serde` feature adds configuration
+serialization. When using JSON, also enable `serde_json/float_roundtrip` to preserve
+schedule parameters.
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
 

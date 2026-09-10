@@ -50,7 +50,7 @@
 //!
 //! Implement [`Source`] for your dataset handles, or use slices, arrays or vectors.
 //! `Order` owns its sources and yields references to them. A `Seq` can be cloned,
-//! compared, hashed, [mapped to another source type](Seq::map) and optionally
+//! compared, hashed, [mapped to another source type](Seq::map_sources) and optionally
 //! [serialized](#feature-flags). `Seq<T>` accepts any `T`; only constructing an
 //! `Order<T>` requires `T: Source`.
 //!
@@ -239,7 +239,8 @@
 //! - `serde_json`'s recursion limit also counts surrounding objects and arrays, so a
 //!   configuration embedded in a larger document can reach that parser limit.
 //!   Deserialization does not validate the configuration. Resolve its sources with
-//!   [`Seq::map`] or [`Seq::try_map`] as needed, then compile it with [`Order::new`].
+//!   [`Seq::map_sources`] or [`Seq::try_map_sources`] as needed, then compile it with
+//!   [`Order::new`].
 //!
 //! # Stability
 //!

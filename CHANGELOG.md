@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** rename `Seq::map` and `Seq::try_map` to `Seq::map_sources` and
+  `Seq::try_map_sources` to make clear that they transform source handles.
+  Update mapping calls to use the new names. Ordering, callback behavior and
+  serialized configurations are unchanged.
+
 - Compare `Item` source ordinals and record indices before source values, avoiding
   source comparisons when either index differs. Document that equality includes
   source values and that their comparison cost depends on the source type.
@@ -146,7 +151,7 @@
   must be rewritten using explicit counts.
 
 - **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
-  `Seq::map` or `Seq::try_map` before compilation.
+  `Seq::map_sources` or `Seq::try_map_sources` before compilation.
 - **Breaking:** make checked access the default and remove the corresponding `try_`
   aliases. `Order::get` returns `Option`; `Order::cursor` and cursor
   `seek`/`set_range` return `Result`. Invalid cursor

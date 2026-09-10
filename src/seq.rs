@@ -10,7 +10,7 @@ use std::convert::Infallible;
 /// Build a sequence with [`source`](Seq::source) and the methods below, then pass it
 /// to [`Order::new`](crate::Order::new). `T` must implement [`Source`](crate::Source)
 /// when you build the order; before that, it can be any type, such as a path you
-/// later [`map`](Seq::map) to a dataset.
+/// later transform with [`map_sources`](Seq::map_sources) into a dataset.
 /// You can also construct enum variants directly. Builders store the configuration
 /// without validating it, loading records or generating indices.
 ///
@@ -294,7 +294,8 @@ impl<T> Seq<T> {
         Self::StepBy { step, inner: Box::new(self) }
     }
 
-    /// Transforms each source with `f`, preserving the sequence structure.
+    /// Transforms each source handle with `f`, preserving the sequence structure.
+    /// Calls `f` once per source node, not once per output record.
     /// Sources are visited in order of appearance. Use this to turn configuration
     /// values into dataset handles. The resulting order is unchanged if each source
     /// keeps its length and salt.
@@ -306,18 +307,18 @@ impl<T> Seq<T> {
     /// // Resolve dataset names to their known record counts.
     /// let counts = HashMap::from([("web", 1000usize), ("code", 200)]);
     /// let names = Seq::mix([Seq::source("web"), Seq::source("code").shuffle(1)]);
-    /// let lengths = names.map(|name| counts[name]);
+    /// let lengths = names.map_sources(|name| counts[name]);
     /// assert_eq!(lengths, Seq::mix([Seq::source(1000), Seq::source(200).shuffle(1)]));
     /// ```
     #[must_use]
-    pub fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Seq<U> {
-        match self.try_map(|t| Ok::<U, Infallible>(f(t))) {
+    pub fn map_sources<U, F: FnMut(T) -> U>(self, mut f: F) -> Seq<U> {
+        match self.try_map_sources(|t| Ok::<U, Infallible>(f(t))) {
             Ok(seq) => seq,
             Err(never) => match never {},
         }
     }
 
-    /// Transforms sources like [`map`](Seq::map), stopping at the first error.
+    /// Transforms sources like [`map_sources`](Seq::map_sources), stopping at the first error.
     /// Sources after the error are not visited. Unvisited inputs and mapped outputs
     /// are dropped normally on error.
     ///
@@ -326,15 +327,15 @@ impl<T> Seq<T> {
     ///
     /// // Parse record counts supplied as strings.
     /// let config = Seq::mix([Seq::source("1000"), Seq::source("200").shuffle(1)]);
-    /// let lengths = config.try_map(str::parse::<usize>)?;
+    /// let lengths = config.try_map_sources(str::parse::<usize>)?;
     /// assert_eq!(lengths, Seq::mix([Seq::source(1000), Seq::source(200).shuffle(1)]));
-    /// assert!(Seq::source("unknown").try_map(str::parse::<usize>).is_err());
+    /// assert!(Seq::source("unknown").try_map_sources(str::parse::<usize>).is_err());
     /// # Ok::<(), std::num::ParseIntError>(())
     /// ```
     ///
     /// # Errors
     /// The first error `f` returns.
-    pub fn try_map<U, E, F: FnMut(T) -> Result<U, E>>(self, mut f: F) -> Result<Seq<U>, E> {
+    pub fn try_map_sources<U, E, F: FnMut(T) -> Result<U, E>>(self, mut f: F) -> Result<Seq<U>, E> {
         map_sources(self, &mut f)
     }
 }

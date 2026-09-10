@@ -50,10 +50,10 @@ fn isolated_case() {
             .spawn(|| {
                 let deep = || (0..MAX_DEPTH - 2).fold(Seq::source("later"), |s, _| s.take(1));
                 // Success, an untouched deep sibling, and an already mapped deep sibling.
-                drop(deep().map(|_| 1usize));
+                drop(deep().map_sources(|_| 1usize));
                 for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
                     let mut calls = Vec::new();
-                    let result = seq.try_map(|name| {
+                    let result = seq.try_map_sources(|name| {
                         calls.push(name);
                         if name == "missing" { Err(()) } else { Ok(1usize) }
                     });
@@ -62,7 +62,7 @@ fn isolated_case() {
                     assert!(calls.len() <= 2);
                 }
                 let seq = Seq::concat([Seq::source("missing"), deep()]);
-                assert!(std::panic::catch_unwind(|| seq.map::<usize, _>(|_| panic!("mapping failed"))).is_err());
+                assert!(std::panic::catch_unwind(|| seq.map_sources::<usize, _>(|_| panic!("mapping failed"))).is_err());
             })
             .unwrap()
             .join()

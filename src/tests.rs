@@ -620,10 +620,10 @@ fn shards_partition_the_sequence() {
     assert_eq!(from_shards.len(), all.len());
 }
 
-/// `map` keeps the structure: over sources of the same lengths and salts the same indices
+/// `map_sources` keeps the structure: over sources of the same lengths and salts the same indices
 /// come out; over bare lengths (salt 0) only the shuffles differ.
 #[test]
-fn map_keeps_the_order() {
+fn map_sources_keeps_the_order() {
     struct Loaded {
         salt: u64,
         len: usize,
@@ -638,12 +638,12 @@ fn map_keeps_the_order() {
     }
     let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).skip(1).step_by(3);
     let order = Order::new(seq.clone()).unwrap();
-    let loaded = Order::new(seq.clone().map(|s| Loaded { salt: s.salt(), len: s.len })).unwrap();
+    let loaded = Order::new(seq.clone().map_sources(|s| Loaded { salt: s.salt(), len: s.len })).unwrap();
     assert_eq!(loaded.sources().iter().map(|l| l.len).collect::<Vec<_>>(), [700, 50, 120]);
     let a: Vec<(usize, usize)> = order.iter().map(|item| (item.source.len, item.record_index)).collect();
     let b: Vec<(usize, usize)> = loaded.iter().map(|item| (item.source.len, item.record_index)).collect();
     assert_eq!(a, b);
-    let lens = Order::new(seq.map(|s| s.len)).unwrap();
+    let lens = Order::new(seq.map_sources(|s| s.len)).unwrap();
     assert_eq!(lens.sources(), &[700, 50, 120]);
     let c: Vec<(usize, usize)> = lens.iter().map(|item| (*item.source, item.record_index)).collect();
     assert_ne!(a, c);

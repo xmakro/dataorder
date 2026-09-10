@@ -47,12 +47,12 @@ fn builders_accept_unresolved_sources() {
     struct Unresolved(&'static str);
     let seq = configuration(Unresolved("10"), Unresolved("20"));
     let mut visited = Vec::new();
-    let seq = seq.map(|source| {
+    let seq = seq.map_sources(|source| {
         visited.push(source.0);
         source.0
     });
     assert_eq!(visited, ["10", "20"]);
-    let order = Order::new(seq.try_map(str::parse::<usize>).unwrap()).unwrap();
+    let order = Order::new(seq.try_map_sources(str::parse::<usize>).unwrap()).unwrap();
     let expected = Order::new(configuration(10, 20)).unwrap();
     assert_eq!(order.len(), 3);
     assert_eq!(order.sources(), [10, 20]);
@@ -68,7 +68,7 @@ fn configuration_errors_are_validated_only_when_compiling() {
     ];
     for (seq, expected) in invalid {
         // Mapping must preserve invalid nodes, including in an empty subtree.
-        let seq = Seq::concat([Seq::source("other"), seq.repeat(0)]).map(|_| 10usize);
+        let seq = Seq::concat([Seq::source("other"), seq.repeat(0)]).map_sources(|_| 10usize);
         let error = Order::new(seq.clone()).unwrap_err();
         assert_eq!(error.kind(), &expected);
         assert_eq!(error.path(), [1, 0]);
@@ -125,13 +125,13 @@ fn unresolved_position_operations_round_trip() {
         r#"{"StepBy":{"step":2,"inner":{"Skip":{"n":1,"inner":{"StepBy":{"step":3,"inner":{"Take":{"n":7,"inner":{"Skip":{"n":2,"inner":{"Source":"data"}}}}}}}}}}}"#
     );
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
-    let order = Order::new(back.map(|_| 10usize)).unwrap();
+    let order = Order::new(back.map_sources(|_| 10usize)).unwrap();
     assert_eq!(order.iter().map(|item| item.record_index).collect::<Vec<_>>(), [5]);
     let seq = Seq::source("data").skip(11).step_by(0);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, seq.map(str::to_owned));
-    assert_eq!(Order::new(back.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::ZeroStep);
+    assert_eq!(back, seq.map_sources(str::to_owned));
+    assert_eq!(Order::new(back.map_sources(|_| 10usize)).unwrap_err().kind(), &ErrorKind::ZeroStep);
 }
 
 #[test]
@@ -276,11 +276,11 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(Order::new(seq).unwrap().len(), 22);
     let mut n = 3usize;
     assert_eq!(Order::new(Seq::source(&mut n)).unwrap().len(), 3);
-    let lens = Seq::mix([Seq::source(4), Seq::source(6)]).map(|n| n * 2);
+    let lens = Seq::mix([Seq::source(4), Seq::source(6)]).map_sources(|n| n * 2);
     assert_eq!(Order::new(lens.clone()).unwrap().len(), 20);
-    let opened = lens.clone().try_map(|n| if n < 10 { Ok(shard("x", n).map(|s| s.len)) } else { Err(n) });
+    let opened = lens.clone().try_map_sources(|n| if n < 10 { Ok(shard("x", n).map_sources(|s| s.len)) } else { Err(n) });
     assert_eq!(opened, Err(12));
-    assert_eq!(Order::new(lens.try_map(|n| Ok::<_, ()>(n / 2)).unwrap()).unwrap().len(), 10);
+    assert_eq!(Order::new(lens.try_map_sources(|n| Ok::<_, ()>(n / 2)).unwrap()).unwrap().len(), 10);
     // Salts pass through pointers; slices, arrays and vectors are sources of their elements.
     let boxed: Box<&Shard> = Box::new(&shared);
     assert_eq!(boxed.salt(), dataorder::salt("s"));
