@@ -86,30 +86,14 @@ fn uniform_cases() -> Vec<Vec<u64>> {
 
 fn scheduled_cases() -> Vec<(Vec<u64>, Vec<Sampling>)> {
     vec![
-        (vec![1000, 300], vec![Uniform, DelayedLinear { start: 0.4, full: 0.4 }]),
-        (vec![2000, 500], vec![Uniform, DelayedLinear { start: 0.2, full: 0.6 }]),
-        (vec![14, 124, 43], vec![DelayedLinear { start: 0.5, full: 0.5 }, Uniform, DelayedLinear { start: 0.2, full: 0.6 }]),
-        (
-            vec![500, 500, 500, 500],
-            vec![
-                Uniform,
-                DelayedLinear { start: 0.1, full: 0.1 },
-                DelayedLinear { start: 0.3, full: 0.3 },
-                DelayedLinear { start: 0.0, full: 0.5 },
-            ],
-        ),
-        (
-            vec![300, 300, 0, 7],
-            vec![
-                DelayedLinear { start: 0.0, full: 0.0 },
-                DelayedLinear { start: 0.0, full: 0.0 },
-                DelayedLinear { start: 0.9, full: 0.9 },
-                Uniform,
-            ],
-        ),
-        (vec![1000, 50, 50], vec![Uniform, DelayedLinear { start: 0.9, full: 0.9 }, DelayedLinear { start: 0.8, full: 0.95 }]),
-        (vec![100, 100, 800], vec![DelayedLinear { start: 0.0, full: 0.5 }, DelayedLinear { start: 0.5, full: 1.0 }, Uniform]),
-        (vec![3, 1000, 1], vec![DelayedLinear { start: 0.7, full: 0.7 }, Uniform, DelayedLinear { start: 0.2, full: 0.9 }]),
+        (vec![1000, 300], vec![Uniform, Sampling::delayed(0.4)]),
+        (vec![2000, 500], vec![Uniform, Sampling::ramp(0.2, 0.6)]),
+        (vec![14, 124, 43], vec![Sampling::delayed(0.5), Uniform, Sampling::ramp(0.2, 0.6)]),
+        (vec![500, 500, 500, 500], vec![Uniform, Sampling::delayed(0.1), Sampling::delayed(0.3), Sampling::ramp(0.0, 0.5)]),
+        (vec![300, 300, 0, 7], vec![Sampling::delayed(0.0), Sampling::delayed(0.0), Sampling::delayed(0.9), Uniform]),
+        (vec![1000, 50, 50], vec![Uniform, Sampling::delayed(0.9), Sampling::ramp(0.8, 0.95)]),
+        (vec![100, 100, 800], vec![Sampling::ramp(0.0, 0.5), Sampling::ramp(0.5, 1.0), Uniform]),
+        (vec![3, 1000, 1], vec![Sampling::delayed(0.7), Uniform, Sampling::ramp(0.2, 0.9)]),
         (vec![300, 700], vec![Sampling::until(0.5), Uniform]),
         (vec![200, 300, 500], vec![Sampling::fading(0.2, 0.6), Sampling::trapezoid(0.3, 0.5, 0.7, 0.9), Uniform]),
         (vec![500, 500], vec![Sampling::until(0.5), Sampling::delayed(0.5)]),
@@ -243,7 +227,7 @@ fn random_configurations() {
                             Uniform
                         }
                     }
-                    _ => DelayedLinear { start: d0 as f64 / 1000.0, full: d1 as f64 / 1000.0 },
+                    _ => Sampling::ramp(d0 as f64 / 1000.0, d1 as f64 / 1000.0),
                 }
             })
             .collect();
@@ -277,7 +261,6 @@ fn random_configurations() {
         }
         for (s, samp) in sampling.iter().enumerate() {
             let (start, off) = match *samp {
-                DelayedLinear { start, .. } => (start, 1.0),
                 Trapezoid { start, off, .. } => (start, off),
                 Uniform => continue,
             };
@@ -357,12 +340,12 @@ fn uniform_and_explicit_constant_schedules_are_interchangeable() {
 fn rejects_bad_configurations() {
     use SamplingError::*;
     for bad in [
-        DelayedLinear { start: 1.0, full: 1.0 },
-        DelayedLinear { start: -0.1, full: -0.1 },
-        DelayedLinear { start: f64::NAN, full: 0.5 },
-        DelayedLinear { start: 0.5, full: 0.4 },
-        DelayedLinear { start: 1.0, full: 1.0 },
-        DelayedLinear { start: 0.2, full: 1.5 },
+        Sampling::delayed(1.0),
+        Sampling::delayed(-0.1),
+        Sampling::ramp(f64::NAN, 0.5),
+        Sampling::ramp(0.5, 0.4),
+        Sampling::ramp(1.0, 1.0),
+        Sampling::ramp(0.2, 1.5),
         Sampling::trapezoid(0.5, 0.5, 0.5, 0.5),
         Sampling::trapezoid(0.0, 0.0, 0.0, 0.0),
         Sampling::trapezoid(0.2, 0.1, 0.5, 0.6),
@@ -382,17 +365,13 @@ fn rejects_bad_configurations() {
         Err(TooSteep { seq: 1, .. })
     ));
     assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
-    assert!(matches!(
-        Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]),
-        Err(TooSteep { seq: 1, .. })
-    ));
+    assert!(matches!(Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, Sampling::delayed(0.999)]), Err(TooSteep { seq: 1, .. })));
     // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
-    assert!(Interleave::with_sampling(&[10, 0], &[Uniform, DelayedLinear { start: 0.999, full: 0.999 }]).is_ok());
-    let il = Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }])
-        .unwrap();
+    assert!(Interleave::with_sampling(&[10, 0], &[Uniform, Sampling::delayed(0.999)]).is_ok());
+    let il = Interleave::with_sampling(&[100, 100], &[Sampling::delayed(0.0), Sampling::delayed(0.0)]).unwrap();
     assert_eq!(full(&il).len(), 200);
     // A delay halfway along the virtual clock begins one quarter through this output.
-    let il = Interleave::with_sampling(&[500, 500], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]).unwrap();
+    let il = Interleave::with_sampling(&[500, 500], &[Uniform, Sampling::delayed(0.5)]).unwrap();
     assert_eq!(full(&il).iter().position(|&(s, _)| s == 1), Some(251));
 }
 
@@ -419,7 +398,7 @@ fn empty_sequences_do_not_affect_the_order() {
         let mut sampling2 = sampling.clone();
         let at = rng.below64(lens.len() as u64 + 1) as usize;
         lens2.insert(at, 0);
-        sampling2.insert(at, if at.is_multiple_of(2) { DelayedLinear { start: 0.99, full: 0.99 } } else { Sampling::until(0.01) });
+        sampling2.insert(at, if at.is_multiple_of(2) { Sampling::delayed(0.99) } else { Sampling::until(0.01) });
         let il2 = Interleave::with_sampling(&lens2, &sampling2).unwrap();
         let got: Vec<(usize, u64)> = full(&il2).into_iter().map(|(s, j)| (if s > at { s - 1 } else { s }, j)).collect();
         assert_eq!(got, full(&il), "{lens:?} {sampling:?} with an empty part at {at}");
@@ -460,7 +439,7 @@ fn empty_and_trivial() {
 #[test]
 fn huge_lengths_seek_consistently() {
     let lens = [MAX_TOTAL_LEN / 2, MAX_TOTAL_LEN / 2 - (1 << 41), 7, 1, 1 << 40];
-    let sampling = [Uniform, Uniform, DelayedLinear { start: 0.5, full: 0.5 }, Uniform, DelayedLinear { start: 0.3, full: 0.7 }];
+    let sampling = [Uniform, Uniform, Sampling::delayed(0.5), Uniform, Sampling::ramp(0.3, 0.7)];
     let il = Interleave::with_sampling(&lens, &sampling).unwrap();
     let n = il.len();
     let mut rng = Rng(777);

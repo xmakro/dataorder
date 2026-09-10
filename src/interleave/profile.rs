@@ -52,13 +52,6 @@ impl Profile {
         Self { segs }
     }
 
-    /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the
-    /// final rate at `d1`, then constant. The final rate `r = 2/(2 − d0 − d1)` makes the
-    /// total share one.
-    pub(crate) fn delayed_linear(d0: f64, d1: f64) -> Self {
-        Self::trapezoid(d0, d1, 1.0, 1.0)
-    }
-
     /// `Trapezoid { start: d0, full: d1, fade: d2, off: d3 }`: zero until `d0`, rising
     /// linearly to the full rate at `d1`, constant until `d2`, falling linearly to zero at
     /// `d3`, zero afterwards. The full rate `r = 2/((d2 − d1) + (d3 − d0))` makes the total
@@ -146,9 +139,9 @@ mod tests {
     }
 
     #[test]
-    fn delayed_linear_shape() {
+    fn ramp_and_constant_shapes() {
         for &(d0, d1) in &[(0.0, 0.0), (0.2, 0.2), (0.2, 0.6), (0.0, 1.0), (0.5, 1.0), (0.999, 0.9995)] {
-            let p = Profile::delayed_linear(d0, d1);
+            let p = Profile::trapezoid(d0, d1, 1.0, 1.0);
             assert_eq!(p.share(0.0), 0.0);
             assert_eq!(p.share(d0), 0.0);
             assert!((p.share(1.0) - 1.0).abs() < 1e-12, "F(1) = {}", p.share(1.0));
@@ -209,20 +202,14 @@ mod tests {
                 prev = t;
             }
         }
-        // A delayed-linear profile is the trapezoid with the fall at the end, bit for bit.
-        let (a, b) = (Profile::delayed_linear(0.2, 0.6), Profile::trapezoid(0.2, 0.6, 1.0, 1.0));
-        assert_eq!(a.segs.len(), b.segs.len());
-        for (x, y) in a.segs.iter().zip(&b.segs) {
-            assert_eq!((x.r0, x.r1, x.share, x.c), (y.r0, y.r1, y.share, y.c));
-        }
-        assert!((a.max_rate() - 5.0 / 3.0).abs() <= f64::EPSILON);
+        assert!((Profile::trapezoid(0.2, 0.6, 1.0, 1.0).max_rate() - 5.0 / 3.0).abs() <= f64::EPSILON);
     }
 
     #[test]
     fn inverse_is_monotone_and_independent_of_hint() {
         for p in [
-            Profile::delayed_linear(0.0, 0.0),
-            Profile::delayed_linear(0.2, 0.6),
+            Profile::trapezoid(0.0, 0.0, 1.0, 1.0),
+            Profile::trapezoid(0.2, 0.6, 1.0, 1.0),
             Profile::trapezoid(0.1, 0.3, 0.5, 0.9),
             Profile::trapezoid(0.25, 0.25, 0.75, 0.75),
             Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0),

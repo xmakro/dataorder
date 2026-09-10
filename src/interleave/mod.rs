@@ -108,25 +108,10 @@ impl Interleave {
         let live = lens.iter().filter(|&&n| n > 0).count();
         let mut rank = 0usize;
         let mut seqs = Vec::with_capacity(k);
-        let mut profiles = vec![Profile::delayed_linear(0.0, 0.0)];
+        let mut profiles = vec![Profile::trapezoid(0.0, 0.0, 1.0, 1.0)];
         for (i, (&n, &s)) in lens.iter().zip(sampling).enumerate() {
             let profile = match s {
                 Sampling::Uniform => None,
-                Sampling::DelayedLinear { start: d0, full: d1 } => {
-                    let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= 1.0 && d0 < 1.0;
-                    if !(d0.is_finite() && d1.is_finite() && ordered) {
-                        return Err(SamplingError::InvalidParameter {
-                            seq: i,
-                            sampling: s,
-                            reason: if d0.is_finite() && d1.is_finite() {
-                                crate::SamplingReason::InvalidBreakpoints
-                            } else {
-                                crate::SamplingReason::NonFiniteParameter
-                            },
-                        });
-                    }
-                    Some(Profile::delayed_linear(d0, d1))
-                }
                 Sampling::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
                     let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 < d3;
                     if !([d0, d1, d2, d3].iter().all(|d| d.is_finite()) && ordered) {

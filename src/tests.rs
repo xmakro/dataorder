@@ -339,8 +339,8 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         1 => Seq::mix(parts(rng, depth - 1)),
         2 => Seq::mix(parts(rng, depth - 1).into_iter().map(|p| {
             let sampling = match rng.below(6) {
-                0 => Sampling::DelayedLinear { start: 0.3, full: 0.6 },
-                1 => Sampling::DelayedLinear { start: 0.5, full: 0.5 },
+                0 => Sampling::ramp(0.3, 0.6),
+                1 => Sampling::delayed(0.5),
                 2 => Sampling::until(0.5),
                 3 => Sampling::trapezoid(0.1, 0.3, 0.6, 0.9),
                 _ => Sampling::Uniform,
@@ -677,16 +677,10 @@ fn errors() {
     let half = || src(0, usize::MAX / 2 + 1);
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
     // A mix that folds away is still validated; a schedule problem is found at the part.
-    let over1 = Seq::mix([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
+    let over1 = Seq::mix([(src(0, 10), Sampling::delayed(2.0))]);
     assert_eq!(
         Order::new(over1).unwrap_err(),
-        at(
-            ErrorKind::InvalidSampling {
-                sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 },
-                reason: crate::SamplingReason::InvalidBreakpoints,
-            },
-            &[0],
-        )
+        at(ErrorKind::InvalidSampling { sampling: Sampling::delayed(2.0), reason: crate::SamplingReason::InvalidBreakpoints }, &[0])
     );
     let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Sampling::Uniform), (src(1, 1 << 30), Sampling::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
@@ -875,9 +869,11 @@ fn seq_eq_and_hash() {
     let a = Seq::mix([(src(0, 5), Sampling::ramp(0.0, 0.5))]);
     let b = Seq::mix([(src(0, 5), Sampling::ramp(-0.0, 0.5))]);
     let c = Seq::mix([(src(0, 5), Sampling::ramp(0.1, 0.5))]);
+    let trapezoid = Seq::mix([(src(0, 5), Sampling::trapezoid(0.0, 0.5, 1.0, 1.0))]);
     assert_eq!(a, b);
+    assert_eq!(a, trapezoid);
     assert_ne!(a, c);
-    let set: HashSet<Seq<Src>> = [a.clone(), b, c.clone(), a.clone()].into_iter().collect();
+    let set: HashSet<Seq<Src>> = [a.clone(), b, c.clone(), trapezoid].into_iter().collect();
     assert_eq!(set.len(), 2);
     assert!(set.contains(&a) && set.contains(&c));
     let nan = Seq::mix([(src(0, 5), Sampling::delayed(f64::NAN))]);
@@ -885,7 +881,8 @@ fn seq_eq_and_hash() {
     assert_eq!(Sampling::delayed(0.5), Sampling::ramp(0.5, 0.5));
     assert_eq!(Sampling::until(0.5), Sampling::fading(0.5, 0.5));
     assert_ne!(Sampling::until(0.5), Sampling::delayed(0.5));
-    assert_ne!(Sampling::trapezoid(0.0, 0.0, 1.0, 1.0), Sampling::ramp(0.0, 0.0));
+    assert_eq!(Sampling::trapezoid(0.0, 0.0, 1.0, 1.0), Sampling::ramp(0.0, 0.0));
+    assert_ne!(Sampling::Uniform, Sampling::ramp(0.0, 0.0));
     assert_eq!(Sampling::trapezoid(-0.0, 0.1, 0.5, 0.9), Sampling::trapezoid(0.0, 0.1, 0.5, 0.9));
     assert_eq!(MixPart::from(src(1, 2)), MixPart { seq: src(1, 2), sampling: Sampling::Uniform });
 }

@@ -62,7 +62,10 @@ use std::hash::{Hash, Hasher};
 /// overflow derived coefficients. Use equal adjacent breakpoints for an abrupt
 /// change. These individual numerical limits are separate from schedule overlap.
 ///
-/// Equality and hashing compare parameter bits, treating `-0.0` as `0.0`.
+/// Equality and hashing compare variants and parameter bits, treating `-0.0` as
+/// `0.0`. Constructors such as [`delayed`](Self::delayed) and [`ramp`](Self::ramp)
+/// return [`Trapezoid`](Self::Trapezoid), so equal breakpoints compare equal.
+/// [`Uniform`](Self::Uniform) remains a distinct variant.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
@@ -71,27 +74,17 @@ pub enum Sampling {
     /// Its fraction of the actual output changes as other parts start, ramp or stop.
     #[default]
     Uniform,
-    /// A rate that rises from zero at `start` to its final value at `full`, then
-    /// stays constant. The rate is zero before `start`.
-    ///
-    /// `start == full` switches the rate on abruptly. Requires finite parameters
-    /// with `0 ≤ start ≤ full ≤ 1` and `start < 1`. Build it with
-    /// [`Sampling::delayed`] or [`Sampling::ramp`].
-    DelayedLinear {
-        /// Virtual time at which the rate starts rising from zero.
-        start: f64,
-        /// Virtual time at which it reaches its final value.
-        full: f64,
-    },
     /// A rate that rises, stays constant, then falls back to zero.
     ///
     /// It is zero before `start`, rises linearly until `full`, stays constant until
     /// `fade`, falls linearly until `off`, then stays zero. Equal neighboring
     /// breakpoints make a transition abrupt.
+    /// Setting `fade` and `off` to 1 keeps the full rate through the end of the clock.
     ///
     /// Requires finite parameters with `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and
     /// `start < off`, ensuring some time at a positive rate.
-    /// Build it with [`Sampling::until`], [`Sampling::fading`] or [`Sampling::trapezoid`].
+    /// Build it with [`Sampling::delayed`], [`Sampling::ramp`], [`Sampling::until`],
+    /// [`Sampling::fading`] or [`Sampling::trapezoid`].
     Trapezoid {
         /// Virtual time at which the rate starts rising from zero.
         start: f64,
@@ -110,11 +103,11 @@ impl Sampling {
     ///
     /// ```
     /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::delayed(0.5), Sampling::DelayedLinear { start: 0.5, full: 0.5 });
+    /// assert_eq!(Sampling::delayed(0.5), Sampling::Trapezoid { start: 0.5, full: 0.5, fade: 1.0, off: 1.0 });
     /// ```
     #[must_use]
     pub const fn delayed(at: f64) -> Self {
-        Self::DelayedLinear { start: at, full: at }
+        Self::Trapezoid { start: at, full: at, fade: 1.0, off: 1.0 }
     }
 
     /// Creates a rate that rises linearly from zero at virtual time `start` to `full`.
@@ -123,11 +116,11 @@ impl Sampling {
     ///
     /// ```
     /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::ramp(0.2, 0.6), Sampling::DelayedLinear { start: 0.2, full: 0.6 });
+    /// assert_eq!(Sampling::ramp(0.2, 0.6), Sampling::Trapezoid { start: 0.2, full: 0.6, fade: 1.0, off: 1.0 });
     /// ```
     #[must_use]
     pub const fn ramp(start: f64, full: f64) -> Self {
-        Self::DelayedLinear { start, full }
+        Self::Trapezoid { start, full, fade: 1.0, off: 1.0 }
     }
 
     /// Creates a schedule with a constant rate until virtual time `at`, then zero.
@@ -170,7 +163,6 @@ impl Sampling {
     fn bits(&self) -> [u64; 4] {
         match *self {
             Self::Uniform => [0; 4],
-            Self::DelayedLinear { start, full } => [float_bits(start), float_bits(full), 0, 0],
             Self::Trapezoid { start, full, fade, off } => [float_bits(start), float_bits(full), float_bits(fade), float_bits(off)],
         }
     }

@@ -2,6 +2,14 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Sampling::DelayedLinear`. `delayed(at)` and
+  `ramp(start, full)` now return `Trapezoid` with `fade: 1.0` and `off: 1.0`.
+  Replace serialized `DelayedLinear` variants with `Trapezoid`, preserving `start`
+  and `full` and adding those two fields; the old variant is rejected.
+  Equivalent constructor and explicit trapezoid values now compare and hash
+  alike; `Uniform` remains distinct. Ordering outputs are unchanged. Debug output
+  and error messages that include these schedules now show `Trapezoid`.
+
 - **Breaking:** move sampling diagnostics into `ErrorKind`. `InvalidSampling` now
   contains `sampling` and `reason: SamplingReason`; `TooSteep` contains `len`,
   `peak_rate` and `limit`. Remove `Error::sampling_detail` and `SamplingDetail`.

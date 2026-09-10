@@ -251,8 +251,9 @@ fn serde_round_trip() {
     let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle(9), Sampling::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
-        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#
+        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"sampling":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
     );
+    assert_eq!(serde_json::to_string(&Sampling::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
     assert_eq!(serde_json::to_string(&Sampling::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
     assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
     // Unknown fields are rejected in every variant.
@@ -260,12 +261,13 @@ fn serde_round_trip() {
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
         r#"{"Shuffle":{"seed":1,"inner":{"Source":5},"extra":true}}"#,
         r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform","extra":1}]}"#,
-        r#"{"Mix":[{"seq":{"Source":4},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2,"end":0.3}}}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"sampling":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0,"end":0.3}}}]}"#,
     ] {
         assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
     }
     // Removed variants are rejected rather than silently reinterpreted.
     for json in [
+        r#"{"Mix":[{"seq":{"Source":4},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#,
         r#"{"Weighted":{"total":9,"parts":[]}}"#,
         r#"{"Stride":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
         r#"{"Shard":{"count":2,"index":1,"inner":{"Source":4}}}"#,
