@@ -622,7 +622,7 @@ impl<T: Source> Seq<T> {
     /// Validates the configuration and returns its length without consuming it.
     /// Performs the same checks as [`Order::new`], using the sources' lengths.
     /// This builds and discards a compiled order; calling it before `Order::new`
-    /// repeats compilation. Use [`Order::prepare`] to compile once with diagnostics.
+    /// repeats compilation. Use `Order::new` directly to retain the compiled order.
     /// This borrows the tree: on rejection, use [`dispose`](Self::dispose) rather
     /// than recursive drop. [`validate`](Self::validate) handles that cleanup for you.
     ///

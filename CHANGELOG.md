@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Order::prepare` and the `Preparation`, `PreparedNode`,
+  `PreparedKind`, `PreparedParameters`, `PreparedSource`, `PreparedMix` and
+  `WeightedAllocation` report types. Use `Order::new` or `Order::with_seed` to
+  compile orders. Configuration errors retain their paths and sampling details.
 - **Breaking:** schedules now use independent curves on a shared virtual clock.
   `Uniform` is constant in virtual time, like `delayed(0.0)` or `until(1.0)`.
   Start/full/fade/off values no longer denote fractions of the final output;
@@ -12,8 +16,7 @@
   most five segments and compile independently in linear time in the part count.
   Individual parameter, coefficient and numerical-resolution checks remain.
 - Remove `ErrorKind::Overcommitted`, `ErrorKind::SamplingOverflow`,
-  `SamplingDiagnostics` and `PreparedMix::diagnostics`. Preparation still reports
-  each original mix's counts and independent schedules.
+  `SamplingDiagnostics` and `PreparedMix::diagnostics`.
 - Seek by summing integer counts below virtual-time keys and bounded bisection.
   Counts, source-local order and seek/walk agreement remain exact; weighted
   allocation and shuffle arithmetic are unchanged. Scheduled order fingerprints

@@ -203,21 +203,13 @@ resume existing checkpoints with their original crate version.
 
 Use `get_indexed(pos)` or `iter(range).indexed()` to obtain
 `(source_ordinal, dataset, record_index)`. The ordinal indexes `order.sources()` and
-distinguishes equal and zero-sized handles. `Order::prepare(seq, seed)` returns an
-order together with a report without enumerating records:
+distinguishes equal and zero-sized handles.
 
-- `nodes` describes the simplified tree, including source offsets, concat boundaries,
-  shuffle seeds and salts, epoch lengths and depths, slices and composed strides.
-- `sources` records original paths, lengths and salts, even for discarded sources.
-  A compiled source node's `source_ordinal` indexes this vector, connecting a folded
-  range back to its original source. Transform parameters use child coordinates;
-  add a source's own offset when resolving its record indices.
-- `weighted` records quotas at original configuration paths. `mixes` records counts
-  and independent virtual-clock schedules at those original paths.
+Invalid schedules expose further context through `Error::sampling_detail()`:
+non-finite parameters, invalid breakpoints, coefficient overflow, or the length,
+peak rate and limit behind excessive steepness.
 
-Ordinary constructors do not collect this report. Invalid schedules expose further
-context through `Error::sampling_detail()`: non-finite parameters, invalid breakpoints,
-coefficient overflow, or the length, peak rate and limit behind excessive steepness. `Seq::check` performs compilation to validate a borrowed configuration;
+`Seq::check` performs compilation to validate a borrowed configuration;
 calling it before `Order::new` repeats that work.
 For configuration trees of unknown depth, use consuming `Seq::validate` to return
 the tree on success and dispose of it safely on error. After a borrowed check rejects

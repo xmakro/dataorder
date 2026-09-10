@@ -142,8 +142,6 @@
 //! that part; a shuffle of at most one element and a single repetition need no wrapper.
 //! A cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.
-//! [`Order::prepare`] optionally reports exact weighted quotas and the final compiled
-//! node lengths. It collects no output elements; ordinary constructors skip that report.
 //!
 //! [`Order::try_get`] returns `None` for an invalid position. [`Order::try_iter`],
 //! [`Cursor::try_seek`], [`Cursor::try_set_range`], [`Seq::try_slice`] and [`Seq::try_shard`] report
@@ -260,7 +258,6 @@ mod error;
 mod interleave;
 mod order;
 mod perm;
-mod preparation;
 mod seq;
 mod source;
 #[cfg(test)]
@@ -272,7 +269,6 @@ pub use cursor::{Cursor, IndexedCursor};
 pub use error::{Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
 pub use order::Order;
-pub use preparation::{Preparation, PreparedKind, PreparedMix, PreparedNode, PreparedParameters, PreparedSource, WeightedAllocation};
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::{Source, salt, salt_path};
 

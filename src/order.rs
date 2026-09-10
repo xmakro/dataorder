@@ -8,7 +8,6 @@ use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
-use crate::preparation::{CompilationReport, Preparation, PreparedMix, PreparedSource, WeightedAllocation};
 use crate::seq::{MixPart, Rebuild, WeightedPart};
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
@@ -133,37 +132,8 @@ impl<T: Source> Order<T> {
     /// # Errors
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
-        Self::build(seq, seed, None)
-    }
-
-    /// Compiles with `seed` and returns quotas, compiled parameters, original source
-    /// metadata, part counts and independent virtual-clock schedules.
-    /// The report is separate from the order and can be dropped after inspection.
-    /// No records are enumerated. Unlike [`new`](Self::new), this collects diagnostic
-    /// paths and metadata copies during compilation.
-    ///
-    /// ```
-    /// use dataorder::{Order, PreparedKind, Seq};
-    /// let seq = Seq::weighted(1_000_000_000, [(Seq::source(10), 3.0), (Seq::source(20), 1.0)]);
-    /// let (order, report) = Order::prepare(seq, 42)?;
-    /// assert_eq!(report.weighted[0].counts, [750_000_000, 250_000_000]);
-    /// assert_eq!(report.nodes[0].kind, PreparedKind::Mix);
-    /// assert_eq!(report.nodes[0].len, order.len() as u64);
-    /// # Ok::<(), dataorder::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    /// As for [`Order::new`].
-    pub fn prepare(seq: Seq<T>, seed: u64) -> Result<(Self, Preparation), Error> {
-        let mut report = CompilationReport::default();
-        let order = Self::build(seq, seed, Some(&mut report))?;
-        let report = Preparation::new(&order.root, report);
-        Ok((order, report))
-    }
-
-    fn build(seq: Seq<T>, seed: u64, report: Option<&mut CompilationReport>) -> Result<Self, Error> {
         let (seq, sources) = separate_sources(seq);
-        let mut c = Compiler { sources, salts: Vec::new(), path: Vec::new(), report };
+        let mut c = Compiler { sources, salts: Vec::new(), path: Vec::new() };
         let root = c.compile(seq, 0, 1)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::new(ErrorKind::OrderTooLong { len: root.len() }, Vec::new()));
@@ -420,14 +390,12 @@ pub(crate) fn get_with<'a>(
     }
 }
 
-struct Compiler<'a, T> {
+struct Compiler<T> {
     sources: Vec<T>,
     /// Salt and length of every source, by index, for the salts of the shuffles above them.
     salts: Vec<(u64, u64)>,
     /// Child indices from the root to the node being compiled, for error reports.
     path: Vec<usize>,
-    /// Optional report; ordinary builds do not allocate diagnostic paths or quotas.
-    report: Option<&'a mut CompilationReport>,
 }
 
 /// Move source values out before recursive compilation: a `Seq<T>` contains T inline, so
@@ -492,7 +460,7 @@ fn separate_sources<T>(seq: Seq<T>) -> (Seq<usize>, Vec<T>) {
     (done.pop().unwrap(), sources)
 }
 
-impl<T: Source> Compiler<'_, T> {
+impl<T: Source> Compiler<T> {
     /// An error at the node being compiled, or at its child `part`.
     fn err_at(&self, kind: ErrorKind, part: Option<usize>) -> Error {
         let mut path = self.path.clone();
@@ -559,12 +527,7 @@ impl<T: Source> Compiler<'_, T> {
         let source = &self.sources[index];
         let len = source.len() as u64;
         let src = u32::try_from(index).map_err(|_| self.err(ErrorKind::TooManySources))?;
-        let salt = source.salt();
-        self.salts.push((salt, len));
-        if let Some(report) = &mut self.report {
-            debug_assert_eq!(report.sources.len(), index);
-            report.sources.push(PreparedSource { path: self.path.clone(), len, salt });
-        }
+        self.salts.push((source.salt(), len));
         Ok(if len == 0 { Node::Empty } else { Node::Source { src, offset: 0, len } })
     }
 
@@ -672,9 +635,6 @@ impl<T: Source> Compiler<'_, T> {
             let (kind, part) = e.into_kind();
             self.err_at(kind, part).with_sampling_detail(detail)
         })?;
-        if let Some(report) = &mut self.report {
-            report.mixes.push(PreparedMix { path: self.path.clone(), counts: lens, sampling: sampling.to_vec() });
-        }
         children.retain(|c| c.len() > 0);
         children.shrink_to_fit();
         il.remove_empty();
@@ -699,9 +659,6 @@ impl<T: Source> Compiler<'_, T> {
                 return Err(self.err_at(kind, part));
             }
         };
-        if let Some(report) = &mut self.report {
-            report.weighted.push(WeightedAllocation { path: self.path.clone(), counts: shares.clone() });
-        }
         let mut children = Vec::with_capacity(parts.len());
         let mut parts = parts.into_iter().zip(shares);
         while let Some((part, share)) = parts.next() {

@@ -1,5 +1,5 @@
-//! Public regressions for review findings and the added inspection/access APIs.
-use dataorder::{BoundsError, ErrorKind, Order, PreparedKind, Sampling, Seq, Source, WeightedPart};
+//! Public regressions for review findings and access APIs.
+use dataorder::{BoundsError, ErrorKind, Order, Sampling, Seq, Source, WeightedPart};
 use std::ops::Bound;
 
 #[test]
@@ -86,49 +86,23 @@ fn indexed_results_distinguish_zero_sized_sources() {
 }
 
 #[test]
-fn preparation_reports_original_quotas_and_compiled_lengths() {
-    let seq = Seq::concat([
-        Seq::weighted(4, [(Seq::source(10), 5.0), (Seq::source(10), 3.0), (Seq::source(10), 1.0)]),
-        Seq::weighted(100, [(Seq::source(3), 1.0)]).take(0),
-    ]);
-    let ordinary = Order::with_seed(seq.clone(), 7).unwrap();
-    let (order, report) = Order::prepare(seq, 7).unwrap();
-    assert!(order.iter(..).eq(ordinary.iter(..)));
-    assert_eq!(report.weighted[0].path, [0]);
-    assert_eq!(report.weighted[0].counts, [2, 1, 1]);
-    assert_eq!(report.weighted[1].path, [1, 0]);
-    assert_eq!(report.weighted[1].counts, [100]);
-    assert_eq!(report.nodes.len(), 4); // Concat and discarded tail have folded away.
-    assert!(report.nodes[0].path.is_empty());
-    assert_eq!(report.nodes[0].kind, PreparedKind::Mix);
-    assert_eq!(report.nodes[0].len, 4);
-    for (i, node) in report.nodes[1..].iter().enumerate() {
-        assert_eq!(node.path, [i]);
-        assert_eq!(node.source_ordinal, Some(i));
-        assert_eq!(node.len, [2, 1, 1][i]);
-    }
-    let nested = Seq::weighted(10, [(Seq::weighted(4, [(Seq::source(2), 1.0)]), 1.0)]);
-    let (_, report) = Order::prepare(nested, 0).unwrap();
-    assert!(report.weighted[0].path.is_empty());
-    assert_eq!(report.weighted[1].path, [0]);
-    assert!(Order::prepare(Seq::source(1).take(2), 0).is_err());
-    let (_, report) = Order::prepare(Seq::source(1usize << 30).repeat(1 << 20).stride(1 << 30, 0), 0).unwrap();
-    assert_eq!(report.nodes[0].len, 1 << 20);
-    assert!(report.nodes.iter().any(|node| node.len == 1u64 << 50));
-}
-
-#[test]
 fn sharding_preserves_global_partition_not_worker_mixture() {
     let seq = Seq::mix([Seq::source(4).shuffle(1), Seq::source(4).shuffle(2)]);
     for worker in 0..2 {
         let order = Order::new(seq.clone().shard(2, worker)).unwrap();
         assert!(order.iter(..).indexed().all(|(ordinal, _, _)| ordinal == worker));
     }
-    let (small, large) = (4, 5);
-    for (total, expected) in [(small, [2, 1, 1]), (large, [3, 2, 0])] {
-        let (_, report) =
-            Order::prepare(Seq::weighted(total, [(Seq::source(10), 5.0), (Seq::source(10), 3.0), (Seq::source(10), 1.0)]), 0).unwrap();
-        assert_eq!(report.weighted[0].counts, expected);
+}
+
+#[test]
+fn increasing_weighted_total_can_reduce_a_parts_count() {
+    for (total, expected) in [(4, [2, 1, 1]), (5, [3, 2, 0])] {
+        let order = Order::new(Seq::weighted(total, [(Seq::source(10), 5.0), (Seq::source(10), 3.0), (Seq::source(10), 1.0)])).unwrap();
+        let mut counts = [0; 3];
+        for (ordinal, _, _) in order.iter(..).indexed() {
+            counts[ordinal] += 1;
+        }
+        assert_eq!(counts, expected);
     }
 }
 
@@ -154,30 +128,7 @@ fn equality_preserves_nan_payload_sign_and_signaling_bits() {
 }
 
 #[test]
-fn preparation_explains_folded_ranges_and_original_sources() {
-    use dataorder::PreparedParameters as P;
-    let seq = Seq::concat([Seq::source(4), Seq::concat([Seq::source(10), Seq::source(6)])]).skip(7).take(5);
-    let (_, report) = Order::prepare(seq, 0).unwrap();
-    assert_eq!(report.nodes.len(), 1);
-    let node = &report.nodes[0];
-    assert_eq!(node.parameters, P::Source { offset: 3 });
-    assert_eq!(node.len, 5);
-    assert_eq!(node.source_ordinal, Some(1));
-    assert_eq!(report.sources[1].path, [0, 0, 1, 0]);
-    assert_eq!(report.sources.iter().map(|s| s.len).collect::<Vec<_>>(), [4, 10, 6]);
-    let (_, report) = Order::prepare(Seq::source(100).skip(5).stride(3, 1).skip(2).stride(2, 1), 0).unwrap();
-    assert_eq!(report.nodes[0].parameters, P::Stride { step: 6, offset: 10 });
-    assert_eq!(report.nodes[1].parameters, P::Source { offset: 5 });
-    assert_eq!(report.sources[0].path, [0, 0, 0, 0]);
-    let seq = Seq::source(10).shuffle(7).repeat(3).skip(2);
-    let (_, report) = Order::prepare(seq, 0).unwrap();
-    assert_eq!(report.nodes[0].parameters, P::Slice { start: 2 });
-    assert_eq!(report.nodes[1].parameters, P::Repeat { child_len: 10, depth: 0 });
-    assert!(matches!(report.nodes[2].parameters, P::Shuffle { seed: 7, .. }));
-}
-
-#[test]
-fn sampling_errors_and_preparation_describe_independent_profiles() {
+fn sampling_errors_describe_independent_profiles() {
     use dataorder::{MAX_MIX_LEN, SamplingDetail as D};
     for (sampling, expected) in [
         (Sampling::delayed(f64::INFINITY), D::NonFiniteParameter),
@@ -194,15 +145,7 @@ fn sampling_errors_and_preparation_describe_independent_profiles() {
     let err = Order::new(seq).unwrap_err();
     assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN }));
     let weighted = Seq::weighted_with(1 << 30, [(Seq::source(10), 3.0, Sampling::until(1e-6)), (Seq::source(10), 1.0, Sampling::Uniform)]);
-    let err = Order::prepare(weighted, 0).unwrap_err();
+    let err = Order::new(weighted).unwrap_err();
     assert_eq!(err.path(), [0]);
     assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN }));
-    let (_, report) = Order::prepare(Seq::mix_with([(Seq::source(1000), Sampling::until(1.0 - 5e-10))]).take(0), 0).unwrap();
-    let mix = &report.mixes[0];
-    assert_eq!(mix.path, [0]);
-    assert_eq!(mix.counts, [1000]);
-    assert_eq!(mix.sampling, [Sampling::until(1.0 - 5e-10)]);
-    let (_, report) = Order::prepare(Seq::mix([Seq::source(10), Seq::source(20)]), 0).unwrap();
-    assert_eq!(report.mixes[0].counts, [10, 20]);
-    assert_eq!(report.mixes[0].sampling, [Sampling::Uniform; 2]);
 }
