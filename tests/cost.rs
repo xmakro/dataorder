@@ -159,63 +159,6 @@ fn cloned_cursors_cross_concat_children_independently() {
     assert_eq!(cursor.next(), order.get(10_001));
 }
 
-/// Empty ranges, counts and untouched clones need no runtime tree. `last` pays only for
-/// its single random access, without first building a cursor over the beginning.
-#[test]
-fn cursors_allocate_only_when_drawing_an_element() {
-    let order = Order::new(Seq::mix((0..1000).map(|i| Seq::source(1000).shuffle(i)))).unwrap();
-    let count = allocations(|| {
-        for start in [0, order.len() / 2, order.len()] {
-            let mut cursor = order.iter(start..start).unwrap();
-            assert_eq!(cursor.next(), None);
-            assert_eq!(cursor.nth(usize::MAX), None);
-            cursor.set_range(..).unwrap();
-            cursor.seek(order.len() / 3).unwrap();
-            assert_eq!(cursor.clone().count(), order.len() - order.len() / 3);
-            assert_eq!(cursor.count(), order.len() - order.len() / 3);
-        }
-        assert_eq!(order.iter(..).unwrap().count(), order.len());
-    });
-    assert_eq!(count, 0, "an undrawn cursor allocated {count} times");
-    let lookup = allocations(|| {
-        black_box(order.get(order.len() - 1).unwrap());
-    });
-    let last = allocations(|| {
-        black_box(order.iter(..).unwrap().last());
-    });
-    assert_eq!(last, lookup, "last built a cursor in addition to its random access");
-}
-
-#[test]
-fn undrawn_cursors_resume_after_range_changes_and_skips() {
-    let mix = || Seq::mix([Seq::source(100).shuffle(1), Seq::source(50).shuffle(2)]);
-    let sequences = [
-        Seq::source(100),
-        Seq::source(100).shuffle(11),
-        mix(),
-        mix().repeat(3).skip(2).step_by(7),
-        Seq::concat([mix(), mix().shuffle(7)]).skip(20),
-    ];
-    for seq in sequences {
-        let order = Order::with_seed(seq, 19).unwrap();
-        for start in [0, order.len() / 2, order.len()] {
-            let mut cursor = order.iter(start..start).unwrap();
-            assert_eq!(cursor.nth(usize::MAX), None);
-            cursor.set_range(0..0).unwrap();
-            cursor.set_range(..).unwrap();
-            cursor.seek(order.len() / 3).unwrap();
-            let mut cloned = cursor.clone();
-            let expected = Some(element(&order, order.len() / 3 + 1));
-            assert_eq!(cursor.nth(1).map(|item| (*item.source, item.record_index)), expected);
-            assert_eq!(cloned.nth(1).map(|item| (*item.source, item.record_index)), expected);
-            cursor.set_range(order.len()..).unwrap();
-            assert_eq!(cursor.next(), None);
-            cursor.set_range(..).unwrap();
-            assert_eq!(cursor.next().map(|item| (*item.source, item.record_index)), Some(element(&order, 0)));
-        }
-    }
-}
-
 #[test]
 fn forward_seeks_land_in_the_target_repetition_and_part() {
     // Every repetition entered rebuilds the concat's current part cursor. Landing
@@ -298,45 +241,5 @@ fn shuffles_reuse_every_reached_mix_including_concat_children() {
         });
         assert_eq!(count, 0, "a warmed shuffled composition allocated {count} times");
         assert_eq!(c.next(), order.get(301));
-    }
-}
-
-#[test]
-fn last_reuses_an_initialized_mix() {
-    let order = Order::new(Seq::mix((0..100).map(|_| Seq::source(1000)))).unwrap();
-    let mut cursor = order.iter(..).unwrap();
-    cursor.next();
-    let expected = order.get(order.len() - 1).unwrap();
-    let count = allocations(|| assert_eq!(cursor.last(), Some(expected)));
-    assert_eq!(count, 0);
-}
-
-#[test]
-fn empty_ranges_defer_new_children_and_preserve_old_buffers() {
-    let mix = || Seq::mix((0..100).map(|_| Seq::source(1000)));
-    let order = Order::new(Seq::concat([mix(), mix()])).unwrap();
-    let mut cursor = order.iter(..).unwrap();
-    cursor.next();
-    let at = 100_005;
-    assert_eq!(
-        allocations(|| {
-            cursor.set_range(at..at).unwrap();
-            assert_eq!(cursor.next(), None);
-            assert_eq!(cursor.nth(usize::MAX), None);
-            cursor.set_range(5..5).unwrap();
-            cursor.set_range(..10).unwrap();
-            black_box(cursor.next());
-        }),
-        0
-    );
-    assert_eq!(cursor.next(), order.get(1));
-    cursor.set_range(at..at).unwrap();
-    let mut clone = cursor.clone();
-    for c in [&mut cursor, &mut clone] {
-        c.set_range(at..at + 3).unwrap();
-        assert_eq!(c.next(), order.get(at));
-        assert_eq!(c.nth(usize::MAX), None);
-        c.set_range(at + 3..at + 4).unwrap();
-        assert_eq!(c.next(), order.get(at + 3));
     }
 }

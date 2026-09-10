@@ -188,12 +188,13 @@
 //! workers can therefore multiply the total interleaving work by up to `count`;
 //! see [`Seq::step_by`].
 //!
-//! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
-//! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
-//! buffers within the current child. Concat transitions replace child state, and
-//! entering a new mix part can allocate. Cloning copies current state without
-//! preserving spare buffer capacity; subsequent seeks may allocate new buffers.
-//! `last()` reuses initialized state; selecting an empty range defers repositioning.
+//! Cursor construction positions its state immediately and can allocate, even for
+//! an empty range or a cursor used only for `count()`. [`Cursor::seek`],
+//! [`Cursor::set_range`] and [`Iterator::nth`] reuse existing buffers within the
+//! current child, including when moving to empty ranges. Concat transitions replace
+//! child state, and entering a new mix part can allocate. Cloning copies current state
+//! without preserving spare buffer capacity; subsequent seeks may allocate new buffers.
+//! `last()` uses [`Order::get`] and can allocate independently of the cursor's buffers.
 //! For benchmark workloads and commands, see the
 //! [README's performance section](https://github.com/xmakro/dataorder/blob/main/README.md#performance).
 //!

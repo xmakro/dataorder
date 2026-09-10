@@ -210,6 +210,8 @@ resume existing checkpoints with their original crate version.
   Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
+  Construction and moves to empty ranges can allocate. `last()` uses a direct lookup
+  and can allocate independently of the cursor's buffers.
   Changing concat children creates fresh state. Clones copy current state without
   preserving spare capacity, so later seeks can allocate.
   `offset()` reports the next absolute position; `position(predicate)` is the usual

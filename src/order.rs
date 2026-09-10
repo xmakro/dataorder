@@ -244,9 +244,9 @@ impl<T> Order<T> {
     /// `iter(a..b)?` yields the element at each `p` in `a..b`; the end is exclusive.
     /// `iter(..)?` visits the whole order, as does `for item in &order`.
     ///
-    /// Cursor state is allocated on the first draw. Each entered mix reserves
-    /// space for its parts, then initializes child cursors as it draws from them.
-    /// Empty ranges and `count()` allocate nothing. Prefer reusing a cursor with
+    /// Construction positions the cursor immediately and can allocate, even for
+    /// an empty range. Each entered mix reserves space for its parts, then initializes
+    /// child cursors as it draws from them. Prefer reusing a cursor with
     /// [`seek`](Cursor::seek) or [`set_range`](Cursor::set_range) when visiting many
     /// ranges, especially over large mixes.
     ///

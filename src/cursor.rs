@@ -24,45 +24,27 @@ use std::ops::{Bound, Range, RangeBounds};
 ///
 /// [`nth`](Iterator::nth) skips without returning intermediate elements.
 /// [`count`](Iterator::count) uses the remaining length; [`last`](Iterator::last)
-/// seeks through existing state, or uses random access for an undrawn cursor.
-/// Neither walks the range. Allocation is deferred until an
-/// element is requested, so creating, repositioning or counting an undrawn cursor
-/// allocates nothing. `Debug` displays the current position and range end.
-#[must_use = "a cursor is lazy: it yields nothing until iterated"]
+/// uses random access. Neither walks the range. Construction positions the cursor
+/// immediately and can allocate, even for an empty range. `Debug` displays the
+/// current position and range end.
+#[must_use = "a cursor yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     order: &'a Order<T>,
-    /// Positioned at `pos` when in bounds; allocation-heavy roots defer construction
-    /// until the first element is drawn.
+    /// Positioned at `pos` whenever it is before the end of the order.
     root: NodeCursor<'a>,
     pos: u64,
     end: u64,
-    /// An exhausted cursor may leave its tree behind. Reposition it only when a
-    /// later seek/range can produce elements, retaining all existing buffers.
-    deferred_from: Option<u64>,
 }
 
 impl<'a, T> Cursor<'a, T> {
     pub(crate) fn new(order: &'a Order<T>, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
         let range = resolve_range(range, order.len())?;
         let (start, end) = (range.start as u64, range.end as u64);
-        // Prepare allocation-free roots immediately. Composite roots defer their
-        // buffers and seeks until the first draw.
-        let root = match &order.root {
-            Node::Empty => NodeCursor::Empty,
-            Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: *offset + start },
-            Node::Shuffle { seed, salt, shape, child } => NodeCursor::Shuffle(ShuffleCursor {
-                seed: *seed,
-                salt: *salt,
-                shape: *shape,
-                child,
-                key: perm::key(*seed, order.ctx, *salt),
-                pos: start,
-                ctx: order.ctx,
-                mixes: None,
-            }),
-            node => NodeCursor::Uninitialized { node, pos: start, ctx: order.ctx },
-        };
-        Ok(Self { order, root, pos: start, end, deferred_from: None })
+        let mut root = NodeCursor::new(&order.root);
+        if start < order.root.len() {
+            root.seek(start, order.ctx);
+        }
+        Ok(Self { order, root, pos: start, end })
     }
 
     /// Absolute order position of the next element, or the range end if exhausted.
@@ -107,26 +89,14 @@ impl<'a, T> Cursor<'a, T> {
         if pos as u64 > self.end {
             return Err(BoundsError::SeekOutOfBounds { pos, end: self.end as usize });
         }
-        let pos = pos as u64;
-        let at = self.deferred_from.unwrap_or(self.pos);
-        if pos == self.end {
-            self.deferred_from = Some(at);
-        } else {
-            if pos > at {
-                self.root.skip(pos - at);
-            } else if pos < at {
-                self.root.seek(pos, self.order.ctx);
-            }
-            self.deferred_from = None;
-        }
-        self.pos = pos;
+        self.reposition(pos as u64);
         Ok(())
     }
 
     /// Selects a new range of the order and moves to its start.
     /// Reuses existing buffers, like [`seek`](Cursor::seek), so one cursor can serve
     /// multiple ranges. The range may extend beyond the previous range's end.
-    /// Selecting an empty range defers tree repositioning and allocates nothing.
+    /// Empty ranges are positioned like other ranges and can allocate.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -149,25 +119,22 @@ impl<'a, T> Cursor<'a, T> {
     pub fn set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
         let range = resolve_range(range, self.order.len())?;
         self.end = range.end as u64;
-        self.seek(range.start)
+        self.reposition(range.start as u64);
+        Ok(())
     }
 
-    /// Skip to the nth element, returning false when the cursor is exhausted.
-    fn skip_n(&mut self, n: usize) -> bool {
-        let n = n as u64;
-        let left = self.end - self.pos;
-        if n >= left {
-            if left > 0 {
-                self.deferred_from = Some(self.pos);
+    /// Moves to a validated position, including positions in an empty range.
+    fn reposition(&mut self, pos: u64) {
+        // At the order's end there is no element to position the tree at. Any
+        // subsequent move into the order is backward and seeks the tree anew.
+        if pos < self.order.root.len() {
+            if pos > self.pos {
+                self.root.skip(pos - self.pos);
+            } else if pos < self.pos {
+                self.root.seek(pos, self.order.ctx);
             }
-            self.pos = self.end;
-            return false;
         }
-        if n > 0 {
-            self.root.skip(n);
-            self.pos += n;
-        }
-        true
+        self.pos = pos;
     }
 }
 
@@ -204,7 +171,7 @@ impl<T> fmt::Debug for Cursor<'_, T> {
 /// too. The source handles remain borrowed from the same order.
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
-        Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end, deferred_from: self.deferred_from }
+        Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end }
     }
 }
 
@@ -223,7 +190,9 @@ impl<'a, T> Iterator for Cursor<'a, T> {
 
     /// Skips `n` elements without visiting them, then yields the next.
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if self.skip_n(n) { self.next() } else { None }
+        let skip = (n as u64).min(self.end - self.pos);
+        self.reposition(self.pos + skip);
+        self.next()
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -235,16 +204,9 @@ impl<'a, T> Iterator for Cursor<'a, T> {
         self.remaining()
     }
 
-    /// The last element of the range, reusing initialized state without walking there.
-    fn last(mut self) -> Option<Self::Item> {
-        if self.pos == self.end {
-            None
-        } else if matches!(self.root, NodeCursor::Uninitialized { .. }) {
-            self.order.get(self.end as usize - 1)
-        } else {
-            self.seek(self.end as usize - 1).ok()?;
-            self.next()
-        }
+    /// The last element of the range, by random access without walking there.
+    fn last(self) -> Option<Self::Item> {
+        if self.pos == self.end { None } else { self.order.get(self.end as usize - 1) }
     }
 }
 
@@ -257,8 +219,7 @@ const UNSEEKED: u64 = u64::MAX;
 
 /// Per-node iteration state. An explicit tag avoids decoding a tag stored in a
 /// field's unused bit patterns on every dispatch.
-/// `Uninitialized` defers the root's construction until an element is requested, including
-/// across seeks and range changes. `Empty` doubles as "not built yet" for the children of
+/// `Empty` doubles as "not built yet" for the children of
 /// a `Concat` or `Mix`, whose real children are never empty (a concat drops them, a mix
 /// never draws from them).
 #[derive(Clone, Debug)]
@@ -303,11 +264,6 @@ pub(crate) enum NodeCursor<'a> {
         left: u64,
         child: Box<Self>,
     },
-    Uninitialized {
-        node: &'a Node,
-        pos: u64,
-        ctx: u64,
-    },
 }
 
 impl<'a> NodeCursor<'a> {
@@ -349,10 +305,6 @@ impl<'a> NodeCursor<'a> {
     fn seek(&mut self, pos: u64, ctx: u64) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: seek in an empty sequence"),
-            NodeCursor::Uninitialized { pos: p, ctx: c, .. } => {
-                *p = pos;
-                *c = ctx;
-            }
             NodeCursor::Source { offset, next, .. } => *next = *offset + pos,
             NodeCursor::Concat { children, offsets, idx, left, ctx: c, child } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
@@ -391,10 +343,6 @@ impl<'a> NodeCursor<'a> {
     fn next(&mut self) -> (u32, u64) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
-            NodeCursor::Uninitialized { node, pos, ctx } => {
-                let (node, pos, ctx) = (*node, *pos, *ctx);
-                self.enter(node, pos, ctx)
-            }
             NodeCursor::Source { src, next, .. } => {
                 let i = *next;
                 *next += 1;
@@ -433,15 +381,6 @@ impl<'a> NodeCursor<'a> {
         }
     }
 
-    /// Only the first draw takes this path; keep initialization out of the walk's code.
-    #[cold]
-    #[inline(never)]
-    fn enter(&mut self, node: &'a Node, pos: u64, ctx: u64) -> (u32, u64) {
-        *self = Self::new(node);
-        self.seek(pos, ctx);
-        self.next()
-    }
-
     /// Advances by `m` elements, which must exist. Within the current part or repetition the
     /// child skips; beyond it the cursor lands in the target one directly, or, exactly on a
     /// boundary, stays there and lets the next [`next`](NodeCursor::next) enter the following
@@ -452,7 +391,6 @@ impl<'a> NodeCursor<'a> {
         }
         match self {
             NodeCursor::Empty => unreachable!("dataorder: skip in an empty sequence"),
-            NodeCursor::Uninitialized { pos, .. } => *pos += m,
             NodeCursor::Source { next, .. } => *next += m,
             NodeCursor::Concat { children, offsets, idx, left, ctx, child } => {
                 if m <= *left {

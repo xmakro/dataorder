@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- Position cursors when constructed and when moved to empty ranges. Remove deferred
+  root initialization and separate tracking of the tree's previous position.
+  `last()` now uses a direct lookup. Construction, empty-range transitions and
+  `last()` can allocate; seeks within an initialized mix still reuse its buffers.
+  Item order and public signatures are unchanged.
+
 - Simplify cursor allocation behavior: clones no longer preserve spare buffer
   capacity, and concat transitions create fresh child state. Repeated seeks within
   an initialized mix still reuse its buffers. Item order and public signatures are

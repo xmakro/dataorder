@@ -227,6 +227,76 @@ fn failure_history_shrinking_keeps_only_relevant_operations() {
 }
 
 #[test]
+fn empty_ranges_resume_after_seeks_skips_and_clones() {
+    let mix = || Seq::mix([Seq::source(100).shuffle(1), Seq::source(50).shuffle(2)]);
+    let sequences = [
+        Seq::source(0),
+        Seq::source(100),
+        Seq::source(100).shuffle(11),
+        mix(),
+        mix().repeat(3).skip(2).step_by(7),
+        Seq::concat([mix(), mix().shuffle(7)]).skip(20),
+    ];
+    for seq in sequences {
+        let order = Order::with_seed(seq, 19).unwrap();
+        for start in [0, order.len() / 2, order.len()] {
+            let mut cursor = order.iter(start..start).unwrap();
+            assert_eq!(cursor.clone().count(), 0);
+            assert_eq!(cursor.clone().last(), None);
+            assert_eq!(cursor.next(), None);
+            assert_eq!(cursor.nth(usize::MAX), None);
+            cursor.set_range(0..0).unwrap();
+            cursor.set_range(..).unwrap();
+            assert_eq!(cursor.clone().count(), order.len());
+            assert_eq!(cursor.clone().last(), order.len().checked_sub(1).and_then(|pos| order.get(pos)));
+            let pos = order.len() / 3;
+            cursor.seek(pos).unwrap();
+            let mut cloned = cursor.clone();
+            assert_eq!(cursor.nth(1), order.get(pos + 1));
+            assert_eq!(cloned.nth(1), order.get(pos + 1));
+            cursor.set_range(order.len()..).unwrap();
+            assert_eq!(cursor.next(), None);
+            let mut cloned = cursor.clone();
+            for c in [&mut cursor, &mut cloned] {
+                c.set_range(..).unwrap();
+                assert_eq!(c.next(), order.get(0));
+            }
+        }
+    }
+}
+
+#[test]
+fn exhausted_subranges_resume_at_their_end() {
+    let seq = Seq::concat([
+        Seq::mix([Seq::source(5), Seq::source(5)]),
+        Seq::mix([Seq::source(7), Seq::source(7), Seq::source(7)]),
+        Seq::source(3),
+    ]);
+    for seq in [seq.clone(), seq.clone().repeat(3), seq.skip(2).step_by(3)] {
+        let order = Order::new(seq).unwrap();
+        for end in 0..=order.len() {
+            for exhaust in 0..3 {
+                let mut cursor = order.iter(..end).unwrap();
+                assert_eq!(cursor.clone().last(), end.checked_sub(1).and_then(|pos| order.get(pos)));
+                match exhaust {
+                    0 => cursor.by_ref().for_each(drop),
+                    1 => assert_eq!(cursor.nth(usize::MAX), None),
+                    _ => cursor.seek(end).unwrap(),
+                }
+                assert_eq!((cursor.offset(), cursor.len()), (end, 0));
+                assert_eq!(cursor.clone().last(), None);
+                // Extending the range at the same position must find the next element,
+                // including at concat/repeat boundaries and after the order's end.
+                cursor.set_range(end..).unwrap();
+                assert_eq!(cursor.next(), order.get(end));
+                cursor.seek(0).unwrap();
+                assert_eq!(cursor.next(), order.get(0));
+            }
+        }
+    }
+}
+
+#[test]
 fn boundary_skip_initializes_target_child_before_backward_seek() {
     let order = Order::new(Seq::concat([
         Seq::mix([Seq::source(5), Seq::source(5)]),
