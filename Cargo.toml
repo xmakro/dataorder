@@ -14,12 +14,16 @@ exclude = ["/.github"]
 serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
-# Benchmark subprocess containment only; the library gains no runtime dependency.
-[target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
+[lib]
+bench = false
+
+[[bench]]
+name = "ordering"
+harness = false
 
 [features]
 serde = ["dep:serde"]

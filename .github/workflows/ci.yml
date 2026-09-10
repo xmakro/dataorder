@@ -23,6 +23,7 @@ jobs:
       - run: cargo test --locked --release --all-features
       - run: cargo test --locked --all-features
       - run: cargo test --locked --all-features --examples
+      - run: cargo bench --locked --bench ordering -- --test
       - run: cargo test --locked
   test-32bit:
     runs-on: ubuntu-latest

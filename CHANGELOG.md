@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- Replace the custom benchmark harness and campaign runner with a small Criterion
+  suite. Run `cargo bench --bench ordering`; use Criterion's saved baselines for
+  comparisons.
+
 - **Breaking:** remove `Seq::check` and `Seq::validate`; all sequence builders
   accept any `T` and defer configuration checks to `Order::new` or
   `Order::with_seed`, which require `T: Source`. `BoundsError` is reserved for

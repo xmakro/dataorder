@@ -12,7 +12,7 @@
 //!   with O(log k) comparisons for `k` parts, instead of seeking again for every element.
 //!
 //! See the [cost model](#cost) for composition costs and the
-//! [README](https://github.com/xmakro/dataorder/blob/main/README.md#performance) for timings.
+//! [README](https://github.com/xmakro/dataorder/blob/main/README.md#performance) for benchmarks.
 //!
 //! Three types make up the main API:
 //!
@@ -195,7 +195,7 @@
 //! Retained capacities can reflect the largest previously visited compatible child;
 //! incompatible variants and removed child states are dropped rather than cached.
 //! `last()` reuses initialized state; selecting an empty range defers repositioning.
-//! For measurements and reproduction commands, see the
+//! For benchmark workloads and commands, see the
 //! [README's performance section](https://github.com/xmakro/dataorder/blob/main/README.md#performance).
 //!
 //! # Feature flags

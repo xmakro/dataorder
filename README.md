@@ -7,10 +7,6 @@ index array in memory. Each lookup tells you **which dataset to read and the rec
 index within it**, leaving record loading to you. Ordering memory grows with the
 number of datasets and the sequence structure, not the number of records.
 
-In the measurements below, shuffled random access takes about **31 ns**, a random
-lookup in a mix of 100 datasets about **2.7 µs**, and walking that mix after
-a seek about **35 ns per item**. See the [performance highlights](#performance).
-
 The default build has **no dependencies**.
 
 - **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
@@ -249,63 +245,35 @@ Applications should persist committed work rather than prefetched positions.
 
 ## Performance
 
-Historical measurements below predate the 0.4 virtual-clock change; scheduled-mix
-construction and seek timings do not describe the new engine. They were measured
-on macOS ARM64 with Rust 1.98.1, release build, on 2026-09-05.
-Each cell is the median [minimum..maximum] of five samples after warmup and batch
-calibration to at least 20 ms. Timings exclude record I/O.
-
-| Order | Positions | Random lookup | Seek + first item | Walk / item |
-| --- | --- | --- | --- | --- |
-| Shuffled dataset | 1 billion | 31.3 [31.2..31.3] ns | 0.046 [0.046..0.047] µs | 18.3 [18.2..18.3] ns |
-| Mix of 100 shuffled datasets | 100 million | 2.71 [2.71..2.71] µs | 3.109 [3.108..3.111] µs | 35.2 [35.1..35.2] ns |
-| Mix of 1,000 shuffled datasets, 20% scheduled | 100 million | 64.61 [64.53..64.65] µs | 67.163 [67.102..67.269] µs | 63.4 [63.4..63.4] ns |
-| Nested mix of 1,100 shuffled datasets, 2–4 epochs | 4.1 billion | 44.74 [44.72..44.82] µs | 47.780 [47.743..47.799] µs | 84.1 [84.1..84.2] ns |
-
-Random lookup measures `get(pos)`. Seek measures `iter(pos..).next()`, including
-cursor construction and destruction. Walk measures batches of five million items,
-including the initial seek. Random positions are precomputed outside timing; reading
-the positions, loop control and optimization barriers remain inside. Phase mode uses
-positions within each named output-progress window. The benchmark runs on one
-thread without CPU affinity. Run it locally with:
+Run the [Criterion](https://criterion-rs.github.io/book/) benchmarks:
 
 ```sh
-cargo run --release --example bench
+cargo bench --bench ordering
+cargo bench --bench ordering -- mix_100
 ```
 
-See [the benchmark code](examples/bench.rs) for the measured configurations and
-the [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) for how composition
-affects performance.
+The [benchmark suite](benches/ordering.rs) covers a billion-record shuffle, a mix
+of 100 shuffled datasets, and a mix of 1,000 shuffled datasets with 20% scheduled.
+Each measures construction, random lookup, fresh seek, reused cursor seek, and a
+100,000-item walk. Sources are lengths only; no record I/O is included.
+Configuration cloning is excluded from construction timing. Lookup positions are
+precomputed. Both seek measurements include the first item; fresh seek also
+includes cursor construction and destruction. Walk timing includes its initial
+seek and reports throughput in elements per second.
 
-Cursor memory scales with the number of live parts and independent workers, as well
-as their reached child states. Boxing the mix state reduces storage reserved for every
-child slot, at the cost of one allocation per active mix. On this macOS ARM64 host,
-a 100,000-source cursor retained about 23.9 MB after warmup, down from 31.9 MB before
-that change. In a six-round alternating comparison on the same host, the five-source
-mix's fresh seek increased from 0.305 to 0.350 µs; its walk stayed about 11.9 ns/item.
-The 100-source shuffled mix walked at 24.1 vs 25.0 ns/item. This is a memory/latency
-tradeoff, not a general speedup. CPU-model access was unavailable in the sandbox;
-this comparison explicitly allowed that missing field and used matching compiler
-settings. Six lifecycle rounds on 2026-09-06 measured:
+Criterion handles warmup, sampling and comparison with the previous run. To keep
+a baseline across changes, run these before and after the change on the same
+machine with the same toolchain and benchmark workloads:
 
-| Mix sources | Worker cursors | Retained bytes | Peak live bytes |
-| --- | --- | --- | --- |
-| 10,000 | 1 | 2,546,816 | 2,546,816 |
-| 10,000 | 8 | 20,374,528 | 20,374,528 |
-| 10,000 | 32 | 81,498,112 | 81,498,112 |
-| 100,000 | 1 | 23,891,840 | 23,891,840 |
+```sh
+cargo bench --bench ordering -- --save-baseline before
+# Make the change, then compare against the saved baseline.
+cargo bench --bench ordering -- --baseline before
+```
 
-These allocator measurements include the cursor vector and cursor-owned allocations,
-exclude the shared order and allocator overhead, and are not RSS. Peak live bytes count
-Rust allocation layouts; they cannot measure a system allocator's internal realloc copy.
-`bench --lifecycle` reports cumulative requests, retained bytes and peak live bytes.
-It also covers large scheduled mixes with minority sources.
-
-Concat cursors recycle compatible child buffers across boundaries, seeks and repeated
-epochs. Their retained capacities can reflect larger previously visited children,
-but they do not cache every visited child. Switching node kinds or dropping nested
-child states can still allocate on a later visit. Lifecycle benchmarks also cover
-repeated concatenations and compilation of many identity transforms.
+Results are stored under `target/criterion`. For a quick smoke test without timing,
+run `cargo bench --bench ordering -- --test`. Allocation behavior is checked by
+[regression tests](tests/cost.rs).
 
 ## Development
 
@@ -330,48 +298,5 @@ CI checks the generated file. Small oracle fixtures check complete continuous wa
 independently computed contiguous windows. Stateful cursor tests combine seeks, range
 changes, clones, skips, exhaustion and failed operations; failures print a reproducible
 `DATAORDER_STATE_SEED` and minimize the operation history.
-
-For repeated benchmark runs and comparisons, run
-`cargo run --release --example bench_campaign -- --help`.
-Use `compare before /path/to/before after /path/to/after all` to run six rounds,
-alternating which revision runs first. Both checkouts must contain identical
-`examples/bench.rs` and `examples/support/measurements.rs`; copy the harness into
-the older checkout when comparing implementations. The runner checks harness and
-workload fingerprints, complete row sets, and measurement columns before saving.
-Each compilation uses its own target and intermediate directories, overriding shared
-Cargo output directories from the start of the build. The runner records an executable
-fingerprint, Cargo-selected compiler version and target configuration, and the observed
-profile and compiler arguments for the library and benchmark. `table 1 before after`
-selects labels and the walk column; columns 5, 6 and 7 select requested, retained and
-peak cursor bytes.
-
-Campaigns run unpinned by default. Set `BENCH_CORE=N` to request CPU affinity through
-`taskset`; unavailable affinity is reported before building. Results retain each raw
-run and its five calibrated samples per metric, revision and working-tree status,
-compiler, machine information and affinity. Tables show the median of all retained
-samples and their minimum-to-maximum range. Legacy results remain readable one label
-at a time, with their original statistic. Unavailable machine fields are stored as
-`null`. Comparisons reject differing CPU, system, affinity or effective build settings,
-and missing environment provenance. Use `--allow-environment-differences` when such a
-difference is intentional; the runner prints the differences. This does not bypass
-harness or workload checks. Machine metadata cannot account for thermal state or other
-processes, so run timing campaigns on an otherwise idle machine.
-
-Compiler verification trusts the toolchain independently resolved by `rustup which
-rustc` and checks that Cargo invokes that compiler directly. Compiler wrappers, custom
-launchers (including those named `rustc`), and builds without a resolvable rustup
-compiler require `--allow-environment-differences`: Cargo's displayed arguments cannot
-establish which flags a launcher actually passed to the compiler. These builds are
-recorded as unverified, even when their displayed settings match. Comparisons with
-older provenance lacking compiler path verification also require the override.
-
-`BENCH_TIMEOUT_SECS` sets a positive deadline for each external command (default:
-1800 seconds). Process trees are terminated on timeouts and command failures. Failed commands retain their
-stdout and stderr under `target/bench-diagnostics`; the error prints the directory.
-Incomplete campaigns do not replace saved comparison results.
-
-Concurrent campaigns commit both comparison labels under one lock and atomically replace
-the results file. Each command prints its own committed snapshot. A later table rejects
-paired labels if one has subsequently been overwritten by a different campaign.
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
