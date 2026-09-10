@@ -88,26 +88,20 @@ impl<'a, T> Cursor<'a, T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::mix([Seq::source(100).shuffle(1), Seq::source(50)]))?;
-    /// let mut cursor = order.iter(100..);
-    /// cursor.seek(120);
+    /// let mut cursor = order.iter(100..)?;
+    /// cursor.seek(120)?;
     /// assert_eq!(cursor.offset(), 120);
-    /// assert_eq!(cursor.next(), Some(order.get(120)));
-    /// cursor.seek(7); // Absolute position, even before the original range start.
+    /// assert_eq!(cursor.next(), order.get(120));
+    /// cursor.seek(7)?; // Absolute position, even before the original range start.
     /// assert_eq!(cursor.len(), 150 - 7);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// # Panics
-    /// If `pos` is beyond the end of the range.
-    pub fn seek(&mut self, pos: usize) {
-        self.try_seek(pos).unwrap_or_else(|e| panic!("dataorder: {e}"));
-    }
-
-    /// Checked [`seek`](Self::seek). On error, the cursor is unchanged.
+    /// On error, the cursor is unchanged.
     ///
     /// # Errors
     /// [`BoundsError::SeekOutOfBounds`] when `pos` exceeds the current range end.
-    pub fn try_seek(&mut self, pos: usize) -> Result<(), BoundsError> {
+    pub fn seek(&mut self, pos: usize) -> Result<(), BoundsError> {
         if pos as u64 > self.end {
             return Err(BoundsError::SeekOutOfBounds { pos, end: self.end as usize });
         }
@@ -135,31 +129,25 @@ impl<'a, T> Cursor<'a, T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).shuffle(1))?;
-    /// let all: Vec<usize> = order.iter(..).map(|(_, i)| i).collect();
-    /// let mut cursor = order.iter(2..4);
+    /// let all: Vec<usize> = order.iter(..)?.map(|(_, i)| i).collect();
+    /// let mut cursor = order.iter(2..4)?;
     /// assert_eq!(cursor.by_ref().map(|(_, i)| i).collect::<Vec<_>>(), all[2..4]);
-    /// cursor.set_range(7..);
+    /// cursor.set_range(7..)?;
     /// assert_eq!(cursor.len(), 3);
     /// assert_eq!(cursor.by_ref().map(|(_, i)| i).collect::<Vec<_>>(), all[7..]);
-    /// cursor.set_range(..=0);
+    /// cursor.set_range(..=0)?;
     /// assert_eq!(cursor.map(|(_, i)| i).collect::<Vec<_>>(), all[..1]);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// # Panics
-    /// As [`Order::iter`] does for the range.
-    pub fn set_range(&mut self, range: impl RangeBounds<usize>) {
-        self.try_set_range(range).unwrap_or_else(|e| panic!("dataorder: {e}"));
-    }
-
-    /// Checked [`set_range`](Self::set_range). On error, the cursor is unchanged.
+    /// On error, the cursor is unchanged.
     ///
     /// # Errors
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
-    pub fn try_set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
+    pub fn set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
         let range = resolve(range, self.order.len())?;
         self.end = range.end as u64;
-        self.try_seek(range.start)
+        self.seek(range.start)
     }
 
     /// Includes the source ordinal in each result, even for zero-sized source types.
@@ -168,9 +156,9 @@ impl<'a, T> Cursor<'a, T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::mix([Seq::source(2), Seq::source(2)]))?;
-    /// let ordinals: Vec<_> = order.iter(..).indexed().map(|(ordinal, _, _)| ordinal).collect();
+    /// let ordinals: Vec<_> = order.iter(..)?.indexed().map(|(ordinal, _, _)| ordinal).collect();
     /// assert_eq!(ordinals, [0, 1, 0, 1]);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn indexed(self) -> IndexedCursor<'a, T> {
         IndexedCursor { inner: self }
@@ -191,9 +179,9 @@ impl<'a, T> Cursor<'a, T> {
         if self.pos == self.end {
             None
         } else if matches!(self.root, NodeCursor::Uninitialized { .. }) {
-            Some(self.order.get_indexed(self.end as usize - 1))
+            self.order.get_indexed(self.end as usize - 1)
         } else {
-            self.seek(self.end as usize - 1);
+            self.seek(self.end as usize - 1).ok()?;
             self.next_indexed()
         }
     }
@@ -286,24 +274,16 @@ impl<'a, T> IndexedCursor<'a, T> {
         self.inner.remaining()
     }
 
-    /// Moves to an absolute position. Panics beyond the range end; see [`Cursor::seek`].
-    pub fn seek(&mut self, pos: usize) {
-        self.inner.seek(pos);
+    /// Moves to an absolute position; leaves the cursor unchanged on error.
+    /// See [`Cursor::seek`].
+    pub fn seek(&mut self, pos: usize) -> Result<(), BoundsError> {
+        self.inner.seek(pos)
     }
 
-    /// Checked seek; leaves the cursor unchanged on error. See [`Cursor::try_seek`].
-    pub fn try_seek(&mut self, pos: usize) -> Result<(), BoundsError> {
-        self.inner.try_seek(pos)
-    }
-
-    /// Selects a new range. Panics on invalid bounds; see [`Cursor::set_range`].
-    pub fn set_range(&mut self, range: impl RangeBounds<usize>) {
-        self.inner.set_range(range);
-    }
-
-    /// Checked range change; leaves the cursor unchanged on error. See [`Cursor::try_set_range`].
-    pub fn try_set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
-        self.inner.try_set_range(range)
+    /// Selects a new range; leaves the cursor unchanged on error.
+    /// See [`Cursor::set_range`].
+    pub fn set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
+        self.inner.set_range(range)
     }
 
     /// Removes the ordinal adapter, preserving the cursor's position and buffers.

@@ -41,10 +41,10 @@ use std::hash::{Hash, Hasher};
 /// ]))?;
 /// // At virtual time 0.6, about 60 of the first part's 100 items have appeared.
 /// // The second part therefore starts around 30% through the 200-item output.
-/// let first_delayed = order.iter(..).position(|(s, _)| order.source_index(s) == 1).unwrap();
+/// let first_delayed = order.iter(..)?.position(|(s, _)| order.source_index(s) == Some(1)).unwrap();
 /// assert!((59..=61).contains(&first_delayed));
-/// assert_eq!(order.iter(..).filter(|(s, _)| order.source_index(s) == 1).count(), 100);
-/// # Ok::<(), dataorder::Error>(())
+/// assert_eq!(order.iter(..)?.filter(|(s, _)| order.source_index(s) == Some(1)).count(), 100);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// A schedule belongs to its mix: repeating the mix restarts its virtual clock.

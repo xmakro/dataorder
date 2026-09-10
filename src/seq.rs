@@ -20,16 +20,15 @@ use std::ops::RangeBounds;
 /// compared by their bits, treating `-0.0` as `0.0`. NaN parameters are rejected
 /// during validation.
 ///
-/// # Errors and panics
+/// # Errors
 ///
 /// [`Order::new`] and [`check`](Seq::check) report invalid configurations as an
 /// [`Error`] with the path to the invalid node. This includes out-of-range skips
 /// and takes, zero strides, overflow, invalid schedules or weights, and excessive depth.
 ///
-/// Two builders check their arguments immediately and panic: [`slice`](Seq::slice)
-/// for reversed or overflowing range bounds, and [`shard`](Seq::shard) for an index
-/// outside `0..count`. Use [`try_slice`](Seq::try_slice) and [`try_shard`](Seq::try_shard)
-/// for fallible alternatives.
+/// Two builders return [`BoundsError`] immediately: [`slice`](Seq::slice) for
+/// reversed or overflowing range bounds, and [`shard`](Seq::shard) for an index
+/// outside `0..count`.
 ///
 /// # Depth
 ///
@@ -222,9 +221,9 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::concat([Seq::source(2), Seq::source(3)]))?;
-    /// let elements: Vec<(usize, usize)> = order.iter(..).map(|(&s, i)| (s, i)).collect();
+    /// let elements: Vec<(usize, usize)> = order.iter(..)?.map(|(&s, i)| (s, i)).collect();
     /// assert_eq!(elements, [(2, 0), (2, 1), (3, 0), (3, 1), (3, 2)]);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn concat(parts: impl IntoIterator<Item = Self>) -> Self {
@@ -237,9 +236,9 @@ impl<T> Seq<T> {
     /// use dataorder::{Order, Seq};
     /// // Each part keeps its order and is spread evenly: the longer one appears twice as often.
     /// let order = Order::new(Seq::mix([Seq::source(4), Seq::source(2)]))?;
-    /// let sources: Vec<usize> = order.iter(..).map(|(&s, _)| s).collect();
+    /// let sources: Vec<usize> = order.iter(..)?.map(|(&s, _)| s).collect();
     /// assert_eq!(sources, [4, 4, 2, 4, 4, 2]);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn mix(parts: impl IntoIterator<Item = Self>) -> Self {
@@ -259,9 +258,9 @@ impl<T> Seq<T> {
     /// let order = Order::new(seq)?;
     /// // At virtual time 0.5, half of the 700 uniform elements have appeared.
     /// // The delayed source begins around output position 350, not 500.
-    /// let first = order.iter(..).position(|(&source, _)| source == 300).unwrap();
+    /// let first = order.iter(..)?.position(|(&source, _)| source == 300).unwrap();
     /// assert!((349..=351).contains(&first));
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn mix_with(parts: impl IntoIterator<Item = impl Into<MixPart<T>>>) -> Self {
@@ -280,8 +279,8 @@ impl<T> Seq<T> {
     /// ]);
     /// let order = Order::new(seq)?;
     /// assert_eq!(order.len(), 3000);
-    /// assert_eq!(order.iter(..).filter(|&(&source, _)| source == 100).count(), 1800);
-    /// # Ok::<(), dataorder::Error>(())
+    /// assert_eq!(order.iter(..)?.filter(|&(&source, _)| source == 100).count(), 1800);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn weighted(total: usize, parts: impl IntoIterator<Item = (Self, f64)>) -> Self {
@@ -300,11 +299,11 @@ impl<T> Seq<T> {
     ///     (Seq::source(100), 1.0, Sampling::delayed(0.5)),
     /// ]);
     /// let order = Order::new(seq)?;
-    /// assert_eq!(order.iter(..).filter(|&(&s, _)| s == 100).count(), 250);
+    /// assert_eq!(order.iter(..)?.filter(|&(&s, _)| s == 100).count(), 250);
     /// // Virtual time 0.5 is around output position 375 for these counts.
-    /// let first = order.iter(..).position(|(&s, _)| s == 100).unwrap();
+    /// let first = order.iter(..)?.position(|(&s, _)| s == 100).unwrap();
     /// assert!((374..=377).contains(&first));
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = impl Into<WeightedPart<T>>>) -> Self {
@@ -316,11 +315,11 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(100).shuffle(1))?;
-    /// let mut indices: Vec<usize> = order.iter(..).map(|(_, i)| i).collect();
+    /// let mut indices: Vec<usize> = order.iter(..)?.map(|(_, i)| i).collect();
     /// assert_ne!(indices[..5], [0, 1, 2, 3, 4]);
     /// indices.sort_unstable();
     /// assert_eq!(indices, (0..100).collect::<Vec<_>>());
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn shuffle(self, seed: u64) -> Self {
@@ -334,12 +333,12 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(1000).shuffle(1).repeat(2))?;
-    /// let epoch = |e: usize| order.iter(e * 1000..(e + 1) * 1000).map(|(_, i)| i).collect::<Vec<_>>();
-    /// assert_ne!(epoch(0), epoch(1));
-    /// let mut sorted = epoch(1);
-    /// sorted.sort_unstable();
-    /// assert_eq!(sorted, (0..1000).collect::<Vec<_>>());
-    /// # Ok::<(), dataorder::Error>(())
+    /// let first: Vec<_> = order.iter(..1000)?.map(|(_, i)| i).collect();
+    /// let mut second: Vec<_> = order.iter(1000..)?.map(|(_, i)| i).collect();
+    /// assert_ne!(first, second);
+    /// second.sort_unstable();
+    /// assert_eq!(second, (0..1000).collect::<Vec<_>>());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn repeat(self, times: usize) -> Self {
@@ -355,11 +354,11 @@ impl<T> Seq<T> {
     /// let order = Order::new(Seq::source(1000).shuffle(1).cycle(2500))?;
     /// assert_eq!(order.len(), 2500);
     /// let epochs = Order::new(Seq::source(1000).shuffle(1).repeat(3))?;
-    /// assert!(order.iter(..).eq(epochs.iter(..2500)));
+    /// assert!(order.iter(..)?.eq(epochs.iter(..2500)?));
     /// let longest = Order::new(Seq::source(1000).shuffle(1).cycle(usize::MAX))?;
     /// assert_eq!(longest.len(), usize::MAX);
-    /// assert!(longest.get(usize::MAX - 1).1 < 1000);
-    /// # Ok::<(), dataorder::Error>(())
+    /// assert!(longest.get(usize::MAX - 1).unwrap().1 < 1000);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn cycle(self, len: usize) -> Self {
@@ -371,29 +370,16 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(10).slice(3..=5))?;
-    /// assert_eq!(order.iter(..).map(|(_, i)| i).collect::<Vec<_>>(), [3, 4, 5]);
-    /// # Ok::<(), dataorder::Error>(())
+    /// let order = Order::new(Seq::source(10).slice(3..=5)?)?;
+    /// assert_eq!(order.iter(..)?.map(|(_, i)| i).collect::<Vec<_>>(), [3, 4, 5]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// # Panics
-    /// If the range's end lies before its start, or a bound is `usize::MAX` where one more
-    /// would be needed (an exclusive start or an inclusive end at `usize::MAX`).
-    #[must_use]
-    pub fn slice(self, range: impl RangeBounds<usize>) -> Self {
-        self.try_slice(range).unwrap_or_else(|e| match e {
-            BoundsError::StartOverflow | BoundsError::EndOverflow => panic!("dataorder: slice bound overflows usize"),
-            BoundsError::Reversed { .. } => panic!("dataorder: slice end before start"),
-            _ => panic!("dataorder: {e}"),
-        })
-    }
-
-    /// Builds a slice, reporting reversed or overflowing bounds without panicking.
     /// Bounds against the child length are still validated by [`Order::new`].
     ///
     /// # Errors
     /// [`BoundsError::Reversed`], [`BoundsError::StartOverflow`] or [`BoundsError::EndOverflow`].
-    pub fn try_slice(self, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
+    pub fn slice(self, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
         let (start, end) = boundaries(range)?;
         let skipped = if start == 0 { self } else { self.skip(start) };
         Ok(match end {
@@ -408,8 +394,8 @@ impl<T> Seq<T> {
     /// use dataorder::{Order, Seq};
     /// let all = Order::new(Seq::source(10).shuffle(1))?;
     /// let first = Order::new(Seq::source(10).shuffle(1).take(3))?;
-    /// assert!(first.iter(..).eq(all.iter(..3)));
-    /// # Ok::<(), dataorder::Error>(())
+    /// assert!(first.iter(..)?.eq(all.iter(..3)?));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn take(self, n: usize) -> Self {
@@ -422,8 +408,8 @@ impl<T> Seq<T> {
     /// use dataorder::{Order, Seq};
     /// let all = Order::new(Seq::source(10).shuffle(1))?;
     /// let rest = Order::new(Seq::source(10).shuffle(1).skip(7))?;
-    /// assert!(rest.iter(..).eq(all.iter(7..)));
-    /// # Ok::<(), dataorder::Error>(())
+    /// assert!(rest.iter(..)?.eq(all.iter(7..)?));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn skip(self, n: usize) -> Self {
@@ -436,9 +422,9 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).stride(4, 1))?;
-    /// assert_eq!(order.iter(..).map(|(_, i)| i).collect::<Vec<_>>(), [1, 5, 9]);
+    /// assert_eq!(order.iter(..)?.map(|(_, i)| i).collect::<Vec<_>>(), [1, 5, 9]);
     /// assert!(Order::new(Seq::source(10).stride(4, 12))?.is_empty());
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn stride(self, step: usize, offset: usize) -> Self {
@@ -471,32 +457,15 @@ impl<T> Seq<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let seq = Seq::source(10).shuffle(1);
-    /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..).map(|(_, i)| i).collect();
-    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1))?.iter(..).map(|(_, i)| i).collect();
+    /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..)?.map(|(_, i)| i).collect();
+    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1)?)?.iter(..)?.map(|(_, i)| i).collect();
     /// assert_eq!(shard, [all[1], all[5], all[9]]);
-    /// # Ok::<(), dataorder::Error>(())
-    /// ```
-    ///
-    /// # Panics
-    /// If `index >= count` (which includes `count == 0`): such a shard would duplicate
-    /// another worker's data.
-    #[must_use]
-    pub fn shard(self, count: usize, index: usize) -> Self {
-        self.try_shard(count, index).unwrap_or_else(|e| panic!("dataorder: {e}"))
-    }
-
-    /// Builds a worker's shard, reporting invalid worker parameters without panicking.
-    ///
-    /// ```
-    /// use dataorder::{BoundsError, Seq};
-    /// assert_eq!(Seq::source(10).try_shard(3, 1)?.check(), Ok(3));
-    /// assert_eq!(Seq::source(10).try_shard(0, 0), Err(BoundsError::InvalidShard { count: 0, index: 0 }));
-    /// # Ok::<(), BoundsError>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
     /// [`BoundsError::InvalidShard`] when `index >= count`, including `count == 0`.
-    pub fn try_shard(self, count: usize, index: usize) -> Result<Self, BoundsError> {
+    pub fn shard(self, count: usize, index: usize) -> Result<Self, BoundsError> {
         if index >= count {
             return Err(BoundsError::InvalidShard { count, index });
         }

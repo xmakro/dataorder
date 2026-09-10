@@ -2,6 +2,14 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
+  `Seq::map` or `Seq::try_map` before compilation.
+- **Breaking:** make checked access the default and remove the corresponding `try_`
+  aliases. `Order::get` and `get_indexed` return `Option`; `Order::iter`, cursor
+  `seek`/`set_range`, and `Seq::slice`/`shard` return `Result`. Invalid cursor
+  operations preserve its state. `Order::source_index` returns `None` for foreign
+  references or zero-sized source types; use indexed results for explicit ordinals.
+
 - **Breaking:** reduce `MAX_DEPTH` from 256 to 16 and remove `Seq::dispose`.
   `Seq` remains an enum with the same builders and serialized format. Compilation,
   mapping and cleanup now use ordinary recursion within the supported depth limit;

@@ -44,7 +44,7 @@ need its length:
 ```rust
 use dataorder::{Order, Seq};
 
-fn main() -> Result<(), dataorder::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Two passes over a billion records, with a fresh shuffle for each pass.
     let seq = Seq::source(1_000_000_000).shuffle(42).repeat(2);
     let order = Order::new(seq)?;
@@ -52,17 +52,17 @@ fn main() -> Result<(), dataorder::Error> {
 
     // Resume deep into the second epoch without replaying the earlier positions.
     let resume = 1_200_000_000;
-    for (dataset_len, index) in order.iter(resume..resume + 10) {
+    for (dataset_len, index) in order.iter(resume..resume + 10)? {
         println!("record {index} from a dataset of {dataset_len} records");
     }
-    assert_eq!(order.iter(resume..).next(), Some(order.get(resume)));
+    assert_eq!(order.iter(resume..)?.next(), order.get(resume));
     Ok(())
 }
 ```
 
 The position in an order differs from the index within a dataset: position
 1,200,000,000 above selects one of the original billion records. `get(pos)` returns
-a dataset handle and a record index; `iter(range)` returns the same pairs in order.
+an optional dataset handle and record index; `iter(range)?` yields those pairs in order.
 
 ## Using your datasets
 
@@ -83,12 +83,12 @@ impl Source for Dataset {
     fn salt(&self) -> u64 { dataorder::salt(self.path) }
 }
 
-fn main() -> Result<(), dataorder::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let web = Seq::source(Dataset { path: "web.bin", records: 1000 }).shuffle(1);
     let code = Seq::source(Dataset { path: "code.bin", records: 200 }).shuffle(2);
     let order = Order::new(Seq::mix([web, code]))?;
 
-    for (dataset, index) in order.iter(..10) {
+    for (dataset, index) in order.iter(..10)? {
         // Use your own loader to read this record.
         println!("{}: record {index}", dataset.path);
     }
@@ -137,14 +137,14 @@ virtual time 0.5:
 ```rust
 use dataorder::{Order, Sampling, Seq};
 
-fn main() -> Result<(), dataorder::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq = Seq::weighted_with(1000, [
         (Seq::source(300).shuffle(1), 3.0, Sampling::Uniform),
         (Seq::source(100).shuffle(2), 1.0, Sampling::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
-    let first_delayed = order.iter(..).position(|(s, _)| order.source_index(s) == 1).unwrap();
+    let first_delayed = order.iter(..)?.position(|(s, _)| order.source_index(s) == Some(1)).unwrap();
     // Half of the 750 uniform items have appeared by virtual time 0.5.
     // The delayed source starts around output position 375, not 500.
     assert!((374..=377).contains(&first_delayed));
@@ -191,17 +191,17 @@ resume existing checkpoints with their original crate version.
   Adding an outer repeat can change later epochs of repeats inside it; see the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
-  kind and node path. `take` and `skip` past the end are errors. Accessing an invalid
-  position with `get`, or an invalid range with `iter`, panics. Use `try_get` for an
-  optional result and `try_iter`, `try_seek`, `try_set_range`, or `Seq::try_slice` for
-  fallible range operations. `Seq::try_shard` checks worker counts and indices.
+  kind and node path. `take` and `skip` past the end are errors. `get` and
+  `get_indexed` return `None` for invalid positions. `iter`, `seek`, `set_range`,
+  and `Seq::slice` return `Result` for range operations. `Seq::shard` returns
+  `Result` after checking worker counts and indices.
   Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
   `offset()` reports the next absolute position; `position(predicate)` is the usual
   consuming iterator search.
 
-Use `get_indexed(pos)` or `iter(range).indexed()` to obtain
+Use `get_indexed(pos)` or `iter(range)?.indexed()` to obtain
 `(source_ordinal, dataset, record_index)`. The ordinal indexes `order.sources()` and
 distinguishes equal and zero-sized handles.
 

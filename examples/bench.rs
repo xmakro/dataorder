@@ -1,4 +1,4 @@
-//! Cost of typical orders: seek = `order.iter(pos..).next()` at a random position,
+//! Cost of typical orders: seek = `order.iter(pos..).unwrap().next()` at a random position,
 //! including cursor construction. Walk is the average per element over a long range,
 //! including its initial seek; get = `order.get(pos)` at a random position. All
 //! measurements use source lengths only and exclude record I/O.
@@ -136,7 +136,7 @@ fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, c
         |reps| {
             let t = Instant::now();
             for &pos in positions.iter().cycle().take(reps) {
-                black_box(order.iter(black_box(pos)..).next());
+                black_box(order.iter(black_box(pos)..).unwrap().next());
             }
             t.elapsed()
         },
@@ -149,14 +149,14 @@ fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, c
         |reps| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..reps {
-                let mut ongoing = continuous.then(|| order.iter(..));
+                let mut ongoing = continuous.then(|| order.iter(..).unwrap());
                 if let Some(cursor) = &mut ongoing {
                     for _ in 0..walk_start {
                         black_box(cursor.next());
                     }
                 }
                 let t = Instant::now();
-                let cursor = ongoing.get_or_insert_with(|| order.iter(walk_start..walk_start + count));
+                let cursor = ongoing.get_or_insert_with(|| order.iter(walk_start..walk_start + count).unwrap());
                 let mut acc = 0u64;
                 for (s, i) in cursor.take(count) {
                     acc = acc.wrapping_add((*s ^ i) as u64);
@@ -172,7 +172,7 @@ fn measure_at(name: &str, seq: Seq<usize>, count: usize, start: Option<usize>, c
         |reps| {
             let t = Instant::now();
             for &pos in positions.iter().cycle().take(reps) {
-                black_box(order.get(black_box(pos)));
+                black_box(order.get(black_box(pos)).unwrap());
             }
             t.elapsed()
         },
@@ -238,7 +238,7 @@ fn lifecycle_at(name: &str, seq: Seq<usize>, warmup: usize, workers: usize, seek
     COUNT_BYTES.set(true);
     let mut cursors = Vec::with_capacity(workers);
     for _ in 0..workers {
-        let mut cursor = order.iter(..);
+        let mut cursor = order.iter(..).unwrap();
         cursor.by_ref().take(warmup).for_each(|item| {
             black_box(item);
         });
@@ -255,7 +255,7 @@ fn lifecycle_at(name: &str, seq: Seq<usize>, warmup: usize, workers: usize, seek
         |reps| {
             let t = Instant::now();
             for &pos in positions.iter().cycle().take(reps) {
-                cursor.seek(black_box(pos));
+                cursor.seek(black_box(pos)).unwrap();
                 black_box(cursor.next());
             }
             t.elapsed()
@@ -374,19 +374,20 @@ fn typical() {
     measure("mix(100 × shuffled)", Seq::mix(shuffled(100, m)), 5 * m);
     measure("mix(100 × shuffled, 20% scheduled)", Seq::mix_with(scheduled(100, m)), 5 * m);
     measure("mix(1000 × shuffled, 20% scheduled)", Seq::mix_with(scheduled(1000, 100_000)), 5 * m);
-    measure("↑ .shard(8, 0)", Seq::mix_with(scheduled(100, m)).shard(8, 0), m);
-    measure("↑ .shard(512, 0)", Seq::mix_with(scheduled(100, m)).shard(512, 0), 100_000);
+    measure("↑ .shard(8, 0)", Seq::mix_with(scheduled(100, m)).shard(8, 0).unwrap(), m);
+    measure("↑ .shard(512, 0)", Seq::mix_with(scheduled(100, m)).shard(512, 0).unwrap(), 100_000);
     let nested = Seq::mix_with([
         (Seq::concat([src(0, m).shuffle(1), src(1, m).shuffle(2)]).shuffle(3), Sampling::Uniform),
         (src(2, m).shuffle(4).take(500_000), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
         (src(3, m).shuffle(5).repeat(2), Sampling::DelayedLinear { start: 0.1, full: 0.4 }),
     ])
     .repeat(3)
-    .shard(4, 1);
+    .shard(4, 1)
+    .unwrap();
     measure("repeat(3, mix(3 nested)).shard(4, 1)", nested, m);
     let two_mixes = || Seq::mix([Seq::mix(shuffled(100, m)), Seq::mix((100..200).map(|i| src(i, m).shuffle(i as u64 + 1)))]);
     measure("mix(mix(100 × shuffled) × 2)", two_mixes(), 5 * m);
-    measure("mix(mix(100 × shuffled) × 2).shard(8, 0)", two_mixes().shard(8, 0), m);
+    measure("mix(mix(100 × shuffled) × 2).shard(8, 0)", two_mixes().shard(8, 0).unwrap(), m);
     measure("shuffle(mix(100 × source 1e6))  [slow path]", Seq::mix((0..100).map(|i| src(i, m))).shuffle(9), 100_000);
 }
 

@@ -43,9 +43,9 @@ impl Configuration {
         // Validate the worker's order: on 32-bit targets the unsharded sequence
         // can exceed usize even though this worker's positions fit. Validate
         // the configuration before cloning it.
-        let sharded = self.sequence.try_shard(self.workers, self.worker).map_err(|e| e.to_string())?;
+        let sharded = self.sequence.shard(self.workers, self.worker).map_err(|e| e.to_string())?;
         let Seq::Stride { inner, .. } = sharded.validate().map_err(|e| e.to_string())? else {
-            unreachable!("try_shard preserves its configuration wrapper");
+            unreachable!("shard preserves its configuration wrapper");
         };
         // Keep the original configuration as the checkpoint identity. Validation
         // returns the configuration, not its simplified compiled representation.
@@ -55,7 +55,7 @@ impl Configuration {
 
     // Called with validated configurations before cloning the tree.
     fn order(&self) -> Result<Order<Dataset>, String> {
-        let seq = self.sequence.clone().try_shard(self.workers, self.worker).map_err(|e| e.to_string())?;
+        let seq = self.sequence.clone().shard(self.workers, self.worker).map_err(|e| e.to_string())?;
         Order::with_seed(seq, self.seed).map_err(|e| e.to_string())
     }
 }
@@ -81,8 +81,7 @@ impl Worker {
         let configuration = configuration.validate()?;
         let order = configuration.order()?;
         let worker = Self { configuration, order, next_offset: 0 };
-        // JSON's depth limit is smaller than the configuration compiler's. Check the
-        // actual checkpoint envelope before accepting any work, using the same parser
+        // Check the actual checkpoint envelope before accepting any work, using the same parser
         // as restore. Changing the offset later does not change its nesting depth.
         let _: Checkpoint = serde_json::from_str(&worker.checkpoint()?)
             .map_err(|e| format!("configuration cannot round-trip through the checkpoint format: {e}"))?;
@@ -94,7 +93,7 @@ impl Worker {
     // Seek once per batch, then stream using the cursor's reusable state.
     fn process_batch(&mut self, limit: usize, mut process: impl FnMut(&Dataset, usize) -> Result<(), String>) -> Result<usize, String> {
         let mut processed = 0;
-        for (source, index) in self.order.iter(self.next_offset..).take(limit) {
+        for (source, index) in self.order.iter(self.next_offset..).map_err(|e| e.to_string())?.take(limit) {
             process(source, index)?;
             self.next_offset += 1;
             processed += 1;
@@ -206,12 +205,12 @@ mod tests {
     #[test]
     fn round_trip_resumes_exactly_including_the_end() {
         let config = configuration();
-        let expected: Vec<_> = config.order().unwrap().iter(..).map(|(s, i)| (s.name.clone(), i)).collect();
+        let expected: Vec<_> = config.order().unwrap().iter(..).unwrap().map(|(s, i)| (s.name.clone(), i)).collect();
         let mut worker = Worker::new(config.clone()).unwrap();
         for split in 0..=expected.len() {
             let json = worker.checkpoint().unwrap();
             let resumed = Worker::restore(&json, config.clone()).unwrap();
-            let rest: Vec<_> = resumed.order.iter(resumed.next_offset..).map(|(s, i)| (s.name.clone(), i)).collect();
+            let rest: Vec<_> = resumed.order.iter(resumed.next_offset..).unwrap().map(|(s, i)| (s.name.clone(), i)).collect();
             assert_eq!(rest, expected[split..]);
             worker.process_batch(1, |_, _| Ok(())).unwrap();
         }
@@ -231,7 +230,7 @@ mod tests {
         let mut worker = Worker::new(config.clone()).unwrap();
         assert_eq!(worker.process_batch(4, |_, _| Ok(())).unwrap(), 4);
         let mut resumed = Worker::restore(&worker.checkpoint().unwrap(), config.clone()).unwrap();
-        let expected: Vec<_> = resumed.order.iter(4..6).map(|(s, i)| (s.name.clone(), i)).collect();
+        let expected: Vec<_> = resumed.order.iter(4..6).unwrap().map(|(s, i)| (s.name.clone(), i)).collect();
         let mut processed = Vec::new();
         let error = resumed
             .process_batch(5, |source, index| {

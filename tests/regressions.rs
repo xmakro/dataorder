@@ -75,8 +75,8 @@ fn isolated_case() {
                 assert_eq!(seq.check().unwrap_err().kind(), &ErrorKind::TooDeep);
                 drop(seq);
                 assert_eq!(deep().validate().unwrap_err().kind(), &ErrorKind::TooDeep);
-                assert!(deep().try_shard(0, 0).is_err());
-                assert!(deep().try_slice(..=usize::MAX).is_err());
+                assert!(deep().shard(0, 0).is_err());
+                assert!(deep().slice(..=usize::MAX).is_err());
                 assert_eq!(Seq::source(3).validate().unwrap(), Seq::source(3));
             })
             .unwrap()
@@ -88,7 +88,7 @@ fn isolated_case() {
                 let chain = |depth| (1..depth).fold(Seq::source([0u8; 8192]), |s, _| s.take(8192));
                 let order = Order::new(chain(MAX_DEPTH)).unwrap();
                 assert_eq!(order.len(), 8192);
-                assert_eq!(order.get(8191).1, 8191);
+                assert_eq!(order.get(8191).unwrap().1, 8191);
                 assert_eq!(Order::new(chain(MAX_DEPTH + 1)).unwrap_err().kind(), &ErrorKind::TooDeep);
             })
             .unwrap()
@@ -107,12 +107,12 @@ fn isolated_case() {
                     (Seq::source(100), Sampling::trapezoid(0.0, d, d, 1.0)),
                 ]))
                 .unwrap();
-                let all: Vec<_> = order.iter(..).map(|(&s, i)| (s, i)).collect();
+                let all: Vec<_> = order.iter(..).unwrap().map(|(&s, i)| (s, i)).collect();
                 for p in 0..order.len() {
                     assert_eq!(
                         all[p],
                         {
-                            let (&s, i) = order.get(p);
+                            let (&s, i) = order.get(p).unwrap();
                             (s, i)
                         },
                         "d={d}, p={p}"
@@ -130,10 +130,10 @@ fn isolated_case() {
                 let order = Order::new(Seq::mix_with([(Seq::source(1), Sampling::Uniform), (Seq::source(n), Sampling::ramp(0.0, 1e-296))]))
                     .unwrap();
                 let at = (n + 1) / 4;
-                let window: Vec<_> = order.iter(at - 8..at + 8).map(|(&s, i)| (s, i)).collect();
+                let window: Vec<_> = order.iter(at - 8..at + 8).unwrap().map(|(&s, i)| (s, i)).collect();
                 assert!(window.iter().any(|&(s, _)| s == 1));
                 for (j, expected) in window.into_iter().enumerate() {
-                    let (&s, i) = order.get(at - 8 + j);
+                    let (&s, i) = order.get(at - 8 + j).unwrap();
                     assert_eq!((s, i), expected);
                 }
             }
@@ -142,9 +142,9 @@ fn isolated_case() {
                 let order =
                     Order::new(Seq::mix_with([(Seq::source(n), Sampling::Uniform), (Seq::source(1), Sampling::fading(0.0, 1.0))])).unwrap();
                 for start in [0, n / 4, n / 2 - 16, 3 * (n / 4), n - 16] {
-                    for (p, (&s, i)) in (start..).zip(order.iter(start..).take(16)) {
+                    for (p, (&s, i)) in (start..).zip(order.iter(start..).unwrap().take(16)) {
                         assert_eq!((s, i), {
-                            let (&s, i) = order.get(p);
+                            let (&s, i) = order.get(p).unwrap();
                             (s, i)
                         });
                         // The singleton's stagger is 3/4, whose fading quantile is 1/2.
@@ -184,7 +184,7 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
     for (a, b) in [(make(0), make(999)), (tail(0), tail(999))] {
         let a = Order::new(a.shuffle(1)).unwrap();
         let b = Order::new(b.shuffle(1)).unwrap();
-        assert!(a.iter(..).map(|(s, i)| (s.salt, i)).eq(b.iter(..).map(|(s, i)| (s.salt, i))));
+        assert!(a.iter(..).unwrap().map(|(s, i)| (s.salt, i)).eq(b.iter(..).unwrap().map(|(s, i)| (s.salt, i))));
         assert_eq!(a.sources().len(), 4);
     }
 }
@@ -193,10 +193,13 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
 fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
     let global = Seq::mix_with([(Seq::source(3), Sampling::Uniform), (Seq::source(1), Sampling::delayed(0.75))]);
     assert_eq!(global.check(), Ok(4));
-    let shard = Seq::mix_with([(Seq::source(3).shard(2, 0), Sampling::Uniform), (Seq::source(1).shard(2, 0), Sampling::delayed(0.75))]);
+    let shard = Seq::mix_with([
+        (Seq::source(3).shard(2, 0).unwrap(), Sampling::Uniform),
+        (Seq::source(1).shard(2, 0).unwrap(), Sampling::delayed(0.75)),
+    ]);
     assert_eq!(shard.check(), Ok(3));
     for worker in 0..2 {
-        assert_eq!(global.clone().shard(2, worker).check(), Ok(2));
+        assert_eq!(global.clone().shard(2, worker).unwrap().check(), Ok(2));
     }
 }
 
@@ -204,7 +207,7 @@ fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
 fn empty_compaction_preserves_identity_and_error_paths() {
     let order = Order::new(Seq::mix([Seq::source(0), Seq::source(3), Seq::source(0), Seq::source(3)])).unwrap();
     assert_eq!(order.sources(), &[0, 3, 0, 3]);
-    assert_eq!(order.iter(..).map(|(s, _)| order.source_index(s)).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
+    assert_eq!(order.iter(..).unwrap().map(|(s, _)| order.source_index(s).unwrap()).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
     let error = Seq::mix_with([
         (Seq::source(0), Sampling::Uniform),
         (Seq::source(3), Sampling::Uniform),
@@ -231,7 +234,12 @@ fn json_preserves_float_bits_and_large_weighted_orders() {
         let back: Seq<usize> = serde_json::from_str(&serde_json::to_string(&seq).unwrap()).unwrap();
         assert_eq!(seq, back);
         let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
-        assert!(a.iter(n - 100..).map(|(s, i)| (a.source_index(s), i)).eq(b.iter(n - 100..).map(|(s, i)| (b.source_index(s), i))));
+        assert!(
+            a.iter(n - 100..)
+                .unwrap()
+                .map(|(s, i)| (a.source_index(s).unwrap(), i))
+                .eq(b.iter(n - 100..).unwrap().map(|(s, i)| (b.source_index(s).unwrap(), i)))
+        );
     }
 }
 
@@ -241,8 +249,8 @@ fn weighted_counts(total: usize, weights: &[f64]) -> Vec<usize> {
     let order = Order::new(Seq::weighted(total, weights.iter().map(|&w| (Seq::source(usize::from(w > 0.0)), w)))).unwrap();
     assert_eq!(order.len(), total);
     let mut counts = vec![0; weights.len()];
-    for (source, _) in order.iter(..) {
-        counts[order.source_index(source)] += 1;
+    for (source, _) in order.iter(..).unwrap() {
+        counts[order.source_index(source).unwrap()] += 1;
     }
     counts
 }

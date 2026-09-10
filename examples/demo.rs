@@ -30,21 +30,21 @@ fn main() {
     println!("length {} over sources {sources:?}", order.len());
     println!("Schedules use a shared virtual clock; their breakpoints are not output percentages.");
 
-    let line: String = order.iter(..).map(|(s, _)| s.name).collect();
+    let line: String = order.iter(..).unwrap().map(|(s, _)| s.name).collect();
     println!("order (two epochs):\n{line}");
 
     println!("\nthe second half in detail, its first 20 elements:");
-    let part: Vec<String> = order.iter(120..140).map(|(s, i)| format!("{}{i}", s.name)).collect();
+    let part: Vec<String> = order.iter(120..140).unwrap().map(|(s, i)| format!("{}{i}", s.name)).collect();
     println!("  {}", part.join(" "));
 
     println!("\nfour shards, first 10 elements each (shard w holds every 4th element, offset w):");
     for w in 0..4 {
-        let shard = Order::new(seq.clone().shard(4, w)).unwrap();
-        let part: Vec<String> = shard.iter(0..10).map(|(s, i)| format!("{}{i}", s.name)).collect();
+        let shard = Order::new(seq.clone().shard(4, w).unwrap()).unwrap();
+        let part: Vec<String> = shard.iter(0..10).unwrap().map(|(s, i)| format!("{}{i}", s.name)).collect();
         println!("  shard {w}: {}", part.join(" "));
     }
 
-    let (s, i) = order.get(137);
-    let (t, j) = order.iter(137..138).next().unwrap();
+    let (s, i) = order.get(137).unwrap();
+    let (t, j) = order.iter(137..138).unwrap().next().unwrap();
     println!("\nrandom access agrees with iteration: get(137) = {}{i}, iter(137..138) = {}{j}", s.name, t.name);
 }

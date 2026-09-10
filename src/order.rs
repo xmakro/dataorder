@@ -124,9 +124,9 @@ impl<T: Source> Order<T> {
     /// use dataorder::{Order, Seq};
     /// let seq = Seq::source(100).shuffle(1);
     /// let (a, b) = (Order::with_seed(seq.clone(), 1)?, Order::with_seed(seq, 2)?);
-    /// assert!(a.iter(..).ne(b.iter(..)));
+    /// assert!(a.iter(..)?.ne(b.iter(..)?));
     /// assert_eq!(b.seed(), 2);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -170,8 +170,8 @@ impl<T> Order<T> {
     /// let mut order = Order::new(seq.clone())?;
     /// order.set_seed(7);
     /// let reseeded = Order::with_seed(seq, 7)?;
-    /// assert!(order.iter(..).eq(reseeded.iter(..)));
-    /// # Ok::<(), dataorder::Error>(())
+    /// assert!(order.iter(..)?.eq(reseeded.iter(..)?));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_seed(&mut self, seed: u64) {
         self.ctx = seed;
@@ -184,14 +184,6 @@ impl<T> Order<T> {
         &self.sources
     }
 
-    /// Mutable access to source handles, for example to open a dataset in place.
-    /// The order keeps the lengths and salts recorded at construction. Keep source
-    /// lengths stable so that the stored order and returned indices remain valid.
-    #[must_use]
-    pub fn sources_mut(&mut self) -> &mut [T] {
-        &mut self.sources
-    }
-
     /// Consumes the order and returns its source handles in configuration order.
     #[must_use]
     pub fn into_sources(self) -> Vec<T> {
@@ -201,34 +193,31 @@ impl<T> Order<T> {
     /// Returns a source's index in [`sources`](Order::sources).
     /// Uses the reference's location, so it takes constant time and distinguishes
     /// sources even when their values compare equal. For zero-sized source types,
-    /// references cannot be distinguished and this always returns 0. Use
+    /// references cannot be distinguished and this returns `None`. Use
     /// [`get_indexed`](Self::get_indexed) or [`Cursor::indexed`] for explicit ordinals.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::mix([Seq::source(3), Seq::source(3)]))?;
-    /// let parts: Vec<usize> = order.iter(..).map(|(s, _)| order.source_index(s)).collect();
+    /// let parts: Vec<usize> = order.iter(..)?.map(|(s, _)| order.source_index(s).unwrap()).collect();
     /// assert_eq!(parts, [0, 1, 0, 1, 0, 1]);
-    /// # Ok::<(), dataorder::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// # Panics
-    /// If `T` is not zero-sized and `source` is not a reference into this order's sources.
+    /// Returns `None` if `source` is not a reference into this order's sources.
     #[must_use]
-    pub fn source_index(&self, source: &T) -> usize {
+    pub fn source_index(&self, source: &T) -> Option<usize> {
         let size = std::mem::size_of::<T>();
         if size == 0 {
-            return 0;
+            return None;
         }
         let (base, at) = (self.sources.as_ptr() as usize, std::ptr::from_ref(source) as usize);
-        assert!(
-            at >= base && at < base + size * self.sources.len() && (at - base).is_multiple_of(size),
-            "dataorder: the source is not one of this order's"
-        );
-        (at - base) / size
+        let offset = at.checked_sub(base)?;
+        (offset / size < self.sources.len() && offset.is_multiple_of(size)).then_some(offset / size)
     }
 
-    /// Returns the source and source index at order position `pos`.
+    /// Returns the source and source index at order position `pos`, or `None`
+    /// when `pos >= len()`.
     ///
     /// Walks the path to a source. A concat searches its offsets in `O(log k)`; a mix
     /// seeks the interleave and allocates (see the crate's [cost model](crate#cost)), and
@@ -239,40 +228,23 @@ impl<T> Order<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(5).shuffle(1)]))?;
-    /// let (source, index) = order.get(2);
+    /// let (source, index) = order.get(2).unwrap();
     /// assert_eq!((*source, index), (3, 2));
-    /// assert_eq!(*order.get(3).0, 5);
+    /// assert_eq!(*order.get(3).unwrap().0, 5);
+    /// assert_eq!(order.get(order.len()), None);
     /// # Ok::<(), dataorder::Error>(())
     /// ```
     ///
-    /// # Panics
-    /// If `pos >= self.len()`. Check [`len`](Order::len) first when the position
-    /// might be out of range.
     #[must_use]
-    pub fn get(&self, pos: usize) -> (&T, usize) {
-        self.try_get(pos).unwrap_or_else(|| panic!("dataorder: position {pos} out of range"))
-    }
-
-    /// Returns the element at `pos`, or `None` when `pos >= len()`.
-    /// Has the same lookup cost as [`get`](Self::get).
-    #[must_use]
-    pub fn try_get(&self, pos: usize) -> Option<(&T, usize)> {
-        self.try_get_indexed(pos).map(|(_, source, index)| (source, index))
+    pub fn get(&self, pos: usize) -> Option<(&T, usize)> {
+        self.get_indexed(pos).map(|(_, source, index)| (source, index))
     }
 
     /// Returns `(source_ordinal, source, index_within_source)` at `pos`.
     /// The ordinal indexes [`sources`](Self::sources), including for zero-sized types.
-    ///
-    /// # Panics
-    /// If `pos >= len()`; use [`try_get_indexed`](Self::try_get_indexed) for checked access.
+    /// Returns `None` when `pos >= len()`.
     #[must_use]
-    pub fn get_indexed(&self, pos: usize) -> (usize, &T, usize) {
-        self.try_get_indexed(pos).unwrap_or_else(|| panic!("dataorder: position {pos} out of range"))
-    }
-
-    /// Checked [`get_indexed`](Self::get_indexed); returns `None` outside the order.
-    #[must_use]
-    pub fn try_get_indexed(&self, pos: usize) -> Option<(usize, &T, usize)> {
+    pub fn get_indexed(&self, pos: usize) -> Option<(usize, &T, usize)> {
         if pos >= self.len() {
             return None;
         }
@@ -281,8 +253,8 @@ impl<T> Order<T> {
     }
 
     /// Returns a cursor over the positions in `range`.
-    /// `iter(a..b)` yields `get(p)` for each `p` in `a..b`; the end is exclusive.
-    /// `iter(..)` visits the whole order, as does `for item in &order`.
+    /// `iter(a..b)?` yields the element at each `p` in `a..b`; the end is exclusive.
+    /// `iter(..)?` visits the whole order, as does `for item in &order`.
     ///
     /// Cursor state is allocated on the first draw. Each entered mix reserves
     /// space for its parts, then initializes child cursors as it draws from them.
@@ -293,24 +265,15 @@ impl<T> Order<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).shuffle(3))?;
-    /// let all: Vec<usize> = order.iter(..).map(|(_, i)| i).collect();
-    /// assert_eq!(order.iter(4..7).map(|(_, i)| i).collect::<Vec<_>>(), all[4..7]);
-    /// assert_eq!(order.iter(8..).count(), 2);
-    /// # Ok::<(), dataorder::Error>(())
+    /// let all: Vec<usize> = order.iter(..)?.map(|(_, i)| i).collect();
+    /// assert_eq!(order.iter(4..7)?.map(|(_, i)| i).collect::<Vec<_>>(), all[4..7]);
+    /// assert_eq!(order.iter(8..)?.count(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    ///
-    /// # Panics
-    /// If the range ends after `len()`, ends before it starts, or has a bound at
-    /// `usize::MAX` where one more would be needed.
-    pub fn iter(&self, range: impl RangeBounds<usize>) -> Cursor<'_, T> {
-        self.try_iter(range).unwrap_or_else(|e| panic!("dataorder: {e}"))
-    }
-
-    /// Returns a cursor, reporting invalid bounds without panicking.
     ///
     /// # Errors
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
-    pub fn try_iter(&self, range: impl RangeBounds<usize>) -> Result<Cursor<'_, T>, BoundsError> {
+    pub fn iter(&self, range: impl RangeBounds<usize>) -> Result<Cursor<'_, T>, BoundsError> {
         Ok(Cursor::new(self, resolve(range, self.len())?))
     }
 }
@@ -334,9 +297,9 @@ impl<'a, T> IntoIterator for &'a Order<T> {
     type Item = (&'a T, usize);
     type IntoIter = Cursor<'a, T>;
 
-    /// The whole order: `iter(..)`.
+    /// The whole order, without fallible range validation.
     fn into_iter(self) -> Cursor<'a, T> {
-        self.iter(..)
+        Cursor::new(self, 0..self.len())
     }
 }
 

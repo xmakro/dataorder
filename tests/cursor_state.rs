@@ -102,14 +102,14 @@ fn position(raw: usize, end: usize) -> usize {
 }
 
 fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
-    let mut cursor = order.iter(..).indexed();
+    let mut cursor = order.iter(..).unwrap().indexed();
     let (mut pos, mut end) = (0, order.len());
     for (step, op) in ops.iter().enumerate() {
         let fail = || format!("operation {step}: {op:?}, position={pos}, end={end}");
         match *op {
             Op::Next | Op::Nth(_) => {
                 let n = if let Op::Nth(n) = *op { n } else { 0 };
-                let expected = (n < end - pos).then(|| order.get_indexed(pos + n));
+                let expected = (n < end - pos).then(|| order.get_indexed(pos + n).unwrap());
                 let actual = if matches!(op, Op::Next) { cursor.next() } else { cursor.nth(n) };
                 if actual != expected {
                     return Err(format!("{}: {actual:?} != {expected:?}", fail()));
@@ -118,16 +118,16 @@ fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
             }
             Op::Seek(raw) => {
                 pos = position(raw, end);
-                cursor.seek(pos);
+                cursor.seek(pos).unwrap();
             }
             Op::Range(a, b) => {
                 let (a, b) = (position(a, order.len()), position(b, order.len()));
                 (pos, end) = (a.min(b), a.max(b));
-                cursor.set_range(pos..end);
+                cursor.set_range(pos..end).unwrap();
             }
             Op::Clone => cursor = cursor.clone(),
             Op::Last => {
-                let expected = (pos < end).then(|| order.get_indexed(end - 1));
+                let expected = (pos < end).then(|| order.get_indexed(end - 1).unwrap());
                 if cursor.clone().last() != expected {
                     return Err(fail());
                 }
@@ -139,14 +139,14 @@ fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
             }
             Op::BadSeek => {
                 if let Some(bad) = end.checked_add(1)
-                    && cursor.try_seek(bad).is_ok()
+                    && cursor.seek(bad).is_ok()
                 {
                     return Err(fail());
                 }
             }
             Op::BadRange => {
                 use std::ops::Bound::{Excluded, Unbounded};
-                if cursor.try_set_range((Excluded(usize::MAX), Unbounded)).is_ok() {
+                if cursor.set_range((Excluded(usize::MAX), Unbounded)).is_ok() {
                     return Err(fail());
                 }
             }
@@ -233,11 +233,11 @@ fn boundary_skip_rebinds_retained_child_before_backward_seek() {
         Seq::source(3),
     ]))
     .unwrap();
-    let mut cursor = order.iter(..).indexed();
+    let mut cursor = order.iter(..).unwrap().indexed();
     cursor.next(); // Initialize buffers for the first child.
-    cursor.seek(31); // End of the second child; retain the first child's buffers.
-    cursor.seek(10); // Same child index, but the retained buffers must be rebound.
-    assert_eq!(cursor.next(), Some(order.get_indexed(10)));
+    cursor.seek(31).unwrap(); // End of the second child; retain the first child's buffers.
+    cursor.seek(10).unwrap(); // Same child index, but the retained buffers must be rebound.
+    assert_eq!(cursor.next(), Some(order.get_indexed(10).unwrap()));
 }
 
 #[test]
@@ -253,11 +253,11 @@ fn recycled_children_replace_every_transform_parameter() {
     };
     let seq = Seq::concat([nested(1, 11), nested(55, 19), Seq::source(3), nested(99, 7)]).repeat(3);
     let order = Order::with_seed(seq, 42).unwrap();
-    let expected: Vec<_> = (0..order.len()).map(|pos| order.get_indexed(pos)).collect();
-    assert_eq!(order.iter(..).indexed().collect::<Vec<_>>(), expected);
-    let mut cursor = order.iter(..).indexed();
+    let expected: Vec<_> = (0..order.len()).map(|pos| order.get_indexed(pos).unwrap()).collect();
+    assert_eq!(order.iter(..).unwrap().indexed().collect::<Vec<_>>(), expected);
+    let mut cursor = order.iter(..).unwrap().indexed();
     for pos in (0..order.len()).rev().step_by(3).chain((0..order.len()).step_by(7)) {
-        cursor.seek(pos);
+        cursor.seek(pos).unwrap();
         let mut copy = cursor.clone();
         for expected in &expected[pos..(pos + 5).min(order.len())] {
             assert_eq!(cursor.next(), Some(*expected));

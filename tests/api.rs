@@ -46,12 +46,11 @@ fn hand_built_configuration() {
     let mixed = Seq::mix_with([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::default() }]);
     assert_eq!(mixed, Seq::mix_with([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
     assert_eq!(mixed, Seq::mix_with([shard("b", 40), shard("c", 5)]));
-    let mut order: Order<Shard> = seq.try_into().unwrap();
-    order.sources_mut()[0].name = "A";
-    let all = names(order.iter(..));
-    assert_eq!(all.iter().filter(|e| e.0 == "A").count(), 75);
+    let order: Order<Shard> = seq.try_into().unwrap();
+    let all = names(order.iter(..).unwrap());
+    assert_eq!(all.iter().filter(|e| e.0 == "a").count(), 75);
     assert_eq!(all.iter().filter(|e| e.0 == "b" || e.0 == "c").count(), 25);
-    assert_eq!(order.sources().iter().map(|s| s.name).collect::<Vec<_>>(), ["A", "b", "c"]);
+    assert_eq!(order.sources().iter().map(|s| s.name).collect::<Vec<_>>(), ["a", "b", "c"]);
     let sources = order.into_sources();
     assert_eq!(sources.len(), 3);
 }
@@ -81,23 +80,23 @@ fn errors_name_kind_and_path() {
 
 #[test]
 fn cursors_seek_skip_and_clone() {
-    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).shard(3, 2)).unwrap();
-    let all = names(order.iter(..));
+    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).shard(3, 2).unwrap()).unwrap();
+    let all = names(order.iter(..).unwrap());
     assert_eq!(all.len(), order.len());
-    let mut cursor = order.iter(..);
+    let mut cursor = order.iter(..).unwrap();
     assert_eq!(cursor.nth(10).map(|(s, i)| (s.name, i)), Some(all[10]));
-    cursor.seek(100);
+    cursor.seek(100).unwrap();
     let ahead = cursor.clone();
     assert_eq!(names(cursor), all[100..]);
     assert_eq!(names(ahead), all[100..]);
-    let mut back = order.iter(50..60);
-    back.seek(55);
+    let mut back = order.iter(50..60).unwrap();
+    back.seek(55).unwrap();
     assert_eq!(back.len(), 5);
-    back.seek(52);
+    back.seek(52).unwrap();
     assert_eq!(names(back), all[52..60]);
     for (i, e) in (&order).into_iter().enumerate() {
         assert_eq!((e.0.name, e.1), all[i]);
-        assert_eq!(order.get(i), (e.0, e.1));
+        assert_eq!(order.get(i).unwrap(), (e.0, e.1));
     }
 }
 
@@ -125,7 +124,7 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(boxed.salt(), dataorder::salt("s"));
     assert_eq!((&&shared).salt(), shared.salt());
     let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle(1)).unwrap();
-    let letters: String = order.iter(..).map(|(v, i)| v[i]).collect();
+    let letters: String = order.iter(..).unwrap().map(|(v, i)| v[i]).collect();
     assert_eq!(letters.len(), 5);
     assert_eq!(Seq::source(&[1u8, 2, 3][..]).check(), Ok(3));
     assert_eq!(Seq::source([0u8; 4]).check(), Ok(4));
@@ -134,12 +133,13 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let seq = Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1);
+    let seq =
+        Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1).unwrap();
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
-    assert!(a.iter(..).eq(b.iter(..)));
+    assert!(a.iter(..).unwrap().eq(b.iter(..).unwrap()));
     // The wire format is part of the API.
     let seq: Seq<usize> = Seq::weighted_with(9, [(Seq::source(4).shuffle(1), 0.5, Sampling::ramp(0.1, 0.2))]);
     assert_eq!(

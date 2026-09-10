@@ -57,7 +57,9 @@ fn golden_orders() {
         ),
         (
             "nested mixes, epochs, shard",
-            Seq::mix([Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2).repeat(3)]), src(2, 900).shuffle(3)]).shard(4, 1),
+            Seq::mix([Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2).repeat(3)]), src(2, 900).shuffle(3)])
+                .shard(4, 1)
+                .unwrap(),
             0,
         ),
         ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).stride(7, 3), 0),
@@ -101,7 +103,7 @@ fn golden_orders() {
         .iter()
         .map(|(name, seq, seed)| {
             let order = Order::with_seed(seq.clone(), *seed).unwrap_or_else(|e| panic!("{name}: {e}"));
-            fingerprint(order.iter(..))
+            fingerprint(order.iter(..).unwrap())
         })
         .collect();
     let names: Vec<&str> = cases.iter().map(|c| c.0).collect();
@@ -109,8 +111,8 @@ fn golden_orders() {
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle(7)).unwrap();
     const FIRST: [usize; 6] = [629, 114, 228, 812, 639, 604];
-    assert_eq!(order.iter(0..6).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
-    assert!((0..6).all(|k| order.get(k).1 == FIRST[k]));
+    assert_eq!(order.iter(0..6).unwrap().map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
+    assert!((0..6).all(|k| order.get(k).unwrap().1 == FIRST[k]));
 }
 
 #[test]
@@ -137,9 +139,10 @@ fn golden_name_and_path_salted_orders() {
     const EXPECTED: u64 = 15_852_656_108_745_184_545;
     for as_path in [false, true] {
         let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin", as_path }).shuffle(7), 42).unwrap();
-        assert_eq!(order.iter(..12).map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
+        assert_eq!(order.iter(..12).unwrap().map(|(_, i)| i).collect::<Vec<_>>(), FIRST);
         let actual = order
             .iter(..)
+            .unwrap()
             .flat_map(|(_, i)| (i as u64).to_le_bytes())
             .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
         assert_eq!(actual, EXPECTED, "as_path={as_path}");

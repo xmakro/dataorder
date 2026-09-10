@@ -33,12 +33,12 @@
 //!
 //! // Start anywhere, without replaying the earlier positions.
 //! let resume = 1_200_000_000;
-//! let mut cursor = order.iter(resume..resume + 10);
+//! let mut cursor = order.iter(resume..resume + 10)?;
 //! let (source, index) = cursor.next().unwrap();
 //! assert_eq!(*source, 1_000_000_000);
 //! assert!(index < 1_000_000_000);
-//! assert_eq!((source, index), order.get(resume));
-//! # Ok::<(), dataorder::Error>(())
+//! assert_eq!((source, index), order.get(resume).unwrap());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! Position 1,200,000,000 belongs to the *order*; the returned index belongs to the original
@@ -133,8 +133,7 @@
 //! Lengths and positions use `usize` in the public API and `u64` internally. The final
 //! order must fit in `usize`; on a 32-bit target, intermediate nodes may be longer.
 //! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
-//! [`MAX_DEPTH`]. [`Seq`] documents stack use and the builder arguments that panic
-//! instead of returning a validation error.
+//! [`MAX_DEPTH`]. [`Seq`] documents stack use and the bounds checked by its builders.
 //!
 //! Compilation simplifies nodes without changing their order. It flattens nested
 //! concatenations, removes empty parts, merges nested strides, and folds skips and
@@ -143,8 +142,8 @@
 //! A cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.
 //!
-//! [`Order::try_get`] returns `None` for an invalid position. [`Order::try_iter`],
-//! [`Cursor::try_seek`], [`Cursor::try_set_range`], [`Seq::try_slice`] and [`Seq::try_shard`] report
+//! [`Order::get`] returns `None` for an invalid position. [`Order::iter`],
+//! [`Cursor::seek`], [`Cursor::set_range`], [`Seq::slice`] and [`Seq::shard`] report
 //! [`BoundsError`] instead of panicking on invalid bounds. Failed cursor operations
 //! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;
 //! `position(predicate)` remains the standard consuming iterator search.

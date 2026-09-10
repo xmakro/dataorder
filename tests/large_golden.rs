@@ -42,9 +42,9 @@ fn large_orders_keep_baseline_outputs() {
         let step = 1usize << 30;
         let order = Order::with_seed(cases[case].clone().stride(step, (pos % step as u64) as usize), seeds[case]).unwrap();
         let at = (pos / step as u64) as usize;
-        let (s, i) = order.get(at);
+        let (s, i) = order.get(at).unwrap();
         assert_eq!((s.id, i), expected, "get: {fixture}");
-        let (_, s, i) = order.iter(at..).indexed().next().unwrap();
+        let (_, s, i) = order.iter(at..).unwrap().indexed().next().unwrap();
         assert_eq!((s.id, i), expected, "cursor: {fixture}");
     }
 }
