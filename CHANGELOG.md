@@ -2,6 +2,9 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `salt_path`. Choose the dataset identity and its byte
+  representation in the caller, then pass those bytes to `salt`.
+
 - **Breaking:** remove `Cursor::remaining`; use `ExactSizeIterator::len()`
   (`cursor.len()`) to read the remaining element count.
 

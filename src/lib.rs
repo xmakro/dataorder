@@ -271,7 +271,7 @@ pub use error::{BoundsError, Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};
-pub use source::{Source, salt, salt_path};
+pub use source::{Source, salt};
 
 /// Float bits for equality and hashing, treating `-0.0` and `0.0` as equal.
 pub(crate) fn float_bits(x: f64) -> u64 {

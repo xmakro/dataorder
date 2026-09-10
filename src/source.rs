@@ -1,7 +1,6 @@
 //! Dataset lengths and stable identities. An order returns a source and an index;
 //! the caller decides how to load the corresponding record.
 
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -44,8 +43,7 @@ pub trait Source {
     ///
     /// Sources with the same length and salt shuffle alike under the same seeds
     /// and repetition context. Derive a salt from a dataset name with [`crate::salt`]
-    /// to keep ordering independent of storage location. [`crate::salt_path`] is also
-    /// available when the path itself is the intended identity.
+    /// to keep ordering independent of storage location.
     fn salt(&self) -> u64 {
         0
     }
@@ -53,7 +51,7 @@ pub trait Source {
 
 /// Computes a stable [`Source::salt`] from bytes, such as a dataset name.
 /// Uses FNV-1a; changing the hash would change orders and is covered by the crate's
-/// stability policy. For paths, use [`salt_path`].
+/// stability policy.
 ///
 /// ```
 /// assert_eq!(dataorder::salt("web"), dataorder::salt(b"web"));
@@ -62,23 +60,6 @@ pub trait Source {
 #[must_use]
 pub fn salt(bytes: impl AsRef<[u8]>) -> u64 {
     bytes.as_ref().iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
-}
-
-/// Computes a stable [`Source::salt`] from a path's encoded bytes.
-///
-/// Valid Unicode paths use UTF-8 on every platform, so identical spellings give
-/// identical salts. Paths are not normalized: `web/1.bin` and `web\1.bin` differ.
-/// Non-Unicode paths use the platform's [`as_encoded_bytes`](std::ffi::OsStr::as_encoded_bytes)
-/// representation and need not agree across platforms.
-///
-/// ```
-/// use std::path::{Path, PathBuf};
-/// assert_eq!(dataorder::salt_path(Path::new("web.bin")), dataorder::salt("web.bin"));
-/// assert_eq!(dataorder::salt_path(PathBuf::from("web.bin")), dataorder::salt_path("web.bin"));
-/// ```
-#[must_use]
-pub fn salt_path(path: impl AsRef<Path>) -> u64 {
-    salt(path.as_ref().as_os_str().as_encoded_bytes())
 }
 
 // Keep usize as the only integer implementation so Seq::source(10) infers usize.
@@ -124,7 +105,7 @@ forward!(&T, &mut T, Box<T>, Rc<T>, Arc<T>);
 
 #[cfg(test)]
 mod tests {
-    use super::{salt, salt_path};
+    use super::salt;
 
     #[test]
     fn stable_salt_vectors() {
@@ -134,18 +115,10 @@ mod tests {
             (b"a".as_slice(), 0xaf63_dc4c_8601_ec8c),
             (b"foobar".as_slice(), 0x8594_4171_f739_67e8),
             (b"a\0b".as_slice(), 0xe5d2_9919_0426_66b2),
+            (b"web.bin".as_slice(), 0x3e74_c77b_571a_dd96),
             ("web/训练.bin".as_bytes(), 0xc2ed_ac2d_2053_c259),
         ] {
             assert_eq!(salt(bytes), expected, "bytes: {bytes:?}");
-        }
-    }
-
-    #[test]
-    fn stable_path_salt_vectors() {
-        // Unicode paths use the same UTF-8 bytes on every supported platform.
-        for (path, expected) in [("", 0xcbf2_9ce4_8422_2325), ("web.bin", 0x3e74_c77b_571a_dd96), ("web/训练.bin", 0xc2ed_ac2d_2053_c259)]
-        {
-            assert_eq!(salt_path(path), expected, "path: {path:?}");
         }
     }
 }
