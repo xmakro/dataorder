@@ -1,7 +1,7 @@
 //! A schedule over two epochs: three sources, one delayed, one ramped, each
 //! shuffled afresh per epoch, and the whole order sharded over four workers. The parts are
 //! repeated, not the mix, so that the schedules span the run rather than each epoch.
-use dataorder::{Order, Sampling, Seq, Source};
+use dataorder::{Order, Schedule, Seq, Source};
 
 #[derive(Clone)]
 struct Src {
@@ -21,9 +21,9 @@ impl Source for Src {
 
 fn main() {
     let seq = Seq::mix([
-        (Seq::source(Src { name: 'A', len: 60 }).shuffle(1).repeat(2), Sampling::Uniform),
-        (Seq::source(Src { name: 'B', len: 20 }).shuffle(2).repeat(2), Sampling::delayed(0.5)), // B: starts at virtual time 0.5
-        (Seq::source(Src { name: 'C', len: 40 }).shuffle(3).repeat(2), Sampling::ramp(0.2, 0.6)), // C: ramps from virtual time 0.2 to 0.6
+        (Seq::source(Src { name: 'A', len: 60 }).shuffle(1).repeat(2), Schedule::Uniform),
+        (Seq::source(Src { name: 'B', len: 20 }).shuffle(2).repeat(2), Schedule::delayed(0.5)), // B: starts at virtual time 0.5
+        (Seq::source(Src { name: 'C', len: 40 }).shuffle(3).repeat(2), Schedule::ramp(0.2, 0.6)), // C: ramps from virtual time 0.2 to 0.6
     ]);
     let order = Order::new(seq.clone()).unwrap();
     let sources: Vec<(char, usize)> = order.sources().iter().map(|s| (s.name, s.len)).collect();

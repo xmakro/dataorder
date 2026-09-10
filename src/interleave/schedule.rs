@@ -1,4 +1,4 @@
-//! Public sampling schedules and internal schedule validation errors.
+//! Public schedules and internal schedule validation errors.
 
 use super::MAX_TOTAL_LEN;
 use crate::float_bits;
@@ -34,10 +34,10 @@ use std::hash::{Hash, Hasher};
 /// are preserved. Gaps with no active parts produce no output positions.
 ///
 /// ```
-/// use dataorder::{Order, Sampling, Seq};
+/// use dataorder::{Order, Schedule, Seq};
 /// let order = Order::new(Seq::mix([
-///     (Seq::source(100), Sampling::Uniform),
-///     (Seq::source(100), Sampling::delayed(0.6)),
+///     (Seq::source(100), Schedule::Uniform),
+///     (Seq::source(100), Schedule::delayed(0.6)),
 /// ]))?;
 /// // At virtual time 0.6, about 60 of the first part's 100 items have appeared.
 /// // The second part therefore starts around 30% through the 200-item output.
@@ -69,7 +69,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
-pub enum Sampling {
+pub enum Schedule {
     /// A constant rate over the full virtual clock `[0, 1]`.
     /// Its fraction of the actual output changes as other parts start, ramp or stop.
     #[default]
@@ -83,8 +83,8 @@ pub enum Sampling {
     ///
     /// Requires finite parameters with `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and
     /// `start < off`, ensuring some time at a positive rate.
-    /// Build it with [`Sampling::delayed`], [`Sampling::ramp`], [`Sampling::until`],
-    /// [`Sampling::fading`] or [`Sampling::trapezoid`].
+    /// Build it with [`Schedule::delayed`], [`Schedule::ramp`], [`Schedule::until`],
+    /// [`Schedule::fading`] or [`Schedule::trapezoid`].
     Trapezoid {
         /// Virtual time at which the rate starts rising from zero.
         start: f64,
@@ -97,13 +97,13 @@ pub enum Sampling {
     },
 }
 
-impl Sampling {
+impl Schedule {
     /// Creates a schedule whose rate is zero before virtual time `at`, then constant.
     /// Requires `0 ≤ at < 1`; validated when the order is built.
     ///
     /// ```
-    /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::delayed(0.5), Sampling::Trapezoid { start: 0.5, full: 0.5, fade: 1.0, off: 1.0 });
+    /// use dataorder::Schedule;
+    /// assert_eq!(Schedule::delayed(0.5), Schedule::Trapezoid { start: 0.5, full: 0.5, fade: 1.0, off: 1.0 });
     /// ```
     #[must_use]
     pub const fn delayed(at: f64) -> Self {
@@ -115,8 +115,8 @@ impl Sampling {
     /// `start < 1`; validated when the order is built.
     ///
     /// ```
-    /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::ramp(0.2, 0.6), Sampling::Trapezoid { start: 0.2, full: 0.6, fade: 1.0, off: 1.0 });
+    /// use dataorder::Schedule;
+    /// assert_eq!(Schedule::ramp(0.2, 0.6), Schedule::Trapezoid { start: 0.2, full: 0.6, fade: 1.0, off: 1.0 });
     /// ```
     #[must_use]
     pub const fn ramp(start: f64, full: f64) -> Self {
@@ -127,8 +127,8 @@ impl Sampling {
     /// Requires `0 < at ≤ 1`; validated when the order is built.
     ///
     /// ```
-    /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::until(0.5), Sampling::Trapezoid { start: 0.0, full: 0.0, fade: 0.5, off: 0.5 });
+    /// use dataorder::Schedule;
+    /// assert_eq!(Schedule::until(0.5), Schedule::Trapezoid { start: 0.0, full: 0.0, fade: 0.5, off: 0.5 });
     /// ```
     #[must_use]
     pub const fn until(at: f64) -> Self {
@@ -139,8 +139,8 @@ impl Sampling {
     /// Requires `0 ≤ fade ≤ off ≤ 1` and `off > 0`; validated when the order is built.
     ///
     /// ```
-    /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::fading(0.4, 0.8), Sampling::Trapezoid { start: 0.0, full: 0.0, fade: 0.4, off: 0.8 });
+    /// use dataorder::Schedule;
+    /// assert_eq!(Schedule::fading(0.4, 0.8), Schedule::Trapezoid { start: 0.0, full: 0.0, fade: 0.4, off: 0.8 });
     /// ```
     #[must_use]
     pub const fn fading(fade: f64, off: f64) -> Self {
@@ -148,11 +148,11 @@ impl Sampling {
     }
 
     /// Creates a schedule that rises, stays constant, then falls to zero.
-    /// See [`Trapezoid`](Sampling::Trapezoid) for the breakpoint constraints.
+    /// See [`Trapezoid`](Schedule::Trapezoid) for the breakpoint constraints.
     ///
     /// ```
-    /// use dataorder::Sampling;
-    /// assert_eq!(Sampling::trapezoid(0.1, 0.3, 0.6, 0.9), Sampling::Trapezoid { start: 0.1, full: 0.3, fade: 0.6, off: 0.9 });
+    /// use dataorder::Schedule;
+    /// assert_eq!(Schedule::trapezoid(0.1, 0.3, 0.6, 0.9), Schedule::Trapezoid { start: 0.1, full: 0.3, fade: 0.6, off: 0.9 });
     /// ```
     #[must_use]
     pub const fn trapezoid(start: f64, full: f64, fade: f64, off: f64) -> Self {
@@ -168,43 +168,43 @@ impl Sampling {
     }
 }
 
-impl PartialEq for Sampling {
+impl PartialEq for Schedule {
     fn eq(&self, other: &Self) -> bool {
         std::mem::discriminant(self) == std::mem::discriminant(other) && self.bits() == other.bits()
     }
 }
 
-impl Eq for Sampling {}
+impl Eq for Schedule {}
 
-impl Hash for Sampling {
+impl Hash for Schedule {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         self.bits().hash(state);
     }
 }
 
-/// Why a sampling configuration was rejected.
+/// Why a schedule configuration was rejected.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SamplingError {
+pub(crate) enum ScheduleError {
     /// The total length exceeds `usize::MAX`.
     LengthOverflow,
     /// The total length exceeds [`MAX_TOTAL_LEN`].
     TooLong,
     /// A breakpoint or derived profile coefficient is invalid.
-    InvalidParameter { seq: usize, sampling: Sampling, reason: crate::SamplingReason },
+    InvalidParameter { seq: usize, schedule: Schedule, reason: crate::ScheduleReason },
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize, len: usize, peak_rate: f64 },
 }
 
-impl fmt::Display for SamplingError {
+impl fmt::Display for ScheduleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LengthOverflow => write!(f, "total length exceeds usize::MAX"),
             Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
-            Self::InvalidParameter { seq, sampling, .. } => write!(f, "sequence {seq}: invalid {sampling:?}"),
+            Self::InvalidParameter { seq, schedule, .. } => write!(f, "sequence {seq}: invalid {schedule:?}"),
             Self::TooSteep { seq, .. } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
         }
     }
 }
 
-impl std::error::Error for SamplingError {}
+impl std::error::Error for ScheduleError {}

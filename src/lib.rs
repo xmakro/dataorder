@@ -74,12 +74,12 @@
 //! [`Seq::cycle`] before mixing. A mix preserves the order within each part;
 //! add a shuffle to a part to change that order.
 //!
-//! [`Sampling`] assigns each part's elements keys on a shared virtual clock.
+//! [`Schedule`] assigns each part's elements keys on a shared virtual clock.
 //! Curves are independent: `Uniform` is constant in virtual time, and all parts
 //! adapt equally when their keys are merged. Clock values are not fractions of
 //! final output progress; a delay of 0.5 need not start halfway through the output,
 //! and a linear ramp generally becomes nonlinear against output positions. See
-//! [`Sampling`] for the conversion and an example. Overlaps and gaps are allowed.
+//! [`Schedule`] for the conversion and an example. Overlaps and gaps are allowed.
 //! Schedules belong to their mix:
 //! repeating a mix restarts its schedules each epoch. To schedule over several epochs,
 //! repeat the parts and mix them once. `skip(index).step_by(count)` partitions the
@@ -132,7 +132,7 @@
 //! Skips and takes must stay within the child sequence. `step_by` requires a nonzero
 //! step, and an empty sequence cannot be cycled to a positive length. Schedules must
 //! have valid parameters and satisfy their individual numerical limits; see
-//! [`Sampling`] and [`ErrorKind`] for the full rules.
+//! [`Schedule`] and [`ErrorKind`] for the full rules.
 //!
 //! Lengths and positions use `usize` throughout. Every sequence node must fit in
 //! `usize`, even if a parent truncates or discards it. Seeds, salts and shuffle
@@ -207,11 +207,11 @@
 //! # Feature flags
 //!
 //! The optional `serde` feature derives `Serialize` and `Deserialize` for [`Seq`],
-//! [`MixPart`] and [`Sampling`]. It uses serde's derived representation,
+//! [`MixPart`] and [`Schedule`]. It uses serde's derived representation,
 //! with the documented variant and field names. For example:
 //!
 //! ```json
-//! {"Shuffle":{"seed":1,"inner":{"Source":50}}}
+//! {"Mix":[{"seq":{"Shuffle":{"seed":1,"inner":{"Source":50}}},"schedule":"Uniform"}]}
 //! ```
 //!
 //! Unknown fields are rejected. Changes to this format follow the [stability policy](#stability).
@@ -268,8 +268,8 @@ mod source;
 mod tests;
 
 pub use cursor::Cursor;
-pub use error::{BoundsError, Error, ErrorKind, SamplingReason};
-pub use interleave::Sampling;
+pub use error::{BoundsError, Error, ErrorKind, ScheduleReason};
+pub use interleave::Schedule;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};
 pub use source::{Source, salt};

@@ -18,7 +18,7 @@ The default build has **no dependencies**.
   **O(log k) comparisons** for `k` input sequences. Pay for the seek once, then
   iterate from there.
 
-Combine these operations with sampling schedules, repeated epochs and worker sharding.
+Combine these operations with schedules, repeated epochs and worker sharding.
 The same configuration, source metadata and seed reproduce the same order within the
 crate's ordering compatibility policy. For restarts, also preserve the crate version
 and worker settings.
@@ -109,7 +109,7 @@ so you can nest mixes and concatenations.
 | Read sequences one after another | `Seq::concat(sequences)` |
 | Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
 | Choose exact counts for each dataset | `Seq::mix([a.cycle(a_count), b.cycle(b_count), …])` |
-| Control when a sequence contributes records | `Seq::mix`, with a `Sampling` schedule |
+| Control when a sequence contributes records | `Seq::mix`, with a `Schedule` for each part |
 | Shuffle positions | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
 | Repeat or truncate to an exact length | `.cycle(len)` |
@@ -141,18 +141,18 @@ configuration and concatenate additional data when the existing prefix must stay
 Schedules assign each part's elements positions on a **shared virtual clock** from
 0 to 1. Part lengths control **how many** elements each part contributes.
 Each curve is normalized independently, and the mix merges its virtual-time keys.
-`Sampling::Uniform` has a constant rate on that clock, just like `delayed(0.0)`.
+`Schedule::Uniform` has a constant rate on that clock, just like `delayed(0.0)`.
 
 For example, this order draws 75% from one dataset and introduces the other at
 virtual time 0.5:
 
 ```rust
-use dataorder::{Order, Sampling, Seq};
+use dataorder::{Order, Schedule, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq = Seq::mix([
-        (Seq::source(300).shuffle(1).cycle(750), Sampling::Uniform),
-        (Seq::source(100).shuffle(2).cycle(250), Sampling::delayed(0.5)),
+        (Seq::source(300).shuffle(1).cycle(750), Schedule::Uniform),
+        (Seq::source(100).shuffle(2).cycle(250), Schedule::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
@@ -176,7 +176,7 @@ Discrete items approximate the curves, while counts and source-local order remai
 Schedules can overlap or leave gaps, including mixes with no uniform parts. Clock
 intervals with no active parts produce no output. There is no shared capacity check
 or special filler source. Individual breakpoint and numerical-resolution limits still
-apply. See [`Sampling`](https://docs.rs/dataorder/latest/dataorder/enum.Sampling.html)
+apply. See [`Schedule`](https://docs.rs/dataorder/latest/dataorder/enum.Schedule.html)
 for ramps, fade-outs, limits and the virtual-clock model.
 
 **Migration from 0.3:** scheduled orders change in 0.4. `Uniform` no longer fills
@@ -226,8 +226,8 @@ Every item's `source_ordinal` indexes `order.sources()` and distinguishes equal 
 zero-sized handles. Ordinals follow the original configuration, including sources
 whose nodes were removed during compilation. They are local to the order, not persistent dataset IDs.
 
-Sampling diagnostics are part of `ErrorKind`: `InvalidSampling { sampling, reason }`
-includes a `SamplingReason` for non-finite parameters, invalid breakpoints or
+Schedule diagnostics are part of `ErrorKind`: `InvalidSchedule { schedule, reason }`
+includes a `ScheduleReason` for non-finite parameters, invalid breakpoints or
 coefficient overflow. `TooSteep { len, peak_rate, limit }` carries the values behind
 excessive steepness. Both `Error::kind()` and `Error::into_kind()` retain these details.
 

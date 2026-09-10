@@ -92,8 +92,8 @@ fn ids<'a>(it: impl Iterator<Item = crate::Item<'a, Src>>) -> Vec<(u32, usize)> 
 
 impl Error {
     /// A schedule or length rejection of a mix.
-    fn is_sampling(&self) -> bool {
-        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSampling { .. } | ErrorKind::TooSteep { .. })
+    fn is_schedule(&self) -> bool {
+        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::TooSteep { .. })
     }
 }
 
@@ -249,8 +249,8 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
         Seq::Mix(parts) => {
             let evs = parts.iter().map(|p| eval(&p.seq, ctx)).collect::<Result<Vec<_>, _>>()?;
             let lens: Vec<usize> = evs.iter().map(|v| v.len()).collect();
-            let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
-            let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
+            let schedule: Vec<Schedule> = parts.iter().map(|p| p.schedule).collect();
+            let il = Interleave::with_schedule(&lens, &schedule).map_err(|e| {
                 let (kind, part) = e.into_kind();
                 at(kind, part.as_slice())
             })?;
@@ -333,14 +333,14 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         0 => Seq::concat(parts(rng, depth - 1)),
         1 => Seq::mix(parts(rng, depth - 1)),
         2 => Seq::mix(parts(rng, depth - 1).into_iter().map(|p| {
-            let sampling = match rng.below(6) {
-                0 => Sampling::ramp(0.3, 0.6),
-                1 => Sampling::delayed(0.5),
-                2 => Sampling::until(0.5),
-                3 => Sampling::trapezoid(0.1, 0.3, 0.6, 0.9),
-                _ => Sampling::Uniform,
+            let schedule = match rng.below(6) {
+                0 => Schedule::ramp(0.3, 0.6),
+                1 => Schedule::delayed(0.5),
+                2 => Schedule::until(0.5),
+                3 => Schedule::trapezoid(0.1, 0.3, 0.6, 0.9),
+                _ => Schedule::Uniform,
             };
-            (p, sampling)
+            (p, schedule)
         })),
         3 => random_seq(rng, depth - 1, lens).shuffle(rng.next()),
         4 => random_seq(rng, depth - 1, lens).repeat(rng.below(4)),
@@ -374,8 +374,8 @@ fn random_configurations_match_reference() {
         let seed = rng.next();
         let order = match Order::with_seed(seq.clone(), seed) {
             Ok(o) => o,
-            Err(e) if e.is_sampling() => {
-                assert!(eval(&seq, seed).is_err_and(|e| e.is_sampling()), "round {round}: {seq:?}");
+            Err(e) if e.is_schedule() => {
+                assert!(eval(&seq, seed).is_err_and(|e| e.is_schedule()), "round {round}: {seq:?}");
                 assert!(!e.path().is_empty() || matches!(seq, Seq::Mix(_)), "round {round}: {e}");
                 skipped += 1;
                 continue;
@@ -442,7 +442,7 @@ fn large_configurations_match_reference() {
         let seq = random_seq(&mut rng, 5, &lens);
         let order = match Order::new(seq.clone()) {
             Ok(o) => o,
-            Err(e) if e.is_sampling() => continue,
+            Err(e) if e.is_schedule() => continue,
             Err(e) => panic!("round {round}: {e}"),
         };
         let reference = eval(&seq, 0).unwrap();
@@ -672,12 +672,12 @@ fn errors() {
     let half = || src(0, usize::MAX / 2 + 1);
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
     // A mix that folds away is still validated; a schedule problem is found at the part.
-    let over1 = Seq::mix([(src(0, 10), Sampling::delayed(2.0))]);
+    let over1 = Seq::mix([(src(0, 10), Schedule::delayed(2.0))]);
     assert_eq!(
         Order::new(over1).unwrap_err(),
-        at(ErrorKind::InvalidSampling { sampling: Sampling::delayed(2.0), reason: crate::SamplingReason::InvalidBreakpoints }, &[0])
+        at(ErrorKind::InvalidSchedule { schedule: Schedule::delayed(2.0), reason: crate::ScheduleReason::InvalidBreakpoints }, &[0])
     );
-    let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Sampling::Uniform), (src(1, 1 << 30), Sampling::until(1e-6))])]);
+    let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Schedule::Uniform), (src(1, 1 << 30), Schedule::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
     assert_eq!(err.kind(), &ErrorKind::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: crate::MAX_MIX_LEN });
     assert_eq!(err.path(), &[1, 1]);
@@ -836,12 +836,12 @@ fn empty_mix_parts_do_not_affect_the_order() {
     let mut rng = Rng(0x0E0E_0E0E_1234_5678);
     for round in 0..200 {
         let k = 2 + rng.below(6);
-        let parts: Vec<(Seq<Src>, Sampling)> = (0..k)
+        let parts: Vec<(Seq<Src>, Schedule)> = (0..k)
             .map(|i| {
                 let s = match rng.below(4) {
-                    0 => Sampling::delayed(0.3 + 0.1 * rng.below(5) as f64),
-                    1 => Sampling::ramp(0.1, 0.6),
-                    _ => Sampling::Uniform,
+                    0 => Schedule::delayed(0.3 + 0.1 * rng.below(5) as f64),
+                    1 => Schedule::ramp(0.1, 0.6),
+                    _ => Schedule::Uniform,
                 };
                 (src(i as u32, 1 + rng.below(80)), s)
             })
@@ -849,7 +849,7 @@ fn empty_mix_parts_do_not_affect_the_order() {
         let mut with = parts.clone();
         for _ in 0..1 + rng.below(3) {
             let at = rng.below(with.len() + 1);
-            with.insert(at, (src(99, 0), Sampling::delayed(0.9)));
+            with.insert(at, (src(99, 0), Schedule::delayed(0.9)));
         }
         let (Ok(a), Ok(b)) = (Order::new(Seq::mix(with)), Order::new(Seq::mix(parts))) else { continue };
         assert_eq!(ids(a.iter(..).unwrap()), ids(b.iter(..).unwrap()), "round {round}");
@@ -861,25 +861,25 @@ fn empty_mix_parts_do_not_affect_the_order() {
 #[test]
 fn seq_eq_and_hash() {
     use std::collections::HashSet;
-    let a = Seq::mix([(src(0, 5), Sampling::ramp(0.0, 0.5))]);
-    let b = Seq::mix([(src(0, 5), Sampling::ramp(-0.0, 0.5))]);
-    let c = Seq::mix([(src(0, 5), Sampling::ramp(0.1, 0.5))]);
-    let trapezoid = Seq::mix([(src(0, 5), Sampling::trapezoid(0.0, 0.5, 1.0, 1.0))]);
+    let a = Seq::mix([(src(0, 5), Schedule::ramp(0.0, 0.5))]);
+    let b = Seq::mix([(src(0, 5), Schedule::ramp(-0.0, 0.5))]);
+    let c = Seq::mix([(src(0, 5), Schedule::ramp(0.1, 0.5))]);
+    let trapezoid = Seq::mix([(src(0, 5), Schedule::trapezoid(0.0, 0.5, 1.0, 1.0))]);
     assert_eq!(a, b);
     assert_eq!(a, trapezoid);
     assert_ne!(a, c);
     let set: HashSet<Seq<Src>> = [a.clone(), b, c.clone(), trapezoid].into_iter().collect();
     assert_eq!(set.len(), 2);
     assert!(set.contains(&a) && set.contains(&c));
-    let nan = Seq::mix([(src(0, 5), Sampling::delayed(f64::NAN))]);
+    let nan = Seq::mix([(src(0, 5), Schedule::delayed(f64::NAN))]);
     assert_eq!(nan, nan.clone());
-    assert_eq!(Sampling::delayed(0.5), Sampling::ramp(0.5, 0.5));
-    assert_eq!(Sampling::until(0.5), Sampling::fading(0.5, 0.5));
-    assert_ne!(Sampling::until(0.5), Sampling::delayed(0.5));
-    assert_eq!(Sampling::trapezoid(0.0, 0.0, 1.0, 1.0), Sampling::ramp(0.0, 0.0));
-    assert_ne!(Sampling::Uniform, Sampling::ramp(0.0, 0.0));
-    assert_eq!(Sampling::trapezoid(-0.0, 0.1, 0.5, 0.9), Sampling::trapezoid(0.0, 0.1, 0.5, 0.9));
-    assert_eq!(MixPart::from(src(1, 2)), MixPart { seq: src(1, 2), sampling: Sampling::Uniform });
+    assert_eq!(Schedule::delayed(0.5), Schedule::ramp(0.5, 0.5));
+    assert_eq!(Schedule::until(0.5), Schedule::fading(0.5, 0.5));
+    assert_ne!(Schedule::until(0.5), Schedule::delayed(0.5));
+    assert_eq!(Schedule::trapezoid(0.0, 0.0, 1.0, 1.0), Schedule::ramp(0.0, 0.0));
+    assert_ne!(Schedule::Uniform, Schedule::ramp(0.0, 0.0));
+    assert_eq!(Schedule::trapezoid(-0.0, 0.1, 0.5, 0.9), Schedule::trapezoid(0.0, 0.1, 0.5, 0.9));
+    assert_eq!(MixPart::from(src(1, 2)), MixPart { seq: src(1, 2), schedule: Schedule::Uniform });
 }
 
 #[test]
@@ -1049,7 +1049,7 @@ fn types_are_send_and_sync() {
     assert_send_sync::<Cursor<'static, usize>>();
     assert_send_sync::<Error>();
     assert_send_sync::<ErrorKind>();
-    assert_send_sync::<Sampling>();
+    assert_send_sync::<Schedule>();
     assert_send_sync::<MixPart<usize>>();
 }
 
@@ -1070,9 +1070,9 @@ fn skip_and_take_ranges() {
 #[cfg(target_pointer_width = "64")]
 fn steep_schedule_at_scale() {
     let seq = Seq::mix([
-        (src(0, 1 << 45), Sampling::Uniform),
-        (src(1, 1 << 44), Sampling::delayed(0.5)), // final rate 2: length × rate = 2⁴⁵, within 2⁴⁶
-        (src(2, 1 << 40), Sampling::ramp(0.0, 1.0)),
+        (src(0, 1 << 45), Schedule::Uniform),
+        (src(1, 1 << 44), Schedule::delayed(0.5)), // final rate 2: length × rate = 2⁴⁵, within 2⁴⁶
+        (src(2, 1 << 40), Schedule::ramp(0.0, 1.0)),
     ]);
     let order = Order::new(seq).unwrap();
     let n = order.len();
@@ -1085,7 +1085,7 @@ fn steep_schedule_at_scale() {
         }
     }
     // Too steep is rejected, not looped over.
-    let steep = Seq::mix([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
+    let steep = Seq::mix([(src(0, 1 << 45), Schedule::Uniform), (src(1, 1 << 46), Schedule::delayed(0.5))]);
     assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep { .. } | ErrorKind::MixTooLong));
     assert_eq!(MAX_MIX_LEN, 1 << 46);
 }

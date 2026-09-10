@@ -216,11 +216,11 @@ fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Sampling;
+    use crate::Schedule;
 
     #[test]
     fn returning_to_zero_clears_the_previous_counts() {
-        let il = Interleave::with_sampling(&[10_000, 1000], &[Sampling::Uniform, Sampling::until(0.5)]).unwrap();
+        let il = Interleave::with_schedule(&[10_000, 1000], &[Schedule::Uniform, Schedule::until(0.5)]).unwrap();
         let mut iter = il.iter(9000..il.len());
         iter.next();
         iter.seek(0..il.len());

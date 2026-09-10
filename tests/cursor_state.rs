@@ -1,6 +1,6 @@
 //! Stateful cursor properties: reproduce with DATAORDER_STATE_SEED=<decimal seed>.
 //! Failure histories are minimized by deleting operations before being reported.
-use dataorder::{Order, Sampling, Seq};
+use dataorder::{Order, Schedule, Seq};
 
 struct Rng(u64);
 impl Rng {
@@ -57,15 +57,15 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
         7 => {
             let (t, m) = configuration(r, depth - 1);
             let a = n.min(100);
-            let sampling = match r.below(5) {
-                0 => Sampling::Uniform,
-                1 => Sampling::until(0.25),
-                2 => Sampling::ramp(0.25, 0.75),
-                3 => Sampling::fading(0.25, 0.75),
-                _ => Sampling::trapezoid(0.125, 0.25, 0.75, 0.875),
+            let schedule = match r.below(5) {
+                0 => Schedule::Uniform,
+                1 => Schedule::until(0.25),
+                2 => Schedule::ramp(0.25, 0.75),
+                3 => Schedule::fading(0.25, 0.75),
+                _ => Schedule::trapezoid(0.125, 0.25, 0.75, 0.875),
             };
-            let b = m.min(if sampling == Sampling::Uniform { 100 } else { a / 3 });
-            (Seq::mix([(s.take(a), Sampling::Uniform), (t.take(b), sampling)]), a + b)
+            let b = m.min(if schedule == Schedule::Uniform { 100 } else { a / 3 });
+            (Seq::mix([(s.take(a), Schedule::Uniform), (t.take(b), schedule)]), a + b)
         }
         _ => {
             if n == 0 {

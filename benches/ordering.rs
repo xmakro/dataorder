@@ -1,6 +1,6 @@
 //! `cargo bench --bench ordering`; source lengths only, no record I/O.
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use dataorder::{Order, Sampling, Seq};
+use dataorder::{Order, Schedule, Seq};
 use std::hint::black_box;
 
 const WALK_LEN: usize = 100_000;
@@ -12,8 +12,8 @@ fn ordering(c: &mut Criterion) {
         (
             "scheduled_1000",
             Seq::mix((0..1000).map(|i| {
-                let sampling = if i % 5 == 0 { Sampling::ramp(0.2 + 0.05 * (i % 7) as f64, 0.7) } else { Sampling::Uniform };
-                (Seq::source(100_000).shuffle(i + 1), sampling)
+                let schedule = if i % 5 == 0 { Schedule::ramp(0.2 + 0.05 * (i % 7) as f64, 0.7) } else { Schedule::Uniform };
+                (Seq::source(100_000).shuffle(i + 1), schedule)
             })),
         ),
         ("selection/slice_shuffle", Seq::source(1_000_000_000).shuffle(1).skip(12_345).take(750_000_000)),

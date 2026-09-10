@@ -1,5 +1,5 @@
 //! Public regressions for review findings and access APIs.
-use dataorder::{BoundsError, ErrorKind, Item, Order, Sampling, Seq, Source};
+use dataorder::{BoundsError, ErrorKind, Item, Order, Schedule, Seq, Source};
 use std::ops::Bound;
 
 #[test]
@@ -108,7 +108,7 @@ fn sharding_preserves_global_partition_not_worker_mixture() {
 #[test]
 fn equality_preserves_nan_payload_sign_and_signaling_bits() {
     use std::hash::{DefaultHasher, Hash, Hasher};
-    let hash = |x: &Sampling| {
+    let hash = |x: &Schedule| {
         let mut h = DefaultHasher::new();
         x.hash(&mut h);
         h.finish()
@@ -117,29 +117,29 @@ fn equality_preserves_nan_payload_sign_and_signaling_bits() {
     for (i, a) in bits.iter().enumerate() {
         for (j, b) in bits.iter().enumerate() {
             let (a, b) = (f64::from_bits(*a), f64::from_bits(*b));
-            assert_eq!(Sampling::delayed(a) == Sampling::delayed(b), i == j);
+            assert_eq!(Schedule::delayed(a) == Schedule::delayed(b), i == j);
         }
     }
-    assert_eq!(Sampling::ramp(-0.0, 0.5), Sampling::ramp(0.0, 0.5));
-    assert_eq!(hash(&Sampling::ramp(-0.0, 0.5)), hash(&Sampling::ramp(0.0, 0.5)));
+    assert_eq!(Schedule::ramp(-0.0, 0.5), Schedule::ramp(0.0, 0.5));
+    assert_eq!(hash(&Schedule::ramp(-0.0, 0.5)), hash(&Schedule::ramp(0.0, 0.5)));
 }
 
 #[test]
-fn sampling_errors_describe_independent_profiles() {
-    use dataorder::{MAX_MIX_LEN, SamplingReason};
-    for (sampling, reason) in [
-        (Sampling::delayed(f64::INFINITY), SamplingReason::NonFiniteParameter),
-        (Sampling::ramp(0.5, 0.25), SamplingReason::InvalidBreakpoints),
-        (Sampling::ramp(0.0, f64::from_bits(1)), SamplingReason::CoefficientOverflow),
+fn schedule_errors_describe_independent_profiles() {
+    use dataorder::{MAX_MIX_LEN, ScheduleReason};
+    for (schedule, reason) in [
+        (Schedule::delayed(f64::INFINITY), ScheduleReason::NonFiniteParameter),
+        (Schedule::ramp(0.5, 0.25), ScheduleReason::InvalidBreakpoints),
+        (Schedule::ramp(0.0, f64::from_bits(1)), ScheduleReason::CoefficientOverflow),
     ] {
-        let err = Order::new(Seq::mix([(Seq::source(1), sampling)])).unwrap_err();
-        let expected = ErrorKind::InvalidSampling { sampling, reason };
+        let err = Order::new(Seq::mix([(Seq::source(1), schedule)])).unwrap_err();
+        let expected = ErrorKind::InvalidSchedule { schedule, reason };
         assert_eq!(err.kind(), &expected);
         assert_eq!(err.path(), [0]);
-        assert_eq!(err.to_string(), format!("invalid schedule {sampling:?}: {reason} (at node 0)"));
+        assert_eq!(err.to_string(), format!("invalid schedule {schedule:?}: {reason} (at node 0)"));
         assert_eq!(err.into_kind(), expected);
     }
-    let seq = Seq::mix([(Seq::source(1usize << 30), Sampling::until(1e-6))]);
+    let seq = Seq::mix([(Seq::source(1usize << 30), Schedule::until(1e-6))]);
     let err = Order::new(seq).unwrap_err();
     let expected = ErrorKind::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN };
     assert_eq!(err.kind(), &expected);
@@ -149,7 +149,7 @@ fn sampling_errors_describe_independent_profiles() {
         "mix part too long for the steepness of its schedule: length 1073741824 × peak rate 1000000 exceeds 70368744177664 (at node 0)"
     );
     assert_eq!(err.into_kind(), expected);
-    let mixed = Seq::mix([(Seq::source(10).cycle(3 << 28), Sampling::until(1e-6)), (Seq::source(10).cycle(1 << 28), Sampling::Uniform)]);
+    let mixed = Seq::mix([(Seq::source(10).cycle(3 << 28), Schedule::until(1e-6)), (Seq::source(10).cycle(1 << 28), Schedule::Uniform)]);
     let err = Order::new(mixed).unwrap_err();
     let expected = ErrorKind::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN };
     assert_eq!(err.kind(), &expected);

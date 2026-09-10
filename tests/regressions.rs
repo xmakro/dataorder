@@ -1,7 +1,7 @@
 //! Adversarial inputs from the numerical and compilation review. Run potential hangs and
 //! stack aborts in a subprocess so a regression fails with a bounded diagnostic.
 
-use dataorder::{ErrorKind, MAX_DEPTH, Order, Sampling, Seq, Source};
+use dataorder::{ErrorKind, MAX_DEPTH, Order, Schedule, Seq, Source};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -92,14 +92,14 @@ fn isolated_case() {
             .unwrap(),
         "profiles" => {
             for full in [f64::from_bits(1), 1e-309, 1e-308] {
-                let seq = Seq::mix([(Seq::source(100), Sampling::Uniform), (Seq::source(100), Sampling::ramp(0.0, full))]);
+                let seq = Seq::mix([(Seq::source(100), Schedule::Uniform), (Seq::source(100), Schedule::ramp(0.0, full))]);
                 let error = Order::new(seq).unwrap_err();
-                assert!(matches!(error.kind(), ErrorKind::InvalidSampling { .. }));
+                assert!(matches!(error.kind(), ErrorKind::InvalidSchedule { .. }));
                 assert_eq!(error.path(), &[1]);
             }
             for d in [1e-8, 1e-12, 1e-16, 1e-20, 1e-300] {
                 let order =
-                    Order::new(Seq::mix([(Seq::source(300), Sampling::Uniform), (Seq::source(100), Sampling::trapezoid(0.0, d, d, 1.0))]))
+                    Order::new(Seq::mix([(Seq::source(300), Schedule::Uniform), (Seq::source(100), Schedule::trapezoid(0.0, d, d, 1.0))]))
                         .unwrap();
                 let all: Vec<_> = order.iter(..).unwrap().map(|item| (*item.source, item.record_index)).collect();
                 for p in 0..order.len() {
@@ -122,7 +122,7 @@ fn isolated_case() {
                 // These profiles formerly overflowed the shared remainder builder.
                 let n = (1usize << 46) - 1;
                 let order =
-                    Order::new(Seq::mix([(Seq::source(1), Sampling::Uniform), (Seq::source(n), Sampling::ramp(0.0, 1e-296))])).unwrap();
+                    Order::new(Seq::mix([(Seq::source(1), Schedule::Uniform), (Seq::source(n), Schedule::ramp(0.0, 1e-296))])).unwrap();
                 let at = (n + 1) / 4;
                 let window: Vec<_> = order.iter(at - 8..at + 8).unwrap().map(|item| (*item.source, item.record_index)).collect();
                 assert!(window.iter().any(|&(s, _)| s == 1));
@@ -134,7 +134,7 @@ fn isolated_case() {
             #[cfg(target_pointer_width = "64")]
             for n in [1_000_000_000_000usize, (1 << 46) - 1] {
                 let order =
-                    Order::new(Seq::mix([(Seq::source(n), Sampling::Uniform), (Seq::source(1), Sampling::fading(0.0, 1.0))])).unwrap();
+                    Order::new(Seq::mix([(Seq::source(n), Schedule::Uniform), (Seq::source(1), Schedule::fading(0.0, 1.0))])).unwrap();
                 for start in [0, n / 4, n / 2 - 16, 3 * (n / 4), n - 16] {
                     for (p, dataorder::Item { source: &s, record_index: i, .. }) in (start..).zip(order.iter(start..).unwrap().take(16)) {
                         assert_eq!((s, i), {
@@ -190,10 +190,10 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
 
 #[test]
 fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
-    let global = Seq::mix([(Seq::source(3), Sampling::Uniform), (Seq::source(1), Sampling::delayed(0.75))]);
+    let global = Seq::mix([(Seq::source(3), Schedule::Uniform), (Seq::source(1), Schedule::delayed(0.75))]);
     assert_eq!(Order::new(global.clone()).unwrap().len(), 4);
     let shard =
-        Seq::mix([(Seq::source(3).skip(0).step_by(2), Sampling::Uniform), (Seq::source(1).skip(0).step_by(2), Sampling::delayed(0.75))]);
+        Seq::mix([(Seq::source(3).skip(0).step_by(2), Schedule::Uniform), (Seq::source(1).skip(0).step_by(2), Schedule::delayed(0.75))]);
     assert_eq!(Order::new(shard).unwrap().len(), 3);
     for worker in 0..2 {
         assert_eq!(Order::new(global.clone().skip(worker).step_by(2)).unwrap().len(), 2);
@@ -206,27 +206,27 @@ fn empty_compaction_preserves_identity_and_error_paths() {
     assert_eq!(order.sources(), &[0, 3, 0, 3]);
     assert_eq!(order.iter(..).unwrap().map(|item| item.source_ordinal).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
     let error = Order::new(Seq::mix([
-        (Seq::source(0), Sampling::Uniform),
-        (Seq::source(3), Sampling::Uniform),
-        (Seq::source(0), Sampling::delayed(f64::NAN)),
-        (Seq::source(3), Sampling::Uniform),
+        (Seq::source(0), Schedule::Uniform),
+        (Seq::source(3), Schedule::Uniform),
+        (Seq::source(0), Schedule::delayed(f64::NAN)),
+        (Seq::source(3), Schedule::Uniform),
     ]))
     .unwrap_err();
     assert_eq!(error.path(), &[2]);
-    assert!(matches!(error.kind(), ErrorKind::InvalidSampling { .. }));
+    assert!(matches!(error.kind(), ErrorKind::InvalidSchedule { .. }));
 }
 
 #[test]
 #[cfg(feature = "serde")]
 fn json_preserves_float_bits_and_large_scheduled_orders() {
     let d = 0.18620199577071722;
-    let seq = Seq::mix([(Seq::source(300usize), Sampling::Uniform), (Seq::source(100), Sampling::delayed(d))]);
+    let seq = Seq::mix([(Seq::source(300usize), Schedule::Uniform), (Seq::source(100), Schedule::delayed(d))]);
     let back: Seq<usize> = serde_json::from_str(&serde_json::to_string(&seq).unwrap()).unwrap();
     assert_eq!(seq, back);
     #[cfg(target_pointer_width = "64")]
     {
         let n = 70_368_744_176_807;
-        let seq = Seq::mix([(Seq::source(n - 100), Sampling::Uniform), (Seq::source(100), Sampling::delayed(d))]);
+        let seq = Seq::mix([(Seq::source(n - 100), Schedule::Uniform), (Seq::source(100), Schedule::delayed(d))]);
         let back: Seq<usize> = serde_json::from_str(&serde_json::to_string(&seq).unwrap()).unwrap();
         assert_eq!(seq, back);
         let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());

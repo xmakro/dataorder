@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** rename `Sampling` to `Schedule`, `MixPart.sampling` to
+  `MixPart.schedule`, `SamplingReason` to `ScheduleReason`, and
+  `ErrorKind::InvalidSampling { sampling, reason }` to
+  `ErrorKind::InvalidSchedule { schedule, reason }`. Rename the `sampling` field
+  to `schedule` in serialized mix parts; the old field is rejected. Schedule
+  variants, parameters, error messages and ordering outputs are unchanged.
+
 - **Breaking:** use `usize` for lengths, positions, offsets, strides and element
   counts throughout compilation and iteration. The `len` fields in
   `ErrorKind::SkipOutOfRange`, `TakeOutOfRange` and `TooSteep` now use `usize`.
@@ -16,14 +23,14 @@
   alike; `Uniform` remains distinct. Ordering outputs are unchanged. Debug output
   and error messages that include these schedules now show `Trapezoid`.
 
-- **Breaking:** move sampling diagnostics into `ErrorKind`. `InvalidSampling` now
-  contains `sampling` and `reason: SamplingReason`; `TooSteep` contains `len`,
+- **Breaking:** move schedule diagnostics into `ErrorKind`. `InvalidSchedule` now
+  contains `schedule` and `reason: ScheduleReason`; `TooSteep` contains `len`,
   `peak_rate` and `limit`. Remove `Error::sampling_detail` and `SamplingDetail`.
-  Read the fields through `kind()` or `into_kind()`, which now preserves sampling
+  Read the fields through `kind()` or `into_kind()`, which now preserves schedule
   diagnostics. Error paths, full error messages and ordering are unchanged.
 
 - **Breaking:** merge `Seq::mix_with` into `Seq::mix`, which now accepts bare
-  sequences, `(seq, sampling)` pairs or `MixPart` values. Replace `mix_with` calls
+  sequences, `(seq, schedule)` pairs or `MixPart` values. Replace `mix_with` calls
   with `mix`. Empty inputs need an explicit element type, such as
   `Seq::mix(std::iter::empty::<Seq<usize>>())`. Ordering and serialized
   configurations are unchanged.

@@ -1,5 +1,5 @@
 //! Expected positions come from rational CDFs in the independent Python oracle.
-use dataorder::{Order, Sampling, Seq, Source};
+use dataorder::{Order, Schedule, Seq, Source};
 
 #[derive(Clone)]
 struct Dataset {
@@ -21,13 +21,13 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
             continue; // Large public lengths are checked on the 64-bit CI targets.
         }
         let order = Order::new(Seq::mix(lens.iter().enumerate().map(|(i, n)| {
-            let sampling = match fixture["schedules"][i].as_array() {
-                None => Sampling::Uniform,
+            let schedule = match fixture["schedules"][i].as_array() {
+                None => Schedule::Uniform,
                 Some(p) => {
-                    Sampling::trapezoid(p[0].as_f64().unwrap(), p[1].as_f64().unwrap(), p[2].as_f64().unwrap(), p[3].as_f64().unwrap())
+                    Schedule::trapezoid(p[0].as_f64().unwrap(), p[1].as_f64().unwrap(), p[2].as_f64().unwrap(), p[3].as_f64().unwrap())
                 }
             };
-            (Seq::source(Dataset { ordinal: i, len: n.as_u64().unwrap() as usize }), sampling)
+            (Seq::source(Dataset { ordinal: i, len: n.as_u64().unwrap() as usize }), schedule)
         })))
         .unwrap();
         let samples = fixture["samples"].as_array().unwrap();

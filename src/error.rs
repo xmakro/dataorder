@@ -1,7 +1,7 @@
 //! Configuration errors with sequence-tree locations, and order/cursor bounds errors.
 
-use crate::Sampling;
-use crate::interleave::{MAX_TOTAL_LEN, SamplingError};
+use crate::Schedule;
+use crate::interleave::{MAX_TOTAL_LEN, ScheduleError};
 use std::fmt;
 
 /// A configuration error from [`Order::new`](crate::Order::new).
@@ -26,7 +26,7 @@ impl Error {
         Self { kind, path }
     }
 
-    /// What went wrong, including sampling diagnostics.
+    /// What went wrong, including schedule diagnostics.
     #[must_use]
     pub fn kind(&self) -> &ErrorKind {
         &self.kind
@@ -43,7 +43,7 @@ impl Error {
         &self.path
     }
 
-    /// Consumes the error and returns its kind, including sampling diagnostics,
+    /// Consumes the error and returns its kind, including schedule diagnostics,
     /// discarding only the path.
     #[must_use]
     pub fn into_kind(self) -> ErrorKind {
@@ -71,10 +71,10 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Why the schedule in [`ErrorKind::InvalidSampling`] is invalid.
+/// Why the schedule in [`ErrorKind::InvalidSchedule`] is invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum SamplingReason {
+pub enum ScheduleReason {
     /// At least one breakpoint is NaN or infinite.
     NonFiniteParameter,
     /// Finite breakpoints violate their ordering, range or positive-area constraints.
@@ -83,7 +83,7 @@ pub enum SamplingReason {
     CoefficientOverflow,
 }
 
-impl fmt::Display for SamplingReason {
+impl fmt::Display for ScheduleReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonFiniteParameter => write!(f, "a breakpoint is not finite"),
@@ -96,12 +96,12 @@ impl fmt::Display for SamplingReason {
 /// The reason a configuration failed validation.
 ///
 /// ```
-/// use dataorder::{ErrorKind, Order, Sampling, SamplingReason, Seq};
+/// use dataorder::{ErrorKind, Order, Schedule, ScheduleReason, Seq};
 /// let err = Order::new(Seq::source(10).step_by(0)).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::ZeroStep));
-/// let err = Order::new(Seq::mix([(Seq::source(10), Sampling::delayed(1.5))])).unwrap_err();
-/// assert!(matches!(err.into_kind(), ErrorKind::InvalidSampling {
-///     reason: SamplingReason::InvalidBreakpoints, ..
+/// let err = Order::new(Seq::mix([(Seq::source(10), Schedule::delayed(1.5))])).unwrap_err();
+/// assert!(matches!(err.into_kind(), ErrorKind::InvalidSchedule {
+///     reason: ScheduleReason::InvalidBreakpoints, ..
 /// }));
 /// ```
 #[derive(Clone, Debug, PartialEq)]
@@ -135,11 +135,11 @@ pub enum ErrorKind {
     MixTooLong,
     /// A schedule parameter is out of range or non-finite, or its derived profile
     /// coefficients overflow floating-point arithmetic.
-    InvalidSampling {
+    InvalidSchedule {
         /// The schedule.
-        sampling: Sampling,
+        schedule: Schedule,
         /// Why the schedule is invalid.
-        reason: SamplingReason,
+        reason: ScheduleReason,
     },
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
@@ -166,7 +166,7 @@ impl fmt::Display for ErrorKind {
             Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
-            Self::InvalidSampling { sampling, reason } => write!(f, "invalid schedule {sampling:?}: {reason}"),
+            Self::InvalidSchedule { schedule, reason } => write!(f, "invalid schedule {schedule:?}: {reason}"),
             Self::TooSteep { len, peak_rate, limit } => {
                 write!(f, "mix part too long for the steepness of its schedule: length {len} × peak rate {peak_rate} exceeds {limit}")
             }
@@ -175,13 +175,13 @@ impl fmt::Display for ErrorKind {
     }
 }
 
-impl SamplingError {
+impl ScheduleError {
     /// The kind and, for a problem with one part, the part's index.
     pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
         match self {
             Self::LengthOverflow => (ErrorKind::LengthOverflow, None),
             Self::TooLong => (ErrorKind::MixTooLong, None),
-            Self::InvalidParameter { seq, sampling, reason } => (ErrorKind::InvalidSampling { sampling, reason }, Some(seq)),
+            Self::InvalidParameter { seq, schedule, reason } => (ErrorKind::InvalidSchedule { schedule, reason }, Some(seq)),
             Self::TooSteep { seq, len, peak_rate } => (ErrorKind::TooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),
         }
     }

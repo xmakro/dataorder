@@ -2,7 +2,7 @@
 //! combination of other sequences; [`Order::new`](crate::Order::new) validates and
 //! compiles the tree.
 
-use crate::Sampling;
+use crate::Schedule;
 use std::convert::Infallible;
 
 /// A description of how to order sources of type `T`.
@@ -41,7 +41,7 @@ pub enum Seq<T> {
     Source(T),
     /// The parts one after another.
     Concat(Vec<Self>),
-    /// Every element of every part, interleaved according to each part's [`Sampling`].
+    /// Every element of every part, interleaved according to each part's [`Schedule`].
     /// Each part keeps its own order. Empty parts do not affect the other parts' order.
     ///
     /// Schedules span this mix's length. Repeating the mix restarts them each epoch;
@@ -114,7 +114,7 @@ pub enum Seq<T> {
     },
 }
 
-/// A part of a [`Mix`](Seq::Mix): a sequence and its schedule. `(seq, sampling)` and a bare
+/// A part of a [`Mix`](Seq::Mix): a sequence and its schedule. `(seq, schedule)` and a bare
 /// `seq` (uniform) convert into it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
@@ -122,18 +122,18 @@ pub struct MixPart<T> {
     /// The sequence.
     pub seq: Seq<T>,
     /// How its elements are spread over the mix.
-    pub sampling: Sampling,
+    pub schedule: Schedule,
 }
 
-impl<T> From<(Seq<T>, Sampling)> for MixPart<T> {
-    fn from((seq, sampling): (Seq<T>, Sampling)) -> Self {
-        Self { seq, sampling }
+impl<T> From<(Seq<T>, Schedule)> for MixPart<T> {
+    fn from((seq, schedule): (Seq<T>, Schedule)) -> Self {
+        Self { seq, schedule }
     }
 }
 
 impl<T> From<Seq<T>> for MixPart<T> {
     fn from(seq: Seq<T>) -> Self {
-        Self { seq, sampling: Sampling::Uniform }
+        Self { seq, schedule: Schedule::Uniform }
     }
 }
 
@@ -159,9 +159,9 @@ impl<T> Seq<T> {
     }
 
     /// Interleaves parts, preserving each part's order.
-    /// Accepts bare sequences (all [`Sampling::Uniform`]), `(seq, sampling)` pairs,
+    /// Accepts bare sequences (all [`Schedule::Uniform`]), `(seq, schedule)` pairs,
     /// or [`MixPart`] values. Schedules are independent on a shared virtual clock;
-    /// see [`Sampling`] for how virtual time maps to output progress.
+    /// see [`Schedule`] for how virtual time maps to output progress.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -175,10 +175,10 @@ impl<T> Seq<T> {
     /// Attach a schedule to each part to control when it contributes:
     ///
     /// ```
-    /// use dataorder::{Order, Sampling, Seq};
+    /// use dataorder::{Order, Schedule, Seq};
     /// let seq = Seq::mix([
-    ///     (Seq::source(700), Sampling::Uniform),
-    ///     (Seq::source(300), Sampling::delayed(0.5)),
+    ///     (Seq::source(700), Schedule::Uniform),
+    ///     (Seq::source(300), Schedule::delayed(0.5)),
     /// ]);
     /// let order = Order::new(seq)?;
     /// // At virtual time 0.5, half of the 700 uniform elements have appeared.
@@ -368,7 +368,7 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Source(source) => Seq::source(f(source)?),
         Seq::Concat(parts) => Seq::concat(parts.into_iter().map(|p| map_sources(p, f)).collect::<Result<Vec<_>, _>>()?),
         Seq::Mix(parts) => Seq::Mix(
-            parts.into_iter().map(|p| Ok(MixPart { seq: map_sources(p.seq, f)?, sampling: p.sampling })).collect::<Result<_, E>>()?,
+            parts.into_iter().map(|p| Ok(MixPart { seq: map_sources(p.seq, f)?, schedule: p.schedule })).collect::<Result<_, E>>()?,
         ),
         Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
         Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),

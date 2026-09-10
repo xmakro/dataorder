@@ -42,14 +42,14 @@
 
 mod iter;
 mod profile;
-mod sampling;
+mod schedule;
 #[cfg(test)]
 mod tests;
 mod tournament;
 
 pub(crate) use iter::Iter;
-pub use sampling::Sampling;
-pub(crate) use sampling::SamplingError;
+pub use schedule::Schedule;
+pub(crate) use schedule::ScheduleError;
 
 use profile::Profile;
 use std::ops::Range;
@@ -71,8 +71,8 @@ struct Seq {
     profile: u32,
 }
 
-/// A balanced, order-preserving interleaving of `k` sequences with sampling schedules,
-/// given only their lengths. Build it with [`Interleave::with_sampling`] and walk any
+/// A balanced, order-preserving interleaving of `k` sequences with schedules,
+/// given only their lengths. Build it with [`Interleave::with_schedule`] and walk any
 /// merged range with [`Interleave::iter`].
 #[derive(Clone, Debug)]
 pub(crate) struct Interleave {
@@ -83,13 +83,13 @@ pub(crate) struct Interleave {
 }
 
 impl Interleave {
-    /// All sequences [`Sampling::Uniform`].
+    /// All sequences [`Schedule::Uniform`].
     ///
     /// # Panics
     /// If the total length exceeds [`MAX_TOTAL_LEN`].
     #[cfg(test)]
     pub(crate) fn new(lens: &[usize]) -> Self {
-        Self::with_sampling(lens, &vec![Sampling::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
+        Self::with_schedule(lens, &vec![Schedule::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
     }
 
     /// Builds a mix from lengths and schedules, one schedule per part.
@@ -97,34 +97,34 @@ impl Interleave {
     /// resulting order. Costs `O(k)` for `k` parts, independent of their lengths.
     ///
     /// # Panics
-    /// If `lens` and `sampling` differ in length.
-    pub(crate) fn with_sampling(lens: &[usize], sampling: &[Sampling]) -> Result<Self, SamplingError> {
-        assert_eq!(lens.len(), sampling.len(), "interleave: one schedule per sequence");
+    /// If `lens` and `schedule` differ in length.
+    pub(crate) fn with_schedule(lens: &[usize], schedule: &[Schedule]) -> Result<Self, ScheduleError> {
+        assert_eq!(lens.len(), schedule.len(), "interleave: one schedule per sequence");
         let k = lens.len();
         let mut total: usize = 0;
         for &n in lens {
-            total = total.checked_add(n).ok_or(SamplingError::LengthOverflow)?;
+            total = total.checked_add(n).ok_or(ScheduleError::LengthOverflow)?;
             if total as u64 > MAX_TOTAL_LEN {
-                return Err(SamplingError::TooLong);
+                return Err(ScheduleError::TooLong);
             }
         }
         let live = lens.iter().filter(|&&n| n > 0).count();
         let mut rank = 0usize;
         let mut seqs = Vec::with_capacity(k);
         let mut profiles = vec![Profile::trapezoid(0.0, 0.0, 1.0, 1.0)];
-        for (i, (&n, &s)) in lens.iter().zip(sampling).enumerate() {
+        for (i, (&n, &s)) in lens.iter().zip(schedule).enumerate() {
             let profile = match s {
-                Sampling::Uniform => None,
-                Sampling::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
+                Schedule::Uniform => None,
+                Schedule::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
                     let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 < d3;
                     if !([d0, d1, d2, d3].iter().all(|d| d.is_finite()) && ordered) {
-                        return Err(SamplingError::InvalidParameter {
+                        return Err(ScheduleError::InvalidParameter {
                             seq: i,
-                            sampling: s,
+                            schedule: s,
                             reason: if [d0, d1, d2, d3].iter().all(|d| d.is_finite()) {
-                                crate::SamplingReason::InvalidBreakpoints
+                                crate::ScheduleReason::InvalidBreakpoints
                             } else {
-                                crate::SamplingReason::NonFiniteParameter
+                                crate::ScheduleReason::NonFiniteParameter
                             },
                         });
                     }
@@ -136,14 +136,14 @@ impl Interleave {
                 None => 0,
                 Some(p) => {
                     if n > 0 && !p.is_finite() {
-                        return Err(SamplingError::InvalidParameter {
+                        return Err(ScheduleError::InvalidParameter {
                             seq: i,
-                            sampling: s,
-                            reason: crate::SamplingReason::CoefficientOverflow,
+                            schedule: s,
+                            reason: crate::ScheduleReason::CoefficientOverflow,
                         });
                     }
                     if n as f64 * p.max_rate() > MAX_TOTAL_LEN as f64 {
-                        return Err(SamplingError::TooSteep { seq: i, len: n, peak_rate: p.max_rate() });
+                        return Err(ScheduleError::TooSteep { seq: i, len: n, peak_rate: p.max_rate() });
                     }
                     if n == 0 {
                         0

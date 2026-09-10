@@ -5,7 +5,7 @@
 //! follows that tree to resolve a position without keeping iteration state.
 
 use crate::cursor::Cursor;
-use crate::interleave::{Interleave, Sampling};
+use crate::interleave::{Interleave, Schedule};
 use crate::perm::{self, Shape};
 use crate::seq::MixPart;
 use crate::{BoundsError, Error, ErrorKind, MAX_DEPTH, Seq, Source};
@@ -438,9 +438,9 @@ impl<T: Source> Compiler<T> {
     }
 
     fn mix_parts(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
-        let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
+        let schedule: Vec<Schedule> = parts.iter().map(|p| p.schedule).collect();
         let children = self.children(parts.into_iter().map(|p| p.seq), depth)?;
-        self.mix(children, &sampling)
+        self.mix(children, &schedule)
     }
 
     fn shuffle(&mut self, seed: u64, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
@@ -501,7 +501,7 @@ impl<T: Source> Compiler<T> {
     }
 
     /// Validate schedules even when the mix folds away; empty parts return level zero.
-    fn mix(&mut self, parts: Vec<Compiled>, sampling: &[Sampling]) -> Result<Compiled, Error> {
+    fn mix(&mut self, parts: Vec<Compiled>, schedule: &[Schedule]) -> Result<Compiled, Error> {
         // The tournament tree indexes parts with u32 and needs a spare bit.
         if parts.len() >= u32::MAX as usize / 2 {
             return Err(self.err(ErrorKind::TooManyMixParts));
@@ -514,7 +514,7 @@ impl<T: Source> Compiler<T> {
                 len
             })
             .collect();
-        let mut il = Interleave::with_sampling(&lens, sampling).map_err(|e| {
+        let mut il = Interleave::with_schedule(&lens, schedule).map_err(|e| {
             let (kind, part) = e.into_kind();
             self.err_at(kind, part)
         })?;

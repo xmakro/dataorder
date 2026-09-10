@@ -1,7 +1,7 @@
 //! The public surface, used as a downstream crate would: building configurations by hand,
 //! matching on non-exhaustive enums, errors with paths, cursors, sources.
 
-use dataorder::{Cursor, Error, ErrorKind, MixPart, Order, Sampling, Seq, Source};
+use dataorder::{Cursor, Error, ErrorKind, MixPart, Order, Schedule, Seq, Source};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shard {
@@ -31,7 +31,7 @@ fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
 fn builders_accept_unresolved_sources() {
     // No trait bounds, including Source or Clone, are needed to build the tree.
     fn configuration<T>(first: T, second: T) -> Seq<T> {
-        Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix([(Seq::source(second), Sampling::Uniform)])])
+        Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix([(Seq::source(second), Schedule::Uniform)])])
             .shuffle(7)
             .repeat(2)
             .cycle(50)
@@ -137,16 +137,16 @@ fn unresolved_position_operations_round_trip() {
 #[test]
 fn hand_built_configuration() {
     let seq = Seq::Mix(vec![
-        MixPart { seq: shard("a", 10).shuffle(1).cycle(75), sampling: Sampling::Uniform },
+        MixPart { seq: shard("a", 10).shuffle(1).cycle(75), schedule: Schedule::Uniform },
         MixPart::from(
-            Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::delayed(0.5) }]).cycle(25),
+            Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), schedule: Schedule::delayed(0.5) }]).cycle(25),
         ),
     ]);
     // The mix builder takes parts, pairs or bare sequences alike.
     let Seq::Mix(parts) = seq.clone() else { unreachable!() };
     assert_eq!(Seq::mix(parts), seq);
-    let mixed = Seq::mix([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::default() }]);
-    assert_eq!(mixed, Seq::mix([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
+    let mixed = Seq::mix([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), schedule: Schedule::default() }]);
+    assert_eq!(mixed, Seq::mix([(shard("b", 40), Schedule::Uniform), (shard("c", 5), Schedule::Uniform)]));
     assert_eq!(mixed, Seq::mix([shard("b", 40), shard("c", 5)]));
     let empty = Seq::mix(std::iter::empty::<Seq<Shard>>());
     assert!(Order::new(empty).unwrap().is_empty());
@@ -241,33 +241,35 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let seq = Seq::mix([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).skip(1).step_by(2);
+    let seq = Seq::mix([(Seq::source(10).shuffle(1), Schedule::Uniform), (Seq::source(5), Schedule::ramp(0.2, 0.6))]).skip(1).step_by(2);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
     assert!(a.iter(..).unwrap().eq(b.iter(..).unwrap()));
     // The wire format is part of the API.
-    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle(9), Sampling::ramp(0.1, 0.2))]);
+    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle(9), Schedule::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
-        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"sampling":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
+        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
     );
-    assert_eq!(serde_json::to_string(&Sampling::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
-    assert_eq!(serde_json::to_string(&Sampling::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
+    assert_eq!(serde_json::to_string(&Schedule::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
+    assert_eq!(serde_json::to_string(&Schedule::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
     assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
     // Unknown fields are rejected in every variant.
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
         r#"{"Shuffle":{"seed":1,"inner":{"Source":5},"extra":true}}"#,
-        r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform","extra":1}]}"#,
-        r#"{"Mix":[{"seq":{"Source":4},"sampling":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0,"end":0.3}}}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"schedule":"Uniform","extra":1}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0,"end":0.3}}}]}"#,
     ] {
         assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
     }
-    // Removed variants are rejected rather than silently reinterpreted.
+    // Removed fields and variants are rejected rather than silently reinterpreted.
     for json in [
-        r#"{"Mix":[{"seq":{"Source":4},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform"}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"schedule":"Uniform","sampling":"Uniform"}]}"#,
+        r#"{"Mix":[{"seq":{"Source":4},"schedule":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#,
         r#"{"Weighted":{"total":9,"parts":[]}}"#,
         r#"{"Stride":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
         r#"{"Shard":{"count":2,"index":1,"inner":{"Source":4}}}"#,

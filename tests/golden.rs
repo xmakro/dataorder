@@ -2,8 +2,8 @@
 //! changed: that is a breaking change (see the crate docs on stability), to be made
 //! deliberately, with a version bump and new values here.
 
-use Sampling::*;
-use dataorder::{Order, Sampling, Seq, Source};
+use Schedule::*;
+use dataorder::{Order, Schedule, Seq, Source};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Src {
@@ -50,8 +50,8 @@ fn golden_orders() {
             "mix scheduled",
             Seq::mix([
                 (src(0, 2000).shuffle(1), Uniform),
-                (src(1, 400).shuffle(2), Sampling::delayed(0.5)),
-                (src(2, 600), Sampling::ramp(0.2, 0.6)),
+                (src(1, 400).shuffle(2), Schedule::delayed(0.5)),
+                (src(2, 600), Schedule::ramp(0.2, 0.6)),
             ]),
             0,
         ),
@@ -76,8 +76,8 @@ fn golden_orders() {
             "mix fading",
             Seq::mix([
                 (src(0, 1500).shuffle(1), Uniform),
-                (src(1, 300).shuffle(2), Sampling::until(0.4)),
-                (src(2, 400), Sampling::trapezoid(0.2, 0.4, 0.6, 0.9)),
+                (src(1, 300).shuffle(2), Schedule::until(0.4)),
+                (src(2, 400), Schedule::trapezoid(0.2, 0.4, 0.6, 0.9)),
             ]),
             0,
         ),
