@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- Return lengths and `u8` repetition levels up recursive compiler and folding
+  visits. These summaries are temporary; repeat nodes retain their own level for
+  reseeding. Ordering outputs and public signatures are unchanged by this refactor.
+
 - **Breaking:** number repetition levels from the inside out instead of by enclosing
   depth. Adding an outer repeat or extending a cycle now preserves the entire first
   pass, including nested epochs. Later passes use the repeat's epoch and level to

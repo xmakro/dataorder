@@ -247,7 +247,7 @@ pub(crate) enum NodeCursor<'a> {
     /// `level` is this repeat's inside-out level; it salts the epoch contexts.
     Repeat {
         child_len: u64,
-        level: u32,
+        level: u8,
         epoch: u64,
         left: u64,
         ctx: u64,

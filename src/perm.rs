@@ -96,7 +96,7 @@ pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64
 /// so adding it preserves the child's first pass while distinguishing later outer epochs
 /// from inner epochs. A single-level repeat keeps the historical depth-0 arithmetic.
 #[inline]
-pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, level: u32) -> u64 {
+pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, level: u8) -> u64 {
     debug_assert!(level > 0);
     if epoch == 0 {
         return ctx;

@@ -157,9 +157,9 @@
 //! # Cost
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
-//! elements. Compilation can revisit subtrees when flattening concatenations, deriving
-//! shuffle salts or finding child repeat levels. A repeat caches its level, so a level
-//! search stops at nested repeats. Each mix builds independent profiles
+//! elements. Compiler visits return lengths and repeat levels to their parents.
+//! Compilation can revisit subtrees when flattening concatenations, deriving shuffle
+//! salts or folding selections that discard repeat scopes. Each mix builds independent profiles
 //! in `O(k)` time for `k` parts.
 //!
 //! For random access, [`Order::get`] follows the path from the root to a source:

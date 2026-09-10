@@ -134,7 +134,7 @@ impl Rng {
 /// Unlike the compiler, all selections use one affine map over this length-only view.
 /// This keeps the eager evaluator independent of compiled nodes and their cached levels.
 enum LevelView {
-    Opaque { len: usize, level: u32 },
+    Opaque { len: usize, level: u8 },
     Concat(Vec<Self>),
     Repeat { len: usize, child: Box<Self> },
     Select { len: usize, start: usize, step: usize, child: Box<Self> },
@@ -194,7 +194,7 @@ impl LevelView {
         }
     }
 
-    fn level(&self) -> u32 {
+    fn level(&self) -> u8 {
         match self {
             Self::Opaque { level, .. } => *level,
             Self::Concat(parts) => parts.iter().map(Self::level).max().unwrap_or(0),
@@ -561,6 +561,13 @@ fn repeat_levels_are_assigned_from_the_inside_out() {
         ("one strided position", x().repeat(3).step_by(51), 0),
         ("discard concat tail", Seq::concat([x(), deep()]).take(17), 0),
         ("discard concat head", Seq::concat([deep(), x()]).skip(66), 0),
+        ("retain multiple concat children", Seq::concat([deep(), x(), x()]).skip(66), 0),
+        ("trim a concat boundary", Seq::concat([x(), deep()]).take(39), 1),
+        ("recover inner repeat level", deep().take(22), 1),
+        ("retained shuffled child", Seq::concat([x(), deep().shuffle(23), x()]).take(83), 2),
+        ("retained mix child", Seq::concat([x(), Seq::mix([deep(), x()]), x()]).skip(17).take(83), 2),
+        ("retained strided child", Seq::concat([x(), deep().step_by(2), x()]).take(50), 2),
+        ("retained sliced child", Seq::concat([x(), deep().skip(1), x()]).take(82), 2),
         ("retained slice", x().repeat(3).skip(1).take(16), 1),
         ("retained stride", x().repeat(3).step_by(3), 1),
         ("partial extra epoch", x().cycle(18), 1),
