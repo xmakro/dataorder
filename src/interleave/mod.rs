@@ -118,10 +118,10 @@ impl Interleave {
                         return Err(SamplingError::InvalidParameter {
                             seq: i,
                             sampling: s,
-                            detail: if d0.is_finite() && d1.is_finite() {
-                                crate::SamplingDetail::InvalidBreakpoints
+                            reason: if d0.is_finite() && d1.is_finite() {
+                                crate::SamplingReason::InvalidBreakpoints
                             } else {
-                                crate::SamplingDetail::NonFiniteParameter
+                                crate::SamplingReason::NonFiniteParameter
                             },
                         });
                     }
@@ -133,10 +133,10 @@ impl Interleave {
                         return Err(SamplingError::InvalidParameter {
                             seq: i,
                             sampling: s,
-                            detail: if [d0, d1, d2, d3].iter().all(|d| d.is_finite()) {
-                                crate::SamplingDetail::InvalidBreakpoints
+                            reason: if [d0, d1, d2, d3].iter().all(|d| d.is_finite()) {
+                                crate::SamplingReason::InvalidBreakpoints
                             } else {
-                                crate::SamplingDetail::NonFiniteParameter
+                                crate::SamplingReason::NonFiniteParameter
                             },
                         });
                     }
@@ -151,7 +151,7 @@ impl Interleave {
                         return Err(SamplingError::InvalidParameter {
                             seq: i,
                             sampling: s,
-                            detail: crate::SamplingDetail::CoefficientOverflow,
+                            reason: crate::SamplingReason::CoefficientOverflow,
                         });
                     }
                     if n as f64 * p.max_rate() > MAX_TOTAL_LEN as f64 {

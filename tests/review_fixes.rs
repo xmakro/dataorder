@@ -126,23 +126,33 @@ fn equality_preserves_nan_payload_sign_and_signaling_bits() {
 
 #[test]
 fn sampling_errors_describe_independent_profiles() {
-    use dataorder::{MAX_MIX_LEN, SamplingDetail as D};
-    for (sampling, expected) in [
-        (Sampling::delayed(f64::INFINITY), D::NonFiniteParameter),
-        (Sampling::ramp(0.5, 0.25), D::InvalidBreakpoints),
-        (Sampling::ramp(0.0, f64::from_bits(1)), D::CoefficientOverflow),
+    use dataorder::{MAX_MIX_LEN, SamplingReason};
+    for (sampling, reason) in [
+        (Sampling::delayed(f64::INFINITY), SamplingReason::NonFiniteParameter),
+        (Sampling::ramp(0.5, 0.25), SamplingReason::InvalidBreakpoints),
+        (Sampling::ramp(0.0, f64::from_bits(1)), SamplingReason::CoefficientOverflow),
     ] {
         let err = Order::new(Seq::mix([(Seq::source(1), sampling)])).unwrap_err();
-        assert!(matches!(err.kind(), ErrorKind::InvalidSampling { .. }));
-        assert_eq!(err.sampling_detail(), Some(&expected));
+        let expected = ErrorKind::InvalidSampling { sampling, reason };
+        assert_eq!(err.kind(), &expected);
         assert_eq!(err.path(), [0]);
-        assert!(err.to_string().contains(&expected.to_string()));
+        assert_eq!(err.to_string(), format!("invalid schedule {sampling:?}: {reason} (at node 0)"));
+        assert_eq!(err.into_kind(), expected);
     }
     let seq = Seq::mix([(Seq::source(1usize << 30), Sampling::until(1e-6))]);
     let err = Order::new(seq).unwrap_err();
-    assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN }));
+    let expected = ErrorKind::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN };
+    assert_eq!(err.kind(), &expected);
+    assert_eq!(err.path(), [0]);
+    assert_eq!(
+        err.to_string(),
+        "mix part too long for the steepness of its schedule: length 1073741824 × peak rate 1000000 exceeds 70368744177664 (at node 0)"
+    );
+    assert_eq!(err.into_kind(), expected);
     let mixed = Seq::mix([(Seq::source(10).cycle(3 << 28), Sampling::until(1e-6)), (Seq::source(10).cycle(1 << 28), Sampling::Uniform)]);
     let err = Order::new(mixed).unwrap_err();
+    let expected = ErrorKind::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN };
+    assert_eq!(err.kind(), &expected);
     assert_eq!(err.path(), [0]);
-    assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN }));
+    assert_eq!(err.into_kind(), expected);
 }

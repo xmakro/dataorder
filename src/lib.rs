@@ -267,7 +267,7 @@ mod source;
 mod tests;
 
 pub use cursor::Cursor;
-pub use error::{BoundsError, Error, ErrorKind, SamplingDetail};
+pub use error::{BoundsError, Error, ErrorKind, SamplingReason};
 pub use interleave::Sampling;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};

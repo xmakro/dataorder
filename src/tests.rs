@@ -93,7 +93,7 @@ fn ids<'a>(it: impl Iterator<Item = crate::Item<'a, Src>>) -> Vec<(u32, usize)> 
 impl Error {
     /// A schedule or length rejection of a mix.
     fn is_sampling(&self) -> bool {
-        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSampling { .. } | ErrorKind::TooSteep)
+        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSampling { .. } | ErrorKind::TooSteep { .. })
     }
 }
 
@@ -256,9 +256,8 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
             let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
             let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
-                let detail = e.detail();
                 let (kind, part) = e.into_kind();
-                at(kind, part.as_slice()).with_sampling_detail(detail)
+                at(kind, part.as_slice())
             })?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
         }
@@ -681,12 +680,17 @@ fn errors() {
     let over1 = Seq::mix([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(
         Order::new(over1).unwrap_err(),
-        at(ErrorKind::InvalidSampling { sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } }, &[0])
-            .with_sampling_detail(Some(crate::SamplingDetail::InvalidBreakpoints))
+        at(
+            ErrorKind::InvalidSampling {
+                sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 },
+                reason: crate::SamplingReason::InvalidBreakpoints,
+            },
+            &[0],
+        )
     );
     let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Sampling::Uniform), (src(1, 1 << 30), Sampling::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
-    assert_eq!(err.kind(), &ErrorKind::TooSteep);
+    assert_eq!(err.kind(), &ErrorKind::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: crate::MAX_MIX_LEN });
     assert_eq!(err.path(), &[1, 1]);
     // The path leads to the node: part 1 of the mix, then the single child of the shuffle.
     let nested = Seq::mix([a.clone(), Seq::concat([a.clone(), a.take(11).shuffle(1)])]).repeat(2);
@@ -1083,7 +1087,7 @@ fn steep_schedule_at_scale() {
     }
     // Too steep is rejected, not looped over.
     let steep = Seq::mix([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
-    assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong));
+    assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep { .. } | ErrorKind::MixTooLong));
     assert_eq!(MAX_MIX_LEN, 1 << 46);
 }
 

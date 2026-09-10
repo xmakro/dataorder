@@ -226,9 +226,10 @@ Every item's `source_ordinal` indexes `order.sources()` and distinguishes equal 
 zero-sized handles. Ordinals follow the original configuration, including sources
 whose nodes were removed during compilation. They are local to the order, not persistent dataset IDs.
 
-Invalid schedules expose further context through `Error::sampling_detail()`:
-non-finite parameters, invalid breakpoints, coefficient overflow, or the length,
-peak rate and limit behind excessive steepness.
+Sampling diagnostics are part of `ErrorKind`: `InvalidSampling { sampling, reason }`
+includes a `SamplingReason` for non-finite parameters, invalid breakpoints or
+coefficient overflow. `TooSteep { len, peak_rate, limit }` carries the values behind
+excessive steepness. Both `Error::kind()` and `Error::into_kind()` retain these details.
 
 `Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders
 defer configuration validation to `Order::new`, where `T: Source` is required.

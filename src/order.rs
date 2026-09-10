@@ -519,9 +519,8 @@ impl<T: Source> Compiler<T> {
             })
             .collect();
         let mut il = Interleave::with_sampling(&lens, sampling).map_err(|e| {
-            let detail = e.detail();
             let (kind, part) = e.into_kind();
-            self.err_at(kind, part).with_sampling_detail(detail)
+            self.err_at(kind, part)
         })?;
         let len = il.len();
         let mut children: Vec<Node> = parts.into_iter().filter_map(|(node, len, _)| (len > 0).then_some(node)).collect();

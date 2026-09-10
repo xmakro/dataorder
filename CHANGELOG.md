@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** move sampling diagnostics into `ErrorKind`. `InvalidSampling` now
+  contains `sampling` and `reason: SamplingReason`; `TooSteep` contains `len`,
+  `peak_rate` and `limit`. Remove `Error::sampling_detail` and `SamplingDetail`.
+  Read the fields through `kind()` or `into_kind()`, which now preserves sampling
+  diagnostics. Error paths, full error messages and ordering are unchanged.
+
 - **Breaking:** merge `Seq::mix_with` into `Seq::mix`, which now accepts bare
   sequences, `(seq, sampling)` pairs or `MixPart` values. Replace `mix_with` calls
   with `mix`. Empty inputs need an explicit element type, such as

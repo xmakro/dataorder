@@ -197,7 +197,7 @@ pub(crate) enum SamplingError {
     /// The total length exceeds [`MAX_TOTAL_LEN`].
     TooLong,
     /// A breakpoint or derived profile coefficient is invalid.
-    InvalidParameter { seq: usize, sampling: Sampling, detail: crate::SamplingDetail },
+    InvalidParameter { seq: usize, sampling: Sampling, reason: crate::SamplingReason },
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize, len: u64, peak_rate: f64 },
 }
