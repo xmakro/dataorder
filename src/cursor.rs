@@ -244,10 +244,10 @@ pub(crate) enum NodeCursor<'a> {
     // per active mix, but substantially shrinks wide mixes and worker-local cursors.
     Mix(Box<MixCursor<'a>>),
     Shuffle(ShuffleCursor<'a>),
-    /// `depth` counts the repeats above this one; it salts the epoch contexts.
+    /// `level` is this repeat's inside-out level; it salts the epoch contexts.
     Repeat {
         child_len: u64,
-        depth: u32,
+        level: u32,
         epoch: u64,
         left: u64,
         ctx: u64,
@@ -286,9 +286,9 @@ impl<'a> NodeCursor<'a> {
                 ctx: 0,
                 mixes: None,
             }),
-            Node::Repeat { child_len, depth, child, .. } => NodeCursor::Repeat {
+            Node::Repeat { child_len, level, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
-                depth: *depth,
+                level: *level,
                 epoch: 0,
                 left: 0,
                 ctx: 0,
@@ -322,13 +322,13 @@ impl<'a> NodeCursor<'a> {
                 sh.pos = pos;
                 sh.ctx = ctx;
             }
-            NodeCursor::Repeat { child_len, depth, epoch, left, ctx: c, child } => {
+            NodeCursor::Repeat { child_len, level, epoch, left, ctx: c, child } => {
                 let e = pos / *child_len;
                 let r = pos - e * *child_len;
                 *epoch = e;
                 *left = *child_len - r;
                 *c = ctx;
-                child.seek(r, perm::epoch_ctx(ctx, e, *depth));
+                child.seek(r, perm::epoch_ctx(ctx, e, *level));
             }
             NodeCursor::Slice { start, child } => child.seek(*start + pos, ctx),
             NodeCursor::Stride { step, offset, len, left, child } => {
@@ -360,11 +360,11 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.next(),
             NodeCursor::Shuffle(sh) => sh.next(),
-            NodeCursor::Repeat { child_len, depth, epoch, left, ctx, child } => {
+            NodeCursor::Repeat { child_len, level, epoch, left, ctx, child } => {
                 if *left == 0 {
                     *epoch += 1;
                     *left = *child_len;
-                    child.seek(0, perm::epoch_ctx(*ctx, *epoch, *depth));
+                    child.seek(0, perm::epoch_ctx(*ctx, *epoch, *level));
                 }
                 *left -= 1;
                 child.next()
@@ -411,7 +411,7 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.skip(m),
             NodeCursor::Shuffle(sh) => sh.pos += m,
-            NodeCursor::Repeat { child_len, depth, epoch, left, ctx, child } => {
+            NodeCursor::Repeat { child_len, level, epoch, left, ctx, child } => {
                 if m <= *left {
                     child.skip(m);
                     *left -= m;
@@ -425,7 +425,7 @@ impl<'a> NodeCursor<'a> {
                     } else {
                         *epoch = e;
                         *left = *child_len - r;
-                        child.seek(r, perm::epoch_ctx(*ctx, e, *depth));
+                        child.seek(r, perm::epoch_ctx(*ctx, e, *level));
                     }
                 }
             }

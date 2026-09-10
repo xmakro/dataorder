@@ -90,16 +90,18 @@ pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64
     sources.into_iter().fold(0, |h, (salt, len)| mix64(h ^ mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ len.wrapping_mul(PHI)))
 }
 
-/// Derives a shuffle context from the enclosing context, epoch and repeat depth.
-/// Epoch 0 keeps `ctx`; later epochs mix in their index and depth. Depth distinguishes
-/// an inner repeat's second epoch from an outer repeat's second epoch. Adding an
-/// outer repeat therefore also changes later epochs of repeats nested inside it.
+/// Derives a shuffle context from the enclosing context, epoch and inside-out repeat level.
+/// Epoch 0 keeps `ctx`; later epochs mix in their index and level. The innermost repeats
+/// have level 1. An enclosing repeat has one more than its child's maximum repeat level,
+/// so adding it preserves the child's first pass while distinguishing later outer epochs
+/// from inner epochs. A single-level repeat keeps the historical depth-0 arithmetic.
 #[inline]
-pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, depth: u32) -> u64 {
+pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, level: u32) -> u64 {
+    debug_assert!(level > 0);
     if epoch == 0 {
         return ctx;
     }
-    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add(epoch.wrapping_mul(PHI)) ^ (depth as u64 + 1).wrapping_mul(PHI))
+    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add(epoch.wrapping_mul(PHI)) ^ u64::from(level).wrapping_mul(PHI))
 }
 
 /// One Feistel round: `(l, r)` becomes `(r, l ^ F(r))`, restricted to the left half's
@@ -180,7 +182,7 @@ mod tests {
         let a = perm(n, 1);
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
-        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 0), 0));
+        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 1), 0));
         let c: Vec<u64> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
@@ -191,9 +193,9 @@ mod tests {
         assert_ne!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt([(2, 10), (1, 10)]));
         assert_eq!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt(vec![(1, 10), (2, 10)]));
         // The first repetition keeps its context; contexts of nested repetitions do not collide.
-        assert_eq!(epoch_ctx(5, 0, 0), 5);
-        assert_ne!(epoch_ctx(0, 1, 0), 0);
-        assert_ne!(epoch_ctx(epoch_ctx(0, 0, 0), 1, 1), epoch_ctx(epoch_ctx(0, 1, 0), 0, 1));
+        assert_eq!(epoch_ctx(5, 0, 1), 5);
+        assert_ne!(epoch_ctx(0, 1, 1), 0);
+        assert_ne!(epoch_ctx(epoch_ctx(0, 0, 2), 1, 1), epoch_ctx(epoch_ctx(0, 1, 2), 0, 1));
     }
 
     /// Chi-square of `values` against a uniform expectation over `cells` cells.

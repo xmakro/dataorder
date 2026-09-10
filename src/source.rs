@@ -16,11 +16,11 @@ use std::sync::Arc;
 /// ```
 /// use dataorder::Source;
 ///
-/// struct Shard { path: String, records: usize }
+/// struct Shard { name: String, records: usize }
 ///
 /// impl Source for Shard {
 ///     fn len(&self) -> usize { self.records }
-///     fn salt(&self) -> u64 { dataorder::salt(&self.path) }
+///     fn salt(&self) -> u64 { dataorder::salt(&self.name) }
 /// }
 /// ```
 ///
@@ -44,7 +44,8 @@ pub trait Source {
     ///
     /// Sources with the same length and salt shuffle alike under the same seeds
     /// and repetition context. Derive a salt from a dataset name with [`crate::salt`]
-    /// or from its path with [`crate::salt_path`].
+    /// to keep ordering independent of storage location. [`crate::salt_path`] is also
+    /// available when the path itself is the intended identity.
     fn salt(&self) -> u64 {
         0
     }
@@ -55,8 +56,8 @@ pub trait Source {
 /// stability policy. For paths, use [`salt_path`].
 ///
 /// ```
-/// assert_eq!(dataorder::salt("web.bin"), dataorder::salt(b"web.bin"));
-/// assert_ne!(dataorder::salt("web.bin"), dataorder::salt("code.bin"));
+/// assert_eq!(dataorder::salt("web"), dataorder::salt(b"web"));
+/// assert_ne!(dataorder::salt("web"), dataorder::salt("code"));
 /// ```
 #[must_use]
 pub fn salt(bytes: impl AsRef<[u8]>) -> u64 {

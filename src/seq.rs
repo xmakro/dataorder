@@ -63,9 +63,9 @@ pub enum Seq<T> {
     /// Repetition does not add shuffling. Any mix schedules inside restart each epoch.
     /// `x.repeat(1)` is `x`; `x.repeat(0)` is empty but still validates `inner`.
     ///
-    /// With more than one repetition, any repeats inside `inner` become one level deeper.
-    /// Their later epochs then shuffle differently even during this repeat's first epoch:
-    /// adding an outer repeat does not preserve the whole prefix of a nested repeat.
+    /// The first pass preserves all of `inner`, including nested epochs. Repetition levels
+    /// are numbered from the inside out, so an outer repeat does not change inner levels.
+    /// Later passes reseed the existing shuffles using this repeat's epoch and level.
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -75,7 +75,8 @@ pub enum Seq<T> {
     /// Exactly `len` positions of `inner`, repeating or truncating it as needed.
     ///
     /// Each additional epoch reseeds existing shuffles, as [`Repeat`](Seq::Repeat)
-    /// does. If more than one epoch is needed, nested repeats also change depth.
+    /// does. The entire first pass keeps its order, including nested epochs; increasing
+    /// `len` preserves the existing prefix.
     /// When `len` fits within `inner`, this is equivalent to `inner.take(len)`.
     /// A positive `len` requires a non-empty child. `cycle(usize::MAX)` creates the
     /// longest supported order; it is still finite.
@@ -210,8 +211,8 @@ impl<T> Seq<T> {
         Self::Shuffle { seed, inner: Box::new(self) }
     }
 
-    /// Repeats this sequence `times` times, reseeding any existing shuffles each epoch.
-    /// Adding more than one repetition also changes the contexts of nested repeats;
+    /// Repeats this sequence `times` times, reseeding existing shuffles after the first epoch.
+    /// The first pass preserves the sequence, including all nested epochs;
     /// see [`Repeat`](Seq::Repeat).
     ///
     /// ```

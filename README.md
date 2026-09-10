@@ -65,29 +65,30 @@ contains `source_ordinal`, `source` (a reference to the dataset handle), and `re
 
 Implement `Source`, the dataset trait, for your own handle type. Only its length is
 required. A stable `salt` distinguishes its shuffle from those of other datasets
-with the same length and seed.
+with the same length and seed. Use a stable dataset name so moving its files does
+not change its shuffle.
 
 ```rust
 use dataorder::{Order, Seq, Source};
 
 struct Dataset {
-    path: &'static str,
+    name: &'static str,
     records: usize,
 }
 
 impl Source for Dataset {
     fn len(&self) -> usize { self.records }
-    fn salt(&self) -> u64 { dataorder::salt(self.path) }
+    fn salt(&self) -> u64 { dataorder::salt(self.name) }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let web = Seq::source(Dataset { path: "web.bin", records: 1000 }).shuffle(1);
-    let code = Seq::source(Dataset { path: "code.bin", records: 200 }).shuffle(2);
+    let web = Seq::source(Dataset { name: "web", records: 1000 }).shuffle(1);
+    let code = Seq::source(Dataset { name: "code", records: 200 }).shuffle(2);
     let order = Order::new(Seq::mix([web, code]))?;
 
     for item in order.iter(..10)? {
         // Use your own loader to read this record.
-        println!("{}: record {}", item.source.path, item.record_index);
+        println!("{}: record {}", item.source.name, item.record_index);
     }
     Ok(())
 }
@@ -201,7 +202,8 @@ resume existing checkpoints with their original crate version.
   must choose their truncation or padding policy.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
-  Adding an outer repeat can change later epochs of repeats inside it; see the
+  Adding an outer repeat preserves the entire first pass, including nested epochs;
+  later outer passes reseed the shuffles inside it. See the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`

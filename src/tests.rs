@@ -129,24 +129,130 @@ impl Rng {
     }
 }
 
-/// Materializes `seq` in context `ctx` by the definitions in the crate docs.
-fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
-    eval_at(seq, ctx, 0)
+/// A reference model of the repeat scopes retained by selections. Shuffle and multi-part
+/// mix boundaries are opaque; concat boundaries and epoch-zero prefixes can be narrowed.
+/// Unlike the compiler, all selections use one affine map over this length-only view.
+/// This keeps the eager evaluator independent of compiled nodes and their cached levels.
+enum LevelView {
+    Opaque { len: usize, level: u32 },
+    Concat(Vec<Self>),
+    Repeat { len: usize, child: Box<Self> },
+    Select { len: usize, start: usize, step: usize, child: Box<Self> },
 }
 
-/// `depth` repeats enclose `seq`.
-fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Error> {
+impl LevelView {
+    fn of(seq: &Seq<Src>) -> Self {
+        let opaque = |len, level| Self::Opaque { len, level };
+        match seq {
+            Seq::Source(s) => opaque(s.len, 0),
+            Seq::Concat(parts) => Self::Concat(parts.iter().map(Self::of).collect()),
+            Seq::Mix(parts) => {
+                let mut parts: Vec<_> = parts.iter().map(|p| Self::of(&p.seq)).filter(|p| p.len() > 0).collect();
+                if parts.len() == 1 {
+                    parts.pop().unwrap()
+                } else {
+                    opaque(parts.iter().map(Self::len).sum(), parts.iter().map(Self::level).max().unwrap_or(0))
+                }
+            }
+            Seq::Shuffle { inner, .. } => {
+                let child = Self::of(inner);
+                if child.len() <= 1 { child } else { opaque(child.len(), child.level()) }
+            }
+            Seq::Repeat { times, inner } => {
+                let child = Self::of(inner);
+                let len = times * child.len();
+                if len == 0 {
+                    opaque(0, 0)
+                } else if *times == 1 {
+                    child
+                } else {
+                    Self::Repeat { len, child: Box::new(child) }
+                }
+            }
+            Seq::Cycle { len, inner } => {
+                let child = Self::of(inner);
+                if *len <= child.len() { child.select(0, 1, *len) } else { Self::Repeat { len: *len, child: Box::new(child) } }
+            }
+            Seq::Skip { n, inner } => {
+                let child = Self::of(inner);
+                let len = child.len() - n;
+                child.select(*n, 1, len)
+            }
+            Seq::Take { n, inner } => Self::of(inner).select(0, 1, *n),
+            Seq::StepBy { step, inner } => {
+                let child = Self::of(inner);
+                let len = child.len().div_ceil(*step);
+                child.select(0, *step, len)
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Opaque { len, .. } | Self::Repeat { len, .. } | Self::Select { len, .. } => *len,
+            Self::Concat(parts) => parts.iter().map(Self::len).sum(),
+        }
+    }
+
+    fn level(&self) -> u32 {
+        match self {
+            Self::Opaque { level, .. } => *level,
+            Self::Concat(parts) => parts.iter().map(Self::level).max().unwrap_or(0),
+            Self::Repeat { child, .. } => child.level() + 1,
+            Self::Select { child, .. } => child.level(),
+        }
+    }
+
+    fn select(self, start: usize, step: usize, len: usize) -> Self {
+        if len == 0 {
+            return Self::Opaque { len: 0, level: 0 };
+        }
+        if start == 0 && step == 1 && len == self.len() {
+            return self;
+        }
+        match self {
+            Self::Select { start: base, step: stride, child, .. } => child.select(base + start * stride, stride * step, len),
+            Self::Repeat { child, .. } if start == 0 && (step == 1 || len == 1) => {
+                if len <= child.len() {
+                    child.select(0, 1, len)
+                } else {
+                    Self::Repeat { len, child }
+                }
+            }
+            Self::Concat(parts) if step == 1 || len == 1 => {
+                let mut at = 0;
+                Self::Concat(
+                    parts
+                        .into_iter()
+                        .filter_map(|p| {
+                            let end = at + p.len();
+                            let a = start.max(at);
+                            let b = (start + len).min(end);
+                            let offset = a.saturating_sub(at);
+                            at = end;
+                            (a < b).then(|| p.select(offset, 1, b - a))
+                        })
+                        .collect(),
+                )
+            }
+            child => Self::Select { len, start, step, child: Box::new(child) },
+        }
+    }
+}
+
+/// Materializes `seq` in context `ctx` by the definitions in the crate docs.
+fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
     Ok(match seq {
         Seq::Source(s) => (0..s.len).map(|i| (s.id, i)).collect(),
         Seq::Concat(parts) => {
             let mut out = Vec::new();
             for p in parts {
-                out.extend(eval_at(p, ctx, depth)?);
+                out.extend(eval(p, ctx)?);
             }
             out
         }
         Seq::Mix(parts) => {
-            let evs = parts.iter().map(|p| eval_at(&p.seq, ctx, depth)).collect::<Result<Vec<_>, _>>()?;
+            let evs = parts.iter().map(|p| eval(&p.seq, ctx)).collect::<Result<Vec<_>, _>>()?;
             let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
             let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
@@ -157,39 +263,38 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
         }
         Seq::Cycle { len, inner } => {
-            let n = eval_at(inner, ctx, depth)?.len();
+            let n = eval(inner, ctx)?.len();
             if n == 0 && *len > 0 {
                 return Err(root(ErrorKind::EmptyCycle));
             }
-            eval_at(&cycle_of(inner, *len, n), ctx, depth)?
+            eval(&cycle_of(inner, *len, n), ctx)?
         }
         Seq::Shuffle { seed, inner } => {
-            let v = eval_at(inner, ctx, depth)?;
+            let v = eval(inner, ctx)?;
             let mut under = Vec::new();
             salts(inner, &mut under);
             let (shape, key) = (Shape::new(v.len() as u64), perm::key(*seed, ctx, perm::shuffle_salt(under)));
             (0..v.len() as u64).map(|i| v[perm::permute(shape, key, i) as usize]).collect()
         }
         Seq::Repeat { times, inner } => {
-            // A single repetition is no repeat at all: the inner sequence is not one level
-            // deeper. Validated even when repeated zero times, like the compiler does.
-            let inner_depth = if *times > 1 { depth + 1 } else { depth };
-            let mut out = eval_at(inner, ctx, inner_depth)?;
+            // Validate even when empty; derive levels independently of the compiler.
+            let mut out = eval(inner, ctx)?;
+            let level = LevelView::of(inner).level() + 1;
             out.clear();
             for e in 0..*times {
-                out.extend(eval_at(inner, perm::epoch_ctx(ctx, e as u64, depth), inner_depth)?);
+                out.extend(eval(inner, perm::epoch_ctx(ctx, e as u64, level))?);
             }
             out
         }
         Seq::Skip { n, inner } => {
-            let v = eval_at(inner, ctx, depth)?;
+            let v = eval(inner, ctx)?;
             if *n > v.len() {
                 return Err(root(ErrorKind::SkipOutOfRange { n: *n, len: v.len() as u64 }));
             }
             v[*n..].to_vec()
         }
         Seq::Take { n, inner } => {
-            let v = eval_at(inner, ctx, depth)?;
+            let v = eval(inner, ctx)?;
             if *n > v.len() {
                 return Err(root(ErrorKind::TakeOutOfRange { n: *n, len: v.len() as u64 }));
             }
@@ -199,14 +304,13 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             if *step == 0 {
                 return Err(root(ErrorKind::ZeroStep));
             }
-            eval_at(inner, ctx, depth)?.into_iter().step_by(*step).collect()
+            eval(inner, ctx)?.into_iter().step_by(*step).collect()
         }
     })
 }
 
 /// A cycle in terms of repeat and take: `seq` (of length `n`) repeated as often as `len`
-/// positions need, then cut to `len`; a repetition only when there is more than one, so
-/// that the depth of the repeats inside is what the compiler gives them.
+/// positions need, then cut to `len`. A single repetition introduces no level.
 fn cycle_of(seq: &Seq<Src>, len: usize, n: usize) -> Seq<Src> {
     let times = if n == 0 { 0 } else { len.div_ceil(n) };
     let inner = if times > 1 { Seq::Repeat { times, inner: Box::new(seq.clone()) } } else { seq.clone() };
@@ -397,21 +501,18 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert_eq!(ids(Order::new(seq.clone().repeat(1)).unwrap().iter(..).unwrap()), ids(order.iter(..).unwrap()));
     assert_eq!(ids(Order::new(Seq::concat([seq.clone().repeat(1)]).repeat(1)).unwrap().iter(..).unwrap()), ids(order.iter(..).unwrap()));
     // A cycle that fits within its part is not repeated, so it is the part itself;
-    // one that is repeated preserves the part's first inner epoch, but being one repeat
-    // deeper reshuffles the part's later epochs even during its first outer repetition.
+    // one that repeats also preserves the entire first pass, including nested epochs.
     let part = || src(7, 100).shuffle(3).repeat(2);
     let fits = Order::new(Seq::mix([part().cycle(200), src(8, 1000).cycle(200)])).unwrap();
     let repeats = Order::new(Seq::mix([part().cycle(250), src(8, 1000).cycle(250)])).unwrap();
     let sevens = |o: &Order<Src>| ids(o.iter(..).unwrap()).into_iter().filter(|e| e.0 == 7).collect::<Vec<_>>();
     let alone = ids(Order::new(part()).unwrap().iter(..).unwrap());
     assert_eq!(sevens(&fits), alone);
-    assert_eq!(sevens(&repeats)[..100], alone[..100]);
-    assert_ne!(sevens(&repeats)[100..200], alone[100..200]);
-    // Adding a repeat changes the nested prefix even if a take cuts away the new epoch.
+    assert_eq!(sevens(&repeats)[..200], alone);
+    // Adding a repeat preserves the nested prefix, including when a take removes it.
     for extended in [part().repeat(2), part().cycle(201), part().repeat(2).take(200)] {
         let extended = Order::new(extended).unwrap();
-        assert_eq!(ids(extended.iter(..100).unwrap()), alone[..100]);
-        assert_ne!(ids(extended.iter(100..200).unwrap()), alone[100..200]);
+        assert_eq!(ids(extended.iter(..200).unwrap()), alone);
     }
     // Nested repeats: (outer 0, inner 1) and (outer 1, inner 0) are different orders.
     let nested = Order::new(src(7, 100).shuffle(3).repeat(2).repeat(2)).unwrap();
@@ -438,6 +539,74 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert_eq!(ids(later.iter(..).unwrap()), ids(reseeded.iter(..).unwrap()));
     later.set_seed(0);
     assert_eq!(ids(later.iter(..).unwrap()), ids(order.iter(..).unwrap()));
+}
+
+/// Levels follow retained inner scopes, including unequal branches and selections that
+/// erase an epoch-zero scope. Check each outer epoch against an independently seeded child.
+#[test]
+fn repeat_levels_are_assigned_from_the_inside_out() {
+    let x = || src(0, 17).shuffle(3);
+    let deep = || src(1, 11).shuffle(7).repeat(2).repeat(3);
+    let cases = [
+        ("plain", x(), 0),
+        ("repeat", x().repeat(2), 1),
+        ("nested", x().repeat(2).repeat(3), 2),
+        ("concat max", Seq::concat([deep(), x().repeat(2)]), 2),
+        ("mix max", Seq::mix([x().repeat(2), deep()]), 2),
+        ("single repeat", deep().repeat(1), 2),
+        ("empty repeat", Seq::concat([deep().repeat(0), x()]), 0),
+        ("empty take", Seq::mix([deep().take(0), x()]), 0),
+        ("prefix", x().repeat(3).take(17).skip(1), 0),
+        ("short cycle", x().repeat(3).cycle(17), 0),
+        ("one strided position", x().repeat(3).step_by(51), 0),
+        ("discard concat tail", Seq::concat([x(), deep()]).take(17), 0),
+        ("discard concat head", Seq::concat([deep(), x()]).skip(66), 0),
+        ("retained slice", x().repeat(3).skip(1).take(16), 1),
+        ("retained stride", x().repeat(3).step_by(3), 1),
+        ("partial extra epoch", x().cycle(18), 1),
+        ("cycle of repeat", x().repeat(2).cycle(35), 2),
+    ];
+    for (name, seq, inner_level) in cases {
+        // A shuffle above the child makes the outer context observable even when a
+        // selection has kept only one position of an inner shuffled epoch.
+        let seq = seq.shuffle(19);
+        assert_eq!(LevelView::of(&seq).level(), inner_level, "reference level: {name}");
+        for seed in [0, 51] {
+            let repeated = Order::with_seed(seq.clone().repeat(3), seed).unwrap();
+            assert!(matches!(repeated.root, crate::order::Node::Repeat { level, .. } if level == inner_level + 1), "{name}");
+            let n = repeated.len() / 3;
+            for epoch in 0..3 {
+                let context = perm::epoch_ctx(seed, epoch as u64, inner_level + 1);
+                let expected = ids(Order::with_seed(seq.clone(), context).unwrap().iter(..).unwrap());
+                let start = epoch * n;
+                assert_eq!(ids(repeated.iter(start..start + n).unwrap()), expected, "{name}: epoch {epoch}");
+                for (pos, &item) in expected.iter().enumerate() {
+                    let actual = repeated.get(start + pos).unwrap();
+                    assert_eq!((actual.source.id, actual.record_index), item, "{name}: get({})", start + pos);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn extending_nested_repetitions_preserves_every_existing_position() {
+    let seq = Seq::mix([src(0, 17).shuffle(3).repeat(2), Seq::concat([src(1, 11).shuffle(7).repeat(2).repeat(3), src(2, 5)])]);
+    for seed in [0, 51] {
+        let once = Order::with_seed(seq.clone(), seed).unwrap();
+        let n = once.len();
+        let long = Order::with_seed(seq.clone().repeat(3), seed).unwrap();
+        let all = ids(long.iter(..).unwrap());
+        assert_eq!(ids(once.iter(..).unwrap()), all[..n]);
+        for len in [0, 1, 17, n - 1, n, n + 1, 2 * n, 2 * n + 1, 3 * n] {
+            for selected in [seq.clone().cycle(len), seq.clone().repeat(3).take(len)] {
+                let order = Order::with_seed(selected, seed).unwrap();
+                assert_eq!(ids(order.iter(..).unwrap()), all[..len], "prefix length {len}");
+            }
+        }
+        assert_ne!(all[..n], all[n..2 * n]);
+        assert_ne!(all[n..2 * n], all[2 * n..]);
+    }
 }
 
 #[test]
@@ -530,8 +699,7 @@ fn errors() {
     assert_eq!(root(ErrorKind::EmptyCycle).to_string(), "cannot cycle a sequence without elements (at the root)");
 }
 
-/// A cycle is the repeat cut to length, with the repeats inside one level deeper only when
-/// it does repeat; a prefix of a repeat folds into it.
+/// A cycle is a repeat cut to length and preserves its existing prefix as it grows.
 #[test]
 fn cycles() {
     use crate::order::Node;
@@ -544,11 +712,11 @@ fn cycles() {
         assert_eq!(ids(Order::new(x().repeat(4).take(len)).unwrap().iter(..).unwrap()), all[..len]);
     }
     assert_eq!(ids(Order::new(x().cycle(99)).unwrap().iter(..).unwrap()), ids(Order::new(x().take(99)).unwrap().iter(..).unwrap()));
-    // The repeats inside move one level deeper exactly when the cycle repeats.
+    // Inner repeat levels stay unchanged when a cycle extends to another pass.
     let y = || src(0, 10).shuffle(3).repeat(2);
     assert_eq!(ids(Order::new(y().cycle(15)).unwrap().iter(..).unwrap()), ids(Order::new(y()).unwrap().iter(..15).unwrap()));
     assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap()), ids(Order::new(y().repeat(3)).unwrap().iter(..45).unwrap()));
-    assert_ne!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap())[..20], ids(Order::new(y()).unwrap().iter(..).unwrap())[..]);
+    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap())[..20], ids(Order::new(y()).unwrap().iter(..).unwrap())[..]);
     // Node shapes: no slice above a repeat, a short cycle is a slice or the child.
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
     assert!(matches!(root(x().cycle(250)), Node::Repeat { child_len: 100, len: 250, .. }));

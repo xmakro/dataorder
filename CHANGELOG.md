@@ -2,6 +2,14 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** number repetition levels from the inside out instead of by enclosing
+  depth. Adding an outer repeat or extending a cycle now preserves the entire first
+  pass, including nested epochs. Later passes use the repeat's epoch and level to
+  reseed existing shuffles. Non-nested repetition and source salts are unchanged;
+  nested repetition orders change. Resume existing orders with their original crate
+  version. Remove the compiler's repeat-depth repair traversal.
+- Dataset examples derive salts from stable dataset names rather than storage paths.
+
 - Position cursors when constructed and when moved to empty ranges. Remove deferred
   root initialization and separate tracking of the tree's previous position.
   `last()` now uses a direct lookup. Construction, empty-range transitions and

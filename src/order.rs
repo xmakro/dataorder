@@ -42,12 +42,12 @@ pub(crate) enum Node {
         child: Box<Self>,
     },
     /// `child` repeated: positions `0..len`, `child_len` per repetition, the last one cut
-    /// short when `len` is not a multiple (a cycle). `depth` counts the repeats above this
-    /// one; it salts the epoch contexts.
+    /// short when `len` is not a multiple (a cycle). `level` is one more than the maximum
+    /// repeat level retained in `child`, or 1 when there are none; it salts epoch contexts.
     Repeat {
         child_len: u64,
         len: u64,
-        depth: u32,
+        level: u32,
         child: Box<Self>,
     },
     Slice {
@@ -71,6 +71,17 @@ impl Node {
             Self::Concat { offsets, .. } => *offsets.last().unwrap(),
             Self::Mix { il, .. } => il.len(),
             Self::Shuffle { shape, .. } => shape.n,
+        }
+    }
+
+    /// Maximum retained repeat level. A repeat already summarizes its descendants,
+    /// so the search stops there; wrappers and branches only expose that cached level.
+    fn repeat_level(&self) -> u32 {
+        match self {
+            Self::Empty | Self::Source { .. } => 0,
+            Self::Repeat { level, .. } => *level,
+            Self::Concat { children, .. } | Self::Mix { children, .. } => children.iter().map(Self::repeat_level).max().unwrap_or(0),
+            Self::Shuffle { child, .. } | Self::Slice { child, .. } | Self::Stride { child, .. } => child.repeat_level(),
         }
     }
 }
@@ -156,7 +167,7 @@ impl<T: Source> Order<T> {
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
         let mut c = Compiler { sources: Vec::new(), salts: Vec::new(), path: Vec::new() };
-        let root = c.compile(seq, 0, 1)?;
+        let root = c.compile(seq, 1)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::new(ErrorKind::OrderTooLong { len: root.len() }, Vec::new()));
         }
@@ -322,10 +333,10 @@ pub(crate) fn get_with<'a>(
                 pos = perm::permute(*shape, perm::key(*seed, ctx, *salt), pos);
                 node = child;
             }
-            Node::Repeat { child_len, depth, child, .. } => {
+            Node::Repeat { child_len, level, child, .. } => {
                 let epoch = pos / child_len;
                 pos -= epoch * child_len;
-                ctx = perm::epoch_ctx(ctx, epoch, *depth);
+                ctx = perm::epoch_ctx(ctx, epoch, *level);
                 node = child;
             }
             Node::Slice { start, child, .. } => {
@@ -360,36 +371,35 @@ impl<T: Source> Compiler<T> {
         self.err_at(kind, None)
     }
 
-    /// Compiles child `i` of the node being compiled, `repeats` repeats deep, one nesting
-    /// level below it.
-    fn child(&mut self, i: usize, seq: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
+    /// Compiles child `i` one configuration level below the node being compiled.
+    fn child(&mut self, i: usize, seq: Seq<T>, level: u32) -> Result<Node, Error> {
         self.path.push(i);
-        let node = self.compile(seq, repeats, level + 1);
+        let node = self.compile(seq, level + 1);
         self.path.pop();
         node
     }
 
     /// Compiles the children of a wide node in order.
-    fn children(&mut self, parts: impl IntoIterator<Item = Seq<T>>, repeats: u32, level: u32) -> Result<Vec<Node>, Error> {
-        parts.into_iter().enumerate().map(|(i, seq)| self.child(i, seq, repeats, level)).collect()
+    fn children(&mut self, parts: impl IntoIterator<Item = Seq<T>>, level: u32) -> Result<Vec<Node>, Error> {
+        parts.into_iter().enumerate().map(|(i, seq)| self.child(i, seq, level)).collect()
     }
 
-    /// `repeats` is the number of repeats above `seq`; `level` counts all nodes
-    /// from the root. One method per variant keeps recursive frames small.
-    fn compile(&mut self, seq: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
+    /// `level` counts all configuration nodes from the root, independently of the
+    /// inside-out repeat levels. One method per variant keeps recursive frames small.
+    fn compile(&mut self, seq: Seq<T>, level: u32) -> Result<Node, Error> {
         if level > MAX_DEPTH {
             return Err(self.err(ErrorKind::TooDeep));
         }
         match seq {
             Seq::Source(source) => self.source(source),
-            Seq::Concat(parts) => self.concat(parts, repeats, level),
-            Seq::Mix(parts) => self.mix_parts(parts, repeats, level),
-            Seq::Shuffle { seed, inner } => self.shuffle(seed, *inner, repeats, level),
-            Seq::Repeat { times, inner } => self.repeat(times, *inner, repeats, level),
-            Seq::Cycle { len, inner } => self.cycled(len, *inner, repeats, level),
-            Seq::Skip { n, inner } => self.skip(n, *inner, repeats, level),
-            Seq::Take { n, inner } => self.take(n, *inner, repeats, level),
-            Seq::StepBy { step, inner } => self.stepped(step, *inner, repeats, level),
+            Seq::Concat(parts) => self.concat(parts, level),
+            Seq::Mix(parts) => self.mix_parts(parts, level),
+            Seq::Shuffle { seed, inner } => self.shuffle(seed, *inner, level),
+            Seq::Repeat { times, inner } => self.repeat(times, *inner, level),
+            Seq::Cycle { len, inner } => self.cycled(len, *inner, level),
+            Seq::Skip { n, inner } => self.skip(n, *inner, level),
+            Seq::Take { n, inner } => self.take(n, *inner, level),
+            Seq::StepBy { step, inner } => self.stepped(step, *inner, level),
         }
     }
 
@@ -403,9 +413,9 @@ impl<T: Source> Compiler<T> {
 
     /// Nested concatenations are flattened and empty parts dropped: both keep the order and
     /// the context of every element.
-    fn concat(&mut self, parts: Vec<Seq<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn concat(&mut self, parts: Vec<Seq<T>>, level: u32) -> Result<Node, Error> {
         let mut children = Vec::new();
-        for node in self.children(parts, repeats, level)? {
+        for node in self.children(parts, level)? {
             match node {
                 Node::Empty => {}
                 Node::Concat { children: inner, .. } => children.extend(inner),
@@ -422,14 +432,14 @@ impl<T: Source> Compiler<T> {
         })
     }
 
-    fn mix_parts(&mut self, parts: Vec<MixPart<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn mix_parts(&mut self, parts: Vec<MixPart<T>>, level: u32) -> Result<Node, Error> {
         let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
-        let children = self.children(parts.into_iter().map(|p| p.seq), repeats, level)?;
+        let children = self.children(parts.into_iter().map(|p| p.seq), level)?;
         self.mix(children, &sampling)
     }
 
-    fn shuffle(&mut self, seed: u64, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let child = self.child(0, inner, repeats, level)?;
+    fn shuffle(&mut self, seed: u64, inner: Seq<T>, level: u32) -> Result<Node, Error> {
+        let child = self.child(0, inner, level)?;
         if child.len() <= 1 {
             return Ok(child);
         }
@@ -439,10 +449,9 @@ impl<T: Source> Compiler<T> {
         Ok(Node::Shuffle { seed, salt, shape: Shape::new(child.len()), child: Box::new(child) })
     }
 
-    /// A single repetition is the sequence itself, so it does not count as a repeat above
-    /// its child either.
-    fn repeat(&mut self, times: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let child = self.child(0, inner, if times > 1 { repeats + 1 } else { repeats }, level)?;
+    /// A single repetition is the sequence itself and introduces no repeat level.
+    fn repeat(&mut self, times: usize, inner: Seq<T>, level: u32) -> Result<Node, Error> {
+        let child = self.child(0, inner, level)?;
         let child_len = child.len();
         let len = (times as u64).checked_mul(child_len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
         Ok(if len == 0 {
@@ -450,20 +459,20 @@ impl<T: Source> Compiler<T> {
         } else if times == 1 {
             child
         } else {
-            Node::Repeat { child_len, len, depth: repeats, child: Box::new(child) }
+            Node::Repeat { child_len, len, level: child.repeat_level() + 1, child: Box::new(child) }
         })
     }
 
-    fn cycled(&mut self, len: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let child = self.child(0, inner, repeats, level)?;
+    fn cycled(&mut self, len: usize, inner: Seq<T>, level: u32) -> Result<Node, Error> {
+        let child = self.child(0, inner, level)?;
         if len > 0 && child.len() == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
-        Ok(cycle(child, len as u64, repeats))
+        Ok(cycle(child, len as u64))
     }
 
-    fn skip(&mut self, n: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let child = self.child(0, inner, repeats, level)?;
+    fn skip(&mut self, n: usize, inner: Seq<T>, level: u32) -> Result<Node, Error> {
+        let child = self.child(0, inner, level)?;
         let len = child.len();
         if n as u64 > len {
             return Err(self.err(ErrorKind::SkipOutOfRange { n, len }));
@@ -471,8 +480,8 @@ impl<T: Source> Compiler<T> {
         Ok(slice(child, n as u64, len - n as u64))
     }
 
-    fn take(&mut self, n: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let child = self.child(0, inner, repeats, level)?;
+    fn take(&mut self, n: usize, inner: Seq<T>, level: u32) -> Result<Node, Error> {
+        let child = self.child(0, inner, level)?;
         let len = child.len();
         if n as u64 > len {
             return Err(self.err(ErrorKind::TakeOutOfRange { n, len }));
@@ -480,11 +489,11 @@ impl<T: Source> Compiler<T> {
         Ok(slice(child, 0, n as u64))
     }
 
-    fn stepped(&mut self, step: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn stepped(&mut self, step: usize, inner: Seq<T>, level: u32) -> Result<Node, Error> {
         if step == 0 {
             return Err(self.err(ErrorKind::ZeroStep));
         }
-        let child = self.child(0, inner, repeats, level)?;
+        let child = self.child(0, inner, level)?;
         let step = step as u64;
         let len = child.len().div_ceil(step);
         Ok(stride(child, step, len))
@@ -516,18 +525,15 @@ impl<T: Source> Compiler<T> {
 }
 
 /// `child` repeated as often as `len` positions need and cut there (a [`Seq::Cycle`]):
-/// within one repetition it is a slice; beyond, a repeat whose
-/// last repetition is cut short. The child was compiled `repeats` deep, once, before it
-/// was known whether it repeats; when it does, the repeats inside it move one level
-/// deeper after the fact, as compiling it under a repeat would have put them. `child` has
-/// elements whenever `len > 0`.
-fn cycle(mut child: Node, len: u64, repeats: u32) -> Node {
+/// within one repetition it is a slice; beyond, a repeat whose last epoch is cut short.
+/// Its level is derived from the compiled child without renumbering any inner repeats.
+/// `child` has elements whenever `len > 0`.
+fn cycle(child: Node, len: u64) -> Node {
     let child_len = child.len();
     if len <= child_len {
         return slice(child, 0, len);
     }
-    deepen(&mut child);
-    Node::Repeat { child_len, len, depth: repeats, child: Box::new(child) }
+    Node::Repeat { child_len, len, level: child.repeat_level() + 1, child: Box::new(child) }
 }
 
 /// The sources of `node` that can contribute elements, in order of appearance: every
@@ -543,20 +549,6 @@ fn sources(node: &Node, out: &mut Vec<u32>) {
         Node::Shuffle { child, .. } | Node::Repeat { child, .. } | Node::Slice { child, .. } | Node::Stride { child, .. } => {
             sources(child, out)
         }
-    }
-}
-
-/// Moves every repeat in `node` one repeat deeper: what compiling it under one more repeat
-/// would have produced.
-fn deepen(node: &mut Node) {
-    match node {
-        Node::Empty | Node::Source { .. } => {}
-        Node::Concat { children, .. } | Node::Mix { children, .. } => children.iter_mut().for_each(deepen),
-        Node::Repeat { depth, child, .. } => {
-            *depth += 1;
-            deepen(child);
-        }
-        Node::Shuffle { child, .. } | Node::Slice { child, .. } | Node::Stride { child, .. } => deepen(child),
     }
 }
 
@@ -587,11 +579,11 @@ fn slice(child: Node, start: u64, len: u64) -> Node {
     }
     match child {
         Node::Source { src, offset, .. } => Node::Source { src, offset: offset + start, len },
-        Node::Repeat { child_len, depth, child, .. } if start == 0 => {
+        Node::Repeat { child_len, level, child, .. } if start == 0 => {
             if len <= child_len {
                 slice(*child, 0, len)
             } else {
-                Node::Repeat { child_len, len, depth, child }
+                Node::Repeat { child_len, len, level, child }
             }
         }
         Node::Slice { start: inner, child, .. } => slice(*child, inner + start, len),

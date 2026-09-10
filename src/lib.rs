@@ -93,7 +93,7 @@
 //! A shuffle visits every child position exactly once. Its permutation depends on:
 //!
 //! - The shuffle's seed and the order's seed.
-//! - The repetition context, derived from enclosing repeats and their nesting depths.
+//! - The repetition context, derived from enclosing repeats, their epochs and inside-out levels.
 //! - The salts and original lengths of sources retained under the shuffle, in order
 //!   of appearance.
 //!
@@ -106,11 +106,15 @@
 //! its original context. In contrast, concatenating three copies of `x.shuffle(seed)`
 //! repeats the same order. Repetition alone does not add a shuffle.
 //!
-//! Nested repeats need care: adding an outer repeat with more than one epoch increases
-//! the depth of inner repeats. Their later epochs can then change even during the
-//! outer repeat's first epoch. Extending a sequence with `cycle` has the same effect
-//! if it introduces another epoch. A single repetition, or a cycle
-//! within the existing length, preserves the prefix.
+//! Repetition levels are numbered from the inside out. A repeat with no retained repeats
+//! beneath it has level 1; an enclosing repeat has one more than the maximum child level.
+//! Levels are assigned after compiling the child: empty subtrees and repeats folded away
+//! by a prefix selection do not contribute. Slices of mixes and strides can retain repeats
+//! even when their selected positions do not reach them, just as with source salts below.
+//! Adding an outer repeat leaves inner levels unchanged, so its entire first pass keeps
+//! the child's order, including all nested epochs. Later outer passes reseed the shuffles
+//! inside it. Increasing `repeat(times)` or `cycle(len)` preserves the existing prefix.
+//! A single repetition, or a cycle within the existing length, introduces no repeat level.
 //!
 //! Empty sources and subtrees do not contribute to a shuffle's salt. A skip or take
 //! also removes concatenation parts that it excludes entirely. Other combinations,
@@ -154,7 +158,8 @@
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
 //! elements. Compilation can revisit subtrees when flattening concatenations, deriving
-//! shuffle salts or adjusting repeat depths. Each mix builds independent profiles
+//! shuffle salts or finding child repeat levels. A repeat caches its level, so a level
+//! search stops at nested repeats. Each mix builds independent profiles
 //! in `O(k)` time for `k` parts.
 //!
 //! For random access, [`Order::get`] follows the path from the root to a source:
