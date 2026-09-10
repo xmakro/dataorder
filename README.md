@@ -210,6 +210,9 @@ resume existing checkpoints with their original crate version.
   returns `None` for invalid positions. `iter`, `seek` and `set_range` return
   `Result` for range operations. `step_by(0)` is an error when the order is built.
   Failed cursor operations leave their state unchanged.
+- **Lengths must fit `usize`.** Every intermediate sequence must fit, even when a
+  later `take`, `cycle`, or `step_by` would shorten it. Overflow is reported at the
+  offending node.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
   Construction and moves to empty ranges can allocate. `last()` uses a direct lookup

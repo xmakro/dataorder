@@ -130,16 +130,14 @@ impl fmt::Display for SamplingDetail {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    /// A `Skip` of `n` positions from a sequence of `len < n`. The length is that of an
-    /// intermediate node, which may exceed `usize` on a 32-bit target.
+    /// A `Skip` of `n` positions from a sequence of `len < n`.
     SkipOutOfRange {
         /// Positions to skip.
         n: usize,
         /// Length of the sequence.
         len: u64,
     },
-    /// A `Take` of `n` positions from a sequence of `len < n`. The length is that of an
-    /// intermediate node, which may exceed `usize` on a 32-bit target.
+    /// A `Take` of `n` positions from a sequence of `len < n`.
     TakeOutOfRange {
         /// Positions to take.
         n: usize,
@@ -148,13 +146,7 @@ pub enum ErrorKind {
     },
     /// A `StepBy` with `step == 0`.
     ZeroStep,
-    /// The final order is longer than `usize::MAX`. Only intermediate nodes may
-    /// exceed that limit.
-    OrderTooLong {
-        /// Length of the order.
-        len: u64,
-    },
-    /// A length does not fit in 64 bits.
+    /// A sequence length exceeds `usize::MAX`, including at an intermediate node.
     LengthOverflow,
     /// More than 2³² sources.
     TooManySources,
@@ -183,8 +175,7 @@ impl fmt::Display for ErrorKind {
             Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
             Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
             Self::ZeroStep => write!(f, "step is zero"),
-            Self::OrderTooLong { len } => write!(f, "order of {len} positions is longer than usize::MAX"),
-            Self::LengthOverflow => write!(f, "a length does not fit in 64 bits"),
+            Self::LengthOverflow => write!(f, "sequence length exceeds usize::MAX"),
             Self::TooManySources => write!(f, "more than 2^32 sources"),
             Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),

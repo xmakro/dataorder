@@ -1,6 +1,8 @@
 //! Pin large-domain outputs across shuffles, epochs and virtual-clock schedules.
 //! Fixture headers identify the ordering versions; these checks are independent of
 //! current get/iteration agreement.
+#![cfg(target_pointer_width = "64")]
+
 use dataorder::{Order, Sampling, Seq, Source};
 #[derive(Clone)]
 struct Src {
@@ -34,17 +36,12 @@ fn large_orders_keep_baseline_outputs() {
     let seeds = [42, 19, 7, 5];
     for fixture in include_str!("fixtures/large_orders.txt").lines().filter(|line| !line.starts_with('#')) {
         let fields: Vec<u64> = fixture.split('|').map(|s| s.parse().unwrap()).collect();
-        let (case, pos) = (fields[0] as usize, fields[1]);
+        let (case, pos) = (fields[0] as usize, fields[1] as usize);
         let expected = (fields[2] as usize, fields[3] as usize);
-        // An outer skip and step_by address u64 intermediate positions on 32-bit hosts too.
-        // They add no repeat context and change no shuffle or mix keys. Both the
-        // resulting order length and each original source index fit in 32 bits.
-        let step = 1usize << 30;
-        let order = Order::with_seed(cases[case].clone().skip((pos % step as u64) as usize).step_by(step), seeds[case]).unwrap();
-        let at = (pos / step as u64) as usize;
-        let item = order.get(at).unwrap();
+        let order = Order::with_seed(cases[case].clone(), seeds[case]).unwrap();
+        let item = order.get(pos).unwrap();
         assert_eq!((item.source.id, item.record_index), expected, "get: {fixture}");
-        let item = order.iter(at..).unwrap().next().unwrap();
+        let item = order.iter(pos..).unwrap().next().unwrap();
         assert_eq!((item.source.id, item.record_index), expected, "cursor: {fixture}");
     }
 }

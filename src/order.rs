@@ -104,8 +104,8 @@ impl<T> Clone for Item<'_, T> {
 /// returns [`Item`] values through [`get`](Order::get) and
 /// [`iter`](Order::iter). It stores the compiled structure, not the output elements.
 ///
-/// Lengths and positions are `usize` in the API and `u64` internally. On a 32-bit
-/// target, intermediate nodes may exceed `usize::MAX`, but the final order must fit.
+/// Lengths and positions are `usize` in the API and `u64` internally. Every sequence
+/// node must fit in `usize`, even when a parent would truncate it.
 /// `Debug` displays the length, seed and sources.
 #[derive(Clone)]
 pub struct Order<T> {
@@ -156,10 +156,7 @@ impl<T: Source> Order<T> {
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
         let mut c = Compiler { sources: Vec::new(), salts: Vec::new(), path: Vec::new() };
-        let (root, len, _) = c.compile(seq, 1)?;
-        if usize::try_from(len).is_err() {
-            return Err(Error::new(ErrorKind::OrderTooLong { len }, Vec::new()));
-        }
+        let (root, _, _) = c.compile(seq, 1)?;
         Ok(Self { root, ctx: seed, sources: c.sources })
     }
 }
@@ -382,11 +379,12 @@ impl<T: Source> Compiler<T> {
 
     /// `depth` counts configuration nodes from the root. Each visit returns its node,
     /// length and inside-out repeat level to the parent. Repetitions use those values directly.
+    /// Every node must fit in `usize` before its parent can fold or truncate it.
     fn compile(&mut self, seq: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         if depth > MAX_DEPTH {
             return Err(self.err(ErrorKind::TooDeep));
         }
-        match seq {
+        let compiled = match seq {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, depth),
             Seq::Mix(parts) => self.mix_parts(parts, depth),
@@ -396,7 +394,11 @@ impl<T: Source> Compiler<T> {
             Seq::Skip { n, inner } => self.skip(n, *inner, depth),
             Seq::Take { n, inner } => self.take(n, *inner, depth),
             Seq::StepBy { step, inner } => self.stepped(step, *inner, depth),
+        }?;
+        if usize::try_from(compiled.1).is_err() {
+            return Err(self.err(ErrorKind::LengthOverflow));
         }
+        Ok(compiled)
     }
 
     fn source(&mut self, source: T) -> Result<Compiled, Error> {

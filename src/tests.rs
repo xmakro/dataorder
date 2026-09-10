@@ -673,9 +673,9 @@ fn errors() {
     assert_eq!(Order::new(a.clone().skip(2).take(8)).unwrap().len(), 8);
     assert_eq!(Order::new(a.clone().skip(10)).unwrap().len(), 0);
     assert_eq!(Order::new(a.clone().step_by(0)).unwrap_err(), root(ErrorKind::ZeroStep));
-    // Beyond 64 bits on every target: a repeat of a repeat, and a concat of two halves of 2⁶⁴.
+    // Beyond usize::MAX on every target: a repeat of a repeat, and a concat of two halves.
     assert_eq!(Order::new(a.clone().repeat(usize::MAX).repeat(usize::MAX)).unwrap_err().kind(), &ErrorKind::LengthOverflow);
-    let half = || src(0, 1 << 31).repeat(1 << 31).repeat(2);
+    let half = || src(0, usize::MAX / 2 + 1);
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
     // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
@@ -684,13 +684,10 @@ fn errors() {
         at(ErrorKind::InvalidSampling { sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } }, &[0])
             .with_sampling_detail(Some(crate::SamplingDetail::InvalidBreakpoints))
     );
-    let steep = Seq::concat([
-        a.clone(),
-        Seq::mix_with([(a.clone(), Sampling::Uniform), (src(1, 1 << 30).repeat(1 << 16), Sampling::delayed(0.999))]),
-    ]);
+    let steep = Seq::concat([a.clone(), Seq::mix_with([(a.clone(), Sampling::Uniform), (src(1, 1 << 30), Sampling::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
-    assert!(matches!(err.kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong), "{err}");
-    assert_eq!(err.path(), if err.kind() == &ErrorKind::TooSteep { &[1, 1][..] } else { &[1][..] });
+    assert_eq!(err.kind(), &ErrorKind::TooSteep);
+    assert_eq!(err.path(), &[1, 1]);
     // The path leads to the node: part 1 of the mix, then the single child of the shuffle.
     let nested = Seq::mix([a.clone(), Seq::concat([a.clone(), a.take(11).shuffle(1)])]).repeat(2);
     let err = Order::new(nested).unwrap_err();
@@ -992,23 +989,39 @@ fn huge_lengths() {
     }
 }
 
-/// An order longer than the address space is rejected, with the length; an intermediate node
-/// may exceed it.
+/// Reject overflow at its node, before any parent can shorten or discard it.
 #[test]
-fn orders_longer_than_usize_are_rejected() {
-    let err = Order::new(Seq::concat([src(0, usize::MAX), src(1, 1)])).unwrap_err();
-    if cfg!(target_pointer_width = "64") {
-        assert_eq!(err, root(ErrorKind::LengthOverflow));
-    } else {
-        assert_eq!(err, root(ErrorKind::OrderTooLong { len: usize::MAX as u64 + 1 }));
-        let intermediate = Seq::concat([src(0, usize::MAX), src(1, 1)]).take(10);
-        assert_eq!(Order::new(intermediate).unwrap().len(), 10);
-        let intermediate = || Seq::concat([src(0, usize::MAX), src(1, 1)]);
-        let tail = Order::new(intermediate().skip(usize::MAX)).unwrap();
-        assert_eq!(ids(tail.iter(..).unwrap()), [(1, 0)]);
-        assert_eq!(Order::new(intermediate().skip(0).step_by(2)).unwrap().len(), (usize::MAX / 2) + 1);
-        let err = Order::new(Seq::concat([src(0, usize::MAX), src(1, 1)]).skip(usize::MAX).skip(3)).unwrap_err();
-        assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 3, len: 1 });
+fn sequence_lengths_must_fit_usize() {
+    let oversized = [Seq::concat([src(0, usize::MAX), src(1, 1)]), src(0, usize::MAX / 2 + 1).repeat(2)];
+    // On 64-bit targets the smaller numerical mix limit is reached first.
+    #[cfg(target_pointer_width = "32")]
+    let oversized = oversized.into_iter().chain([Seq::mix([src(0, usize::MAX / 2 + 1), src(1, usize::MAX / 2 + 1)])]);
+    for seq in oversized {
+        assert_eq!(Order::new(seq.clone()).unwrap_err(), root(ErrorKind::LengthOverflow));
+        for shortened in [
+            seq.clone().take(10),
+            seq.clone().take(0),
+            seq.clone().skip(usize::MAX),
+            seq.clone().step_by(2),
+            seq.clone().cycle(10),
+            seq.clone().cycle(0),
+            seq.repeat(0),
+        ] {
+            assert_eq!(Order::new(shortened.clone()).unwrap_err(), at(ErrorKind::LengthOverflow, &[0]));
+            let nested = Seq::concat([src(2, 1), shortened]);
+            assert_eq!(Order::new(nested).unwrap_err(), at(ErrorKind::LengthOverflow, &[1, 0]));
+        }
+    }
+    assert_eq!(root(ErrorKind::LengthOverflow).to_string(), "sequence length exceeds usize::MAX (at the root)");
+
+    // The inclusive length limit remains usable without materializing any elements.
+    for seq in
+        [src(0, usize::MAX), Seq::concat([src(0, usize::MAX - 1), src(1, 1)]), src(0, 1).repeat(usize::MAX), src(0, 3).cycle(usize::MAX)]
+    {
+        let order = Order::new(seq).unwrap();
+        assert_eq!(order.len(), usize::MAX);
+        let last = usize::MAX - 1;
+        assert_eq!(order.iter(last..).unwrap().next(), order.get(last));
     }
 }
 

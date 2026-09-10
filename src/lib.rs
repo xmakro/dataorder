@@ -134,8 +134,8 @@
 //! have valid parameters and satisfy their individual numerical limits; see
 //! [`Sampling`] and [`ErrorKind`] for the full rules.
 //!
-//! Lengths and positions use `usize` in the public API and `u64` internally. The final
-//! order must fit in `usize`; on a 32-bit target, intermediate nodes may be longer.
+//! Lengths and positions use `usize` in the public API and `u64` internally. Every
+//! sequence node must fit in `usize`, even if a parent truncates or discards it.
 //! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
 //! [`MAX_DEPTH`]. [`Seq`] documents stack use; its builders work with any source type.
 //!
@@ -295,18 +295,21 @@ pub(crate) fn float_bits(x: f64) -> u64 {
 /// ```
 pub const MAX_DEPTH: u32 = 16;
 
-/// Maximum mix length accepted by [`Order::new`]: 2⁴⁶ elements.
+/// Numerical limit on mix length: 2⁴⁶ elements.
 ///
 /// This limit leaves room for floating-point rounding between a part's consecutive
 /// keys and keeps counts exactly representable in `f64`. Scheduled parts must also
 /// satisfy `length × peak rate ≤ MAX_MIX_LEN`. Repeating or concatenating valid
-/// mixes can produce longer orders.
+/// mixes can produce longer orders. Every sequence length must also fit in `usize`.
 ///
 /// ```
 /// use dataorder::{ErrorKind, MAX_MIX_LEN, Order, Seq};
 /// assert_eq!(MAX_MIX_LEN, 1 << 46);
+/// # #[cfg(target_pointer_width = "64")]
+/// # {
 /// let long = Seq::mix([Seq::source(1 << 30).repeat(1 << 16), Seq::source(1)]);
 /// assert_eq!(Order::new(long).unwrap_err().kind(), &ErrorKind::MixTooLong);
+/// # }
 /// let repeated = Seq::mix([Seq::source(1 << 30), Seq::source(1)]).repeat(3);
 /// assert_eq!(Order::new(repeated).map(|order| order.len()), Ok(3 * (1 << 30) + 3));
 /// ```

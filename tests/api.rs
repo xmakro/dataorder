@@ -1,7 +1,7 @@
 //! The public surface, used as a downstream crate would: building configurations by hand,
 //! matching on non-exhaustive enums, errors with paths, cursors, sources.
 
-use dataorder::{Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source};
+use dataorder::{Cursor, Error, ErrorKind, MixPart, Order, Sampling, Seq, Source};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shard {
@@ -174,11 +174,14 @@ fn errors_name_kind_and_path() {
     let _: &dyn std::error::Error = &err;
     let kind = err.into_kind();
     assert_eq!(kind, ErrorKind::SkipOutOfRange { n: 5, len: 4 });
-    // The mix limit is public, and named in the message.
-    let long = Seq::mix([Seq::source(1usize << 30).repeat(1 << 17), Seq::source(1)]);
-    let err = Order::new(long).unwrap_err();
-    assert_eq!(err.kind(), &ErrorKind::MixTooLong);
-    assert!(err.to_string().contains(&MAX_MIX_LEN.to_string()));
+    // The numerical mix limit is reachable on 64-bit targets and named in the message.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let long = Seq::mix([Seq::source(1usize << 30).repeat(1 << 17), Seq::source(1)]);
+        let err = Order::new(long).unwrap_err();
+        assert_eq!(err.kind(), &ErrorKind::MixTooLong);
+        assert!(err.to_string().contains(&dataorder::MAX_MIX_LEN.to_string()));
+    }
 }
 
 #[test]

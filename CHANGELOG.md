@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** require every sequence node's length to fit in `usize`, including
+  intermediates later truncated or discarded. Oversized intermediates on 32-bit
+  targets are rejected at their node. Remove `ErrorKind::OrderTooLong`; length
+  overflow uses `ErrorKind::LengthOverflow` on all targets.
+
 - **Breaking:** remove `salt_path`. Choose the dataset identity and its byte
   representation in the caller, then pass those bytes to `salt`.
 
