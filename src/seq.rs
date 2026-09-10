@@ -114,29 +114,6 @@ pub enum Seq<T> {
     },
 }
 
-/// A part of a [`Mix`](Seq::Mix): a sequence and its schedule. `(seq, schedule)` and a bare
-/// `seq` (uniform) convert into it.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
-pub struct MixPart<T> {
-    /// The sequence.
-    pub seq: Seq<T>,
-    /// How its elements are spread over the mix.
-    pub schedule: Schedule,
-}
-
-impl<T> From<(Seq<T>, Schedule)> for MixPart<T> {
-    fn from((seq, schedule): (Seq<T>, Schedule)) -> Self {
-        Self { seq, schedule }
-    }
-}
-
-impl<T> From<Seq<T>> for MixPart<T> {
-    fn from(seq: Seq<T>) -> Self {
-        Self { seq, schedule: Schedule::Uniform }
-    }
-}
-
 impl<T> Seq<T> {
     /// The elements of `source`, in order.
     #[must_use]
@@ -359,6 +336,29 @@ impl<T> Seq<T> {
     /// The first error `f` returns.
     pub fn try_map<U, E, F: FnMut(T) -> Result<U, E>>(self, mut f: F) -> Result<Seq<U>, E> {
         map_sources(self, &mut f)
+    }
+}
+
+/// A part of a [`Mix`](Seq::Mix): a sequence and its schedule. `(seq, schedule)` and a bare
+/// `seq` (uniform) convert into it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
+pub struct MixPart<T> {
+    /// The sequence.
+    pub seq: Seq<T>,
+    /// How its elements are spread over the mix.
+    pub schedule: Schedule,
+}
+
+impl<T> From<(Seq<T>, Schedule)> for MixPart<T> {
+    fn from((seq, schedule): (Seq<T>, Schedule)) -> Self {
+        Self { seq, schedule }
+    }
+}
+
+impl<T> From<Seq<T>> for MixPart<T> {
+    fn from(seq: Seq<T>) -> Self {
+        Self { seq, schedule: Schedule::Uniform }
     }
 }
 

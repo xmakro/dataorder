@@ -90,13 +90,6 @@ fn ids<'a>(it: impl Iterator<Item = crate::Item<'a, Src>>) -> Vec<(u32, usize)> 
     it.map(|item| (item.source.id, item.record_index)).collect()
 }
 
-impl Error {
-    /// A schedule or length rejection of a mix.
-    fn is_schedule(&self) -> bool {
-        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::ScheduleTooSteep { .. })
-    }
-}
-
 /// An error at the root, for comparisons.
 fn root(kind: ErrorKind) -> Error {
     Error::new(kind, Vec::new())

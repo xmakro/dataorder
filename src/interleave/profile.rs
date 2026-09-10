@@ -15,24 +15,6 @@ pub(crate) struct Profile {
     segs: Vec<Segment>,
 }
 
-/// A linear rate from `r0` to `r1` over `[start, end]`.
-/// `share` is the integral up to `start`. Within the segment, at offset `x`, the
-/// additional share is `r0*x + c*x²`, where `c = (r1-r0) / (2*(end-start))`.
-/// Cached coefficients and reciprocals reduce work when inverting that expression.
-#[derive(Clone, Copy, Debug)]
-struct Segment {
-    start: f64,
-    end: f64,
-    r0: f64,
-    r1: f64,
-    share: f64,
-    c: f64,
-    inv_r0: f64,
-    /// Zero-start ramps have a monotone inverse without any root subtraction.
-    inv_2c: f64,
-    c4: f64,
-}
-
 impl Profile {
     /// Builds consecutive `(start, end, r0, r1)` segments covering `[0, 1]`.
     /// Empty segments are dropped. Shares use the trapezoid rule, which integrates
@@ -128,6 +110,24 @@ impl Profile {
         };
         (s.start + x).clamp(s.start, s.end)
     }
+}
+
+/// A linear rate from `r0` to `r1` over `[start, end]`.
+/// `share` is the integral up to `start`. Within the segment, at offset `x`, the
+/// additional share is `r0*x + c*x²`, where `c = (r1-r0) / (2*(end-start))`.
+/// Cached coefficients and reciprocals reduce work when inverting that expression.
+#[derive(Clone, Copy, Debug)]
+struct Segment {
+    start: f64,
+    end: f64,
+    r0: f64,
+    r1: f64,
+    share: f64,
+    c: f64,
+    inv_r0: f64,
+    /// Zero-start ramps have a monotone inverse without any root subtraction.
+    inv_2c: f64,
+    c4: f64,
 }
 
 #[cfg(test)]

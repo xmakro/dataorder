@@ -46,33 +46,6 @@ pub(crate) struct TournamentTree<V> {
     scratch: Vec<Entry>,
 }
 
-/// A leaf's key (in [`sortable`] form) and index, as stored in the nodes.
-#[derive(Clone, Copy, Debug)]
-struct Entry {
-    key: u64,
-    leaf: u32,
-}
-
-impl Entry {
-    #[inline]
-    fn new(key: f64, leaf: u32) -> Self {
-        Self { key: sortable(key), leaf }
-    }
-
-    #[inline]
-    fn key(self) -> f64 {
-        float(self.key)
-    }
-
-    /// Does this leaf win against `o`? Smaller key, then lower leaf index. Written with
-    /// bitwise operators: a short-circuiting `||` would compile to a branch on the key
-    /// comparison, which is unpredictable in a merge.
-    #[inline(always)]
-    fn beats(self, o: Self) -> bool {
-        (self.key < o.key) | ((self.key == o.key) & (self.leaf < o.leaf))
-    }
-}
-
 impl<V> TournamentTree<V> {
     /// A tree without leaves, allocating nothing; [`rebuild`](TournamentTree::rebuild) fills it.
     pub(crate) fn empty() -> Self {
@@ -208,6 +181,33 @@ impl<V> TournamentTree<V> {
             m /= 2;
         }
         self.nodes[0] = cand;
+    }
+}
+
+/// A leaf's key (in [`sortable`] form) and index, as stored in the nodes.
+#[derive(Clone, Copy, Debug)]
+struct Entry {
+    key: u64,
+    leaf: u32,
+}
+
+impl Entry {
+    #[inline]
+    fn new(key: f64, leaf: u32) -> Self {
+        Self { key: sortable(key), leaf }
+    }
+
+    #[inline]
+    fn key(self) -> f64 {
+        float(self.key)
+    }
+
+    /// Does this leaf win against `o`? Smaller key, then lower leaf index. Written with
+    /// bitwise operators: a short-circuiting `||` would compile to a branch on the key
+    /// comparison, which is unpredictable in a merge.
+    #[inline(always)]
+    fn beats(self, o: Self) -> bool {
+        (self.key < o.key) | ((self.key == o.key) & (self.leaf < o.leaf))
     }
 }
 

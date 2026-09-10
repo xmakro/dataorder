@@ -1,7 +1,7 @@
 //! Configuration errors with sequence-tree locations, and order/cursor bounds errors.
 
 use crate::Schedule;
-use crate::interleave::{MAX_TOTAL_LEN, ScheduleError};
+use crate::interleave::MAX_TOTAL_LEN;
 use std::fmt;
 
 /// A configuration error from [`Order::new`](crate::Order::new).
@@ -48,6 +48,12 @@ impl Error {
     #[must_use]
     pub fn into_kind(self) -> ErrorKind {
         self.kind
+    }
+
+    /// A schedule or length rejection of a mix.
+    #[cfg(test)]
+    pub(crate) fn is_schedule(&self) -> bool {
+        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::ScheduleTooSteep { .. })
     }
 }
 
@@ -171,18 +177,6 @@ impl fmt::Display for ErrorKind {
                 write!(f, "mix part too long for the steepness of its schedule: length {len} × peak rate {peak_rate} exceeds {limit}")
             }
             Self::EmptyCycle => write!(f, "cannot cycle a sequence without elements"),
-        }
-    }
-}
-
-impl ScheduleError {
-    /// The kind and, for a problem with one part, the part's index.
-    pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
-        match self {
-            Self::LengthOverflow => (ErrorKind::LengthOverflow, None),
-            Self::TooLong => (ErrorKind::MixTooLong, None),
-            Self::InvalidParameter { seq, schedule, reason } => (ErrorKind::InvalidSchedule { schedule, reason }, Some(seq)),
-            Self::TooSteep { seq, len, peak_rate } => (ErrorKind::ScheduleTooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),
         }
     }
 }

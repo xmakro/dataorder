@@ -111,27 +111,6 @@ impl<'a, T> Cursor<'a, T> {
     }
 }
 
-/// Normalize and validate against the order length.
-pub(crate) fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usize>, BoundsError> {
-    let start = match range.start_bound() {
-        Bound::Included(&s) => s,
-        Bound::Excluded(&s) => s.checked_add(1).ok_or(BoundsError::StartOverflow)?,
-        Bound::Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Bound::Included(&e) => e.checked_add(1).ok_or(BoundsError::EndOverflow)?,
-        Bound::Excluded(&e) => e,
-        Bound::Unbounded => len,
-    };
-    if start > end {
-        return Err(BoundsError::Reversed { start, end });
-    }
-    if end > len {
-        return Err(BoundsError::OutOfBounds { end, len });
-    }
-    Ok(start..end)
-}
-
 impl<T> fmt::Debug for Cursor<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Cursor").field("position", &self.offset()).field("end", &self.end).finish()
@@ -192,6 +171,27 @@ impl<T> ExactSizeIterator for Cursor<'_, T> {
 }
 
 impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
+
+/// Normalize and validate against the order length.
+pub(crate) fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usize>, BoundsError> {
+    let start = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).ok_or(BoundsError::StartOverflow)?,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&e) => e.checked_add(1).ok_or(BoundsError::EndOverflow)?,
+        Bound::Excluded(&e) => e,
+        Bound::Unbounded => len,
+    };
+    if start > end {
+        return Err(BoundsError::Reversed { start, end });
+    }
+    if end > len {
+        return Err(BoundsError::OutOfBounds { end, len });
+    }
+    Ok(start..end)
+}
 
 /// Marks a child whose position is unknown after a mix seek or before its first draw.
 const UNSEEKED: usize = usize::MAX;

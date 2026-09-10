@@ -7,13 +7,13 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-struct Counting;
-
 thread_local! {
     /// Allocations by this thread, so that the tests can run in parallel.
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
     static BYTES: Cell<usize> = const { Cell::new(0) };
 }
+
+struct Counting;
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

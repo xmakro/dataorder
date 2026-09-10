@@ -1,7 +1,7 @@
 //! Public schedules and internal schedule validation errors.
 
 use super::MAX_TOTAL_LEN;
-use crate::float_bits;
+use crate::{ErrorKind, float_bits};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
@@ -194,6 +194,18 @@ pub(crate) enum ScheduleError {
     InvalidParameter { seq: usize, schedule: Schedule, reason: crate::ScheduleReason },
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize, len: usize, peak_rate: f64 },
+}
+
+impl ScheduleError {
+    /// The kind and, for a problem with one part, the part's index.
+    pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
+        match self {
+            Self::LengthOverflow => (ErrorKind::LengthOverflow, None),
+            Self::TooLong => (ErrorKind::MixTooLong, None),
+            Self::InvalidParameter { seq, schedule, reason } => (ErrorKind::InvalidSchedule { schedule, reason }, Some(seq)),
+            Self::TooSteep { seq, len, peak_rate } => (ErrorKind::ScheduleTooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),
+        }
+    }
 }
 
 impl fmt::Display for ScheduleError {
