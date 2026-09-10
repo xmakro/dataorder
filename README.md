@@ -232,7 +232,7 @@ whose nodes were removed during compilation. They are local to the order, not pe
 
 Schedule diagnostics are part of `ErrorKind`: `InvalidSchedule { schedule, reason }`
 includes a `ScheduleReason` for non-finite parameters, invalid breakpoints or
-coefficient overflow. `TooSteep { len, peak_rate, limit }` carries the values behind
+coefficient overflow. `ScheduleTooSteep { len, peak_rate, limit }` carries the values behind
 excessive steepness. Both `Error::kind()` and `Error::into_kind()` retain these details.
 
 `Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders

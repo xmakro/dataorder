@@ -143,7 +143,7 @@ pub enum ErrorKind {
     },
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
-    TooSteep {
+    ScheduleTooSteep {
         /// Compiled part length.
         len: usize,
         /// Highest normalized rate in the part's profile.
@@ -167,7 +167,7 @@ impl fmt::Display for ErrorKind {
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSchedule { schedule, reason } => write!(f, "invalid schedule {schedule:?}: {reason}"),
-            Self::TooSteep { len, peak_rate, limit } => {
+            Self::ScheduleTooSteep { len, peak_rate, limit } => {
                 write!(f, "mix part too long for the steepness of its schedule: length {len} × peak rate {peak_rate} exceeds {limit}")
             }
             Self::EmptyCycle => write!(f, "cannot cycle a sequence without elements"),
@@ -182,7 +182,7 @@ impl ScheduleError {
             Self::LengthOverflow => (ErrorKind::LengthOverflow, None),
             Self::TooLong => (ErrorKind::MixTooLong, None),
             Self::InvalidParameter { seq, schedule, reason } => (ErrorKind::InvalidSchedule { schedule, reason }, Some(seq)),
-            Self::TooSteep { seq, len, peak_rate } => (ErrorKind::TooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),
+            Self::TooSteep { seq, len, peak_rate } => (ErrorKind::ScheduleTooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),
         }
     }
 }

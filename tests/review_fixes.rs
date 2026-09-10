@@ -148,7 +148,7 @@ fn schedule_errors_describe_independent_profiles() {
     }
     let seq = Seq::mix([(Seq::source(1usize << 30), Schedule::until(1e-6))]);
     let err = Order::new(seq).unwrap_err();
-    let expected = ErrorKind::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN };
+    let expected = ErrorKind::ScheduleTooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN };
     assert_eq!(err.kind(), &expected);
     assert_eq!(err.path(), [0]);
     assert_eq!(
@@ -159,7 +159,7 @@ fn schedule_errors_describe_independent_profiles() {
     let mixed =
         Seq::mix([(Seq::source(10).cycle_to(3 << 28), Schedule::until(1e-6)), (Seq::source(10).cycle_to(1 << 28), Schedule::Uniform)]);
     let err = Order::new(mixed).unwrap_err();
-    let expected = ErrorKind::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN };
+    let expected = ErrorKind::ScheduleTooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN };
     assert_eq!(err.kind(), &expected);
     assert_eq!(err.path(), [0]);
     assert_eq!(err.into_kind(), expected);

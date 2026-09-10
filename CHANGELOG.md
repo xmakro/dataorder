@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** rename `ErrorKind::TooSteep` to `ErrorKind::ScheduleTooSteep`.
+  Update matches and constructors to use the new variant name. Its diagnostic
+  fields, error paths, display messages and ordering behavior are unchanged.
+
+- Correct the `Source` documentation to describe the returned `Item`, including
+  its source ordinal, source reference and record index.
+
 - **Breaking:** rename `Seq::cycle(len)` to `Seq::cycle_to(len)` to make its
   exact finite target length explicit. Replace `.cycle(len)` calls with
   `.cycle_to(len)`. The `Seq::Cycle` variant, serialized configurations and
@@ -36,7 +43,7 @@
 
 - **Breaking:** use `usize` for lengths, positions, offsets, strides and element
   counts throughout compilation and iteration. The `len` fields in
-  `ErrorKind::SkipOutOfRange`, `TakeOutOfRange` and `TooSteep` now use `usize`.
+  `ErrorKind::SkipOutOfRange`, `TakeOutOfRange` and `ScheduleTooSteep` now use `usize`.
   Length growth uses checked `usize` arithmetic. Seeds, salts, shuffle arithmetic
   and the numerical mix limit remain `u64`; supported orders are unchanged.
 
@@ -49,7 +56,7 @@
   and error messages that include these schedules now show `Trapezoid`.
 
 - **Breaking:** move schedule diagnostics into `ErrorKind`. `InvalidSchedule` now
-  contains `schedule` and `reason: ScheduleReason`; `TooSteep` contains `len`,
+  contains `schedule` and `reason: ScheduleReason`; `ScheduleTooSteep` contains `len`,
   `peak_rate` and `limit`. Remove `Error::sampling_detail` and `SamplingDetail`.
   Read the fields through `kind()` or `into_kind()`, which now preserves schedule
   diagnostics. Error paths, full error messages and ordering are unchanged.

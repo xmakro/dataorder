@@ -93,7 +93,7 @@ fn ids<'a>(it: impl Iterator<Item = crate::Item<'a, Src>>) -> Vec<(u32, usize)> 
 impl Error {
     /// A schedule or length rejection of a mix.
     fn is_schedule(&self) -> bool {
-        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::TooSteep { .. })
+        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::ScheduleTooSteep { .. })
     }
 }
 
@@ -679,7 +679,7 @@ fn errors() {
     );
     let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Schedule::Uniform), (src(1, 1 << 30), Schedule::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
-    assert_eq!(err.kind(), &ErrorKind::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: crate::MAX_MIX_LEN });
+    assert_eq!(err.kind(), &ErrorKind::ScheduleTooSteep { len: 1 << 30, peak_rate: 1e6, limit: crate::MAX_MIX_LEN });
     assert_eq!(err.path(), &[1, 1]);
     // The path leads to the node: part 1 of the mix, then the single child of the shuffle.
     let nested = Seq::mix([a.clone(), Seq::concat([a.clone(), a.take(11).shuffle(1)])]).repeat(2);
@@ -1086,7 +1086,7 @@ fn steep_schedule_at_scale() {
     }
     // Too steep is rejected, not looped over.
     let steep = Seq::mix([(src(0, 1 << 45), Schedule::Uniform), (src(1, 1 << 46), Schedule::delayed(0.5))]);
-    assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep { .. } | ErrorKind::MixTooLong));
+    assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::ScheduleTooSteep { .. } | ErrorKind::MixTooLong));
     assert_eq!(MAX_MIX_LEN, 1 << 46);
 }
 
