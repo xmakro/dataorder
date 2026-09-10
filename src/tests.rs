@@ -631,16 +631,15 @@ fn depth_limit() {
     assert_eq!(chain(MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
 }
 
-/// Rejecting a configuration never recurses through the rest of it: chains far deeper than
-/// the limit are refused on a small stack, whichever node the error is found at.
+/// Configurations just beyond the supported limit report the first invalid node.
 #[test]
-fn deep_configurations_are_rejected_on_a_small_stack() {
+fn configurations_over_the_depth_limit_are_rejected() {
     let run = || {
-        let deep = || (0..200_000).fold(src(0, 10), |s, _| s.take(10));
+        let deep = || (0..MAX_DEPTH).fold(src(0, 10), |s, _| s.take(10));
         assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
         let d = deep();
         assert_eq!(d.check().unwrap_err().kind(), &ErrorKind::TooDeep);
-        d.dismantle();
+        drop(d);
         let bad = || src(0, 10).take(99);
         let out_of_range = ErrorKind::TakeOutOfRange { n: 99, len: 10 };
         assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
@@ -651,7 +650,7 @@ fn deep_configurations_are_rejected_on_a_small_stack() {
         assert_eq!(Order::new(deep().stride(0, 0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
         let first_too_deep = Seq::concat([deep(), bad()]);
         assert_eq!(first_too_deep.check().unwrap_err().kind(), &ErrorKind::TooDeep);
-        first_too_deep.dismantle();
+        drop(first_too_deep);
     };
     std::thread::Builder::new().stack_size(2 << 20).spawn(run).unwrap().join().unwrap();
 }

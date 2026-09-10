@@ -8,7 +8,7 @@ use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
-use crate::seq::{MixPart, Rebuild, WeightedPart};
+use crate::seq::{MixPart, WeightedPart};
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
 use std::ops::RangeBounds;
@@ -132,8 +132,7 @@ impl<T: Source> Order<T> {
     /// # Errors
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
-        let (seq, sources) = separate_sources(seq);
-        let mut c = Compiler { sources, salts: Vec::new(), path: Vec::new() };
+        let mut c = Compiler { sources: Vec::new(), salts: Vec::new(), path: Vec::new() };
         let root = c.compile(seq, 0, 1)?;
         if usize::try_from(root.len()).is_err() {
             return Err(Error::new(ErrorKind::OrderTooLong { len: root.len() }, Vec::new()));
@@ -398,68 +397,6 @@ struct Compiler<T> {
     path: Vec<usize>,
 }
 
-/// Move source values out before recursive compilation: a `Seq<T>` contains T inline, so
-/// even a short tree of array sources otherwise puts megabytes in recursive frames.
-/// This traversal uses a heap stack and stops at the compiler's depth boundary. A dummy
-/// leaf there preserves the location of `TooDeep` without reading any source metadata.
-fn separate_sources<T>(seq: Seq<T>) -> (Seq<usize>, Vec<T>) {
-    enum Work<T> {
-        Enter(Seq<T>, u32),
-        Finish(Rebuild),
-    }
-    let mut work = vec![Work::Enter(seq, 1)];
-    let (mut done, mut sources) = (Vec::new(), Vec::new());
-    while let Some(item) = work.pop() {
-        match item {
-            Work::Finish(frame) => {
-                let node = frame.finish(&mut done);
-                done.push(node);
-            }
-            Work::Enter(seq, level) => {
-                if level > MAX_DEPTH {
-                    seq.dismantle();
-                    done.push(Seq::Source(0));
-                    continue;
-                }
-                let enter = |child| Work::Enter(child, level + 1);
-                let (frame, inner) = match seq {
-                    Seq::Source(source) => {
-                        done.push(Seq::Source(sources.len()));
-                        sources.push(source);
-                        continue;
-                    }
-                    Seq::Concat(parts) => {
-                        work.push(Work::Finish(Rebuild::Concat(parts.len())));
-                        work.extend(parts.into_iter().rev().map(enter));
-                        continue;
-                    }
-                    Seq::Mix(parts) => {
-                        let sampling = parts.iter().map(|p| p.sampling).collect();
-                        work.push(Work::Finish(Rebuild::Mix(sampling)));
-                        work.extend(parts.into_iter().rev().map(|p| enter(p.seq)));
-                        continue;
-                    }
-                    Seq::Weighted { total, parts } => {
-                        let parameters = parts.iter().map(|p| (p.weight, p.sampling)).collect();
-                        work.push(Work::Finish(Rebuild::Weighted(total, parameters)));
-                        work.extend(parts.into_iter().rev().map(|p| enter(p.seq)));
-                        continue;
-                    }
-                    Seq::Shuffle { seed, inner } => (Rebuild::Shuffle(seed), inner),
-                    Seq::Repeat { times, inner } => (Rebuild::Repeat(times), inner),
-                    Seq::Cycle { len, inner } => (Rebuild::Cycle(len), inner),
-                    Seq::Skip { n, inner } => (Rebuild::Skip(n), inner),
-                    Seq::Take { n, inner } => (Rebuild::Take(n), inner),
-                    Seq::Stride { step, offset, inner } => (Rebuild::Stride(step, offset), inner),
-                };
-                work.push(Work::Finish(frame));
-                work.push(enter(*inner));
-            }
-        }
-    }
-    (done.pop().unwrap(), sources)
-}
-
 impl<T: Source> Compiler<T> {
     /// An error at the node being compiled, or at its child `part`.
     fn err_at(&self, kind: ErrorKind, part: Option<usize>) -> Error {
@@ -474,39 +411,22 @@ impl<T: Source> Compiler<T> {
 
     /// Compiles child `i` of the node being compiled, `repeats` repeats deep, one nesting
     /// level below it.
-    fn child(&mut self, i: usize, seq: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn child(&mut self, i: usize, seq: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         self.path.push(i);
         let node = self.compile(seq, repeats, level + 1);
         self.path.pop();
         node
     }
 
-    /// Compiles the children of a wide node in order. On an error, the parts not yet
-    /// compiled are taken apart without recursion, so that a rejected configuration of any
-    /// depth is dropped on the heap rather than the stack.
-    fn children(&mut self, parts: impl IntoIterator<Item = Seq<usize>>, repeats: u32, level: u32) -> Result<Vec<Node>, Error> {
-        let mut parts = parts.into_iter();
-        let mut children = Vec::with_capacity(parts.size_hint().0);
-        while let Some(part) = parts.next() {
-            match self.child(children.len(), part, repeats, level) {
-                Ok(node) => children.push(node),
-                Err(e) => {
-                    parts.for_each(Seq::dismantle);
-                    return Err(e);
-                }
-            }
-        }
-        Ok(children)
+    /// Compiles the children of a wide node in order.
+    fn children(&mut self, parts: impl IntoIterator<Item = Seq<T>>, repeats: u32, level: u32) -> Result<Vec<Node>, Error> {
+        parts.into_iter().enumerate().map(|(i, seq)| self.child(i, seq, repeats, level)).collect()
     }
 
-    /// `repeats` is the number of repeats above `seq`, `level` its nesting level (the root
-    /// being 1). A `seq` that is rejected before it is consumed is dismantled without
-    /// recursion (see [`Seq::dismantle`]). One method per variant keeps this frame, one per
-    /// level of the recursion, small. Sources have already been replaced by indices, so
-    /// recursive frame sizes are independent of T.
-    fn compile(&mut self, seq: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    /// `repeats` is the number of repeats above `seq`; `level` counts all nodes
+    /// from the root. One method per variant keeps recursive frames small.
+    fn compile(&mut self, seq: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         if level > MAX_DEPTH {
-            seq.dismantle();
             return Err(self.err(ErrorKind::TooDeep));
         }
         match seq {
@@ -523,17 +443,17 @@ impl<T: Source> Compiler<T> {
         }
     }
 
-    fn source(&mut self, index: usize) -> Result<Node, Error> {
-        let source = &self.sources[index];
+    fn source(&mut self, source: T) -> Result<Node, Error> {
         let len = source.len() as u64;
-        let src = u32::try_from(index).map_err(|_| self.err(ErrorKind::TooManySources))?;
+        let src = u32::try_from(self.sources.len()).map_err(|_| self.err(ErrorKind::TooManySources))?;
         self.salts.push((source.salt(), len));
+        self.sources.push(source);
         Ok(if len == 0 { Node::Empty } else { Node::Source { src, offset: 0, len } })
     }
 
     /// Nested concatenations are flattened and empty parts dropped: both keep the order and
     /// the context of every element.
-    fn concat(&mut self, parts: Vec<Seq<usize>>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn concat(&mut self, parts: Vec<Seq<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
         let mut children = Vec::new();
         for node in self.children(parts, repeats, level)? {
             match node {
@@ -552,13 +472,13 @@ impl<T: Source> Compiler<T> {
         })
     }
 
-    fn mix_parts(&mut self, parts: Vec<MixPart<usize>>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn mix_parts(&mut self, parts: Vec<MixPart<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
         let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
         let children = self.children(parts.into_iter().map(|p| p.seq), repeats, level)?;
         self.mix(children, &sampling)
     }
 
-    fn shuffle(&mut self, seed: u64, inner: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn shuffle(&mut self, seed: u64, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         let child = self.child(0, inner, repeats, level)?;
         if child.len() <= 1 {
             return Ok(child);
@@ -571,7 +491,7 @@ impl<T: Source> Compiler<T> {
 
     /// A single repetition is the sequence itself, so it does not count as a repeat above
     /// its child either.
-    fn repeat(&mut self, times: usize, inner: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn repeat(&mut self, times: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         let child = self.child(0, inner, if times > 1 { repeats + 1 } else { repeats }, level)?;
         let child_len = child.len();
         let len = (times as u64).checked_mul(child_len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
@@ -584,7 +504,7 @@ impl<T: Source> Compiler<T> {
         })
     }
 
-    fn cycled(&mut self, len: usize, inner: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn cycled(&mut self, len: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         let child = self.child(0, inner, repeats, level)?;
         if len > 0 && child.len() == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
@@ -592,7 +512,7 @@ impl<T: Source> Compiler<T> {
         Ok(cycle(child, len as u64, repeats))
     }
 
-    fn skip(&mut self, n: usize, inner: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn skip(&mut self, n: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         let child = self.child(0, inner, repeats, level)?;
         let len = child.len();
         if n as u64 > len {
@@ -601,7 +521,7 @@ impl<T: Source> Compiler<T> {
         Ok(slice(child, n as u64, len - n as u64))
     }
 
-    fn take(&mut self, n: usize, inner: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn take(&mut self, n: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         let child = self.child(0, inner, repeats, level)?;
         let len = child.len();
         if n as u64 > len {
@@ -610,9 +530,8 @@ impl<T: Source> Compiler<T> {
         Ok(slice(child, 0, n as u64))
     }
 
-    fn strided(&mut self, step: usize, offset: usize, inner: Seq<usize>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn strided(&mut self, step: usize, offset: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         if step == 0 {
-            inner.dismantle();
             return Err(self.err(ErrorKind::ZeroStep));
         }
         let child = self.child(0, inner, repeats, level)?;
@@ -649,33 +568,21 @@ impl<T: Source> Compiler<T> {
     /// A weighted mix: every part repeated as often as its share needs and cut to it, then
     /// mixed. A part is compiled once; when it turns out to need repeating, the repeats
     /// inside it move one level deeper after the fact.
-    fn weighted(&mut self, total: usize, parts: Vec<WeightedPart<usize>>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn weighted(&mut self, total: usize, parts: Vec<WeightedPart<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
         let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
         let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
-        let shares = match weighted_shares(total as u64, &weights) {
-            Ok(shares) => shares,
-            Err((kind, part)) => {
-                parts.into_iter().for_each(|p| p.seq.dismantle());
-                return Err(self.err_at(kind, part));
-            }
-        };
-        let mut children = Vec::with_capacity(parts.len());
-        let mut parts = parts.into_iter().zip(shares);
-        while let Some((part, share)) = parts.next() {
-            let i = children.len();
-            match self.weighted_part(i, part.seq, share, repeats, level) {
-                Ok(node) => children.push(node),
-                Err(e) => {
-                    parts.for_each(|(p, _)| p.seq.dismantle());
-                    return Err(e);
-                }
-            }
-        }
+        let shares = weighted_shares(total as u64, &weights).map_err(|(kind, part)| self.err_at(kind, part))?;
+        let children = parts
+            .into_iter()
+            .zip(shares)
+            .enumerate()
+            .map(|(i, (part, share))| self.weighted_part(i, part.seq, share, repeats, level))
+            .collect::<Result<_, _>>()?;
         self.mix(children, &sampling)
     }
 
     /// Part `i` of a weighted mix, cycled to its `share`.
-    fn weighted_part(&mut self, i: usize, seq: Seq<usize>, share: u64, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn weighted_part(&mut self, i: usize, seq: Seq<T>, share: u64, repeats: u32, level: u32) -> Result<Node, Error> {
         let child = self.child(i, seq, repeats, level)?;
         if share > 0 && child.len() == 0 {
             return Err(self.err_at(ErrorKind::EmptyWeightedPart, Some(i)));

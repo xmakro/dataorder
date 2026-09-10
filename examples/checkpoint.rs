@@ -41,8 +41,8 @@ struct Configuration {
 impl Configuration {
     fn validate(mut self) -> Result<Self, String> {
         // Validate the worker's order: on 32-bit targets the unsharded sequence
-        // can exceed usize even though this worker's positions fit. Consuming
-        // validation also dismantles rejected trees before any recursive clone.
+        // can exceed usize even though this worker's positions fit. Validate
+        // the configuration before cloning it.
         let sharded = self.sequence.try_shard(self.workers, self.worker).map_err(|e| e.to_string())?;
         let Seq::Stride { inner, .. } = sharded.validate().map_err(|e| e.to_string())? else {
             unreachable!("try_shard preserves its configuration wrapper");
@@ -253,12 +253,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unrestorable_configurations_before_processing() {
+    fn rejects_overdeep_configurations_before_processing() {
         let mut config = configuration();
-        config.sequence = (0..70).fold(config.sequence, |seq, _| seq.take(40));
-        assert!(config.order().is_ok()); // Valid for dataorder, too deep for this JSON envelope.
+        config.sequence = (0..dataorder::MAX_DEPTH).fold(config.sequence, |seq, _| seq.take(40));
         let error = Worker::new(config).err().unwrap();
-        assert!(error.contains("cannot round-trip") && error.contains("recursion limit"), "{error}");
+        assert!(error.contains(&dataorder::ErrorKind::TooDeep.to_string()), "{error}");
     }
 
     #[test]

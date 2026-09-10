@@ -283,8 +283,8 @@ fn lifecycle_at(name: &str, seq: Seq<usize>, warmup: usize, workers: usize, seek
 
 fn lifecycles() {
     lifecycle(
-        "mix(256 sources, 64 identity transforms each)",
-        Seq::mix((0..256).map(|_| (0..64).fold(Seq::source(10), |seq, _| seq.take(10)))),
+        &format!("mix(256 sources, {} identity transforms each)", dataorder::MAX_DEPTH - 2),
+        Seq::mix((0..256).map(|_| (0..dataorder::MAX_DEPTH - 2).fold(Seq::source(10), |seq, _| seq.take(10)))),
         512,
     );
     lifecycle(

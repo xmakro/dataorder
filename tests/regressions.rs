@@ -37,8 +37,8 @@ fn large_inline_sources_fit_a_thread_stack() {
 }
 
 #[test]
-fn public_validation_and_disposal_reject_deep_trees_safely() {
-    isolated("dispose");
+fn public_validation_rejects_configurations_over_the_depth_limit() {
+    isolated("depth");
 }
 
 #[test]
@@ -48,9 +48,9 @@ fn isolated_case() {
         "map" => std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(|| {
-                let deep = || (0..200_000).fold(Seq::source("later"), |s, _| s.take(1));
+                let deep = || (0..MAX_DEPTH - 2).fold(Seq::source("later"), |s, _| s.take(1));
                 // Success, an untouched deep sibling, and an already mapped deep sibling.
-                deep().map(|_| 1usize).dispose();
+                drop(deep().map(|_| 1usize));
                 for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
                     let mut calls = Vec::new();
                     let result = seq.try_map(|name| {
@@ -67,13 +67,13 @@ fn isolated_case() {
             .unwrap()
             .join()
             .unwrap(),
-        "dispose" => std::thread::Builder::new()
+        "depth" => std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(|| {
-                let deep = || (0..200_000).fold(Seq::source(1usize), |s, _| s.take(1));
+                let deep = || (0..MAX_DEPTH).fold(Seq::source(1usize), |s, _| s.take(1));
                 let seq = deep();
                 assert_eq!(seq.check().unwrap_err().kind(), &ErrorKind::TooDeep);
-                seq.dispose();
+                drop(seq);
                 assert_eq!(deep().validate().unwrap_err().kind(), &ErrorKind::TooDeep);
                 assert!(deep().try_shard(0, 0).is_err());
                 assert!(deep().try_slice(..=usize::MAX).is_err());
@@ -332,6 +332,6 @@ fn zero_weight_parts_never_receive_an_element() {
 }
 
 #[test]
-fn mapping_and_error_cleanup_use_a_heap_stack() {
+fn mapping_stops_on_callback_errors_and_panics() {
     isolated("map");
 }

@@ -34,14 +34,10 @@ use std::ops::RangeBounds;
 /// # Depth
 ///
 /// [`Order::new`], [`check`](Seq::check) and [`validate`](Seq::validate) stop at
-/// [`MAX_DEPTH`]. The consuming operations, `Order::new` and `validate`, dispose of
-/// rejected trees without recursing through the remaining nodes. After a borrowed
-/// `check` rejects a tree, use [`dispose`](Seq::dispose) to destroy it safely.
-///
-/// Other tree operations, including cloning, serialization and ordinary
-/// dropping, recurse once per level. Their stack use depends on depth and the size
-/// of `T`. Large inline sources, such as arrays, can exhaust the stack even below
-/// `MAX_DEPTH`; use handles or boxed sources for those trees.
+/// [`MAX_DEPTH`] (16 levels). Keep configurations within this supported limit.
+/// Tree operations and ordinary Rust destruction recurse with tree depth;
+/// arbitrarily deep hand-built trees are unsupported. Stack use also depends on
+/// the size of `T`; prefer small dataset handles over large inline sources.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
@@ -398,13 +394,7 @@ impl<T> Seq<T> {
     /// # Errors
     /// [`BoundsError::Reversed`], [`BoundsError::StartOverflow`] or [`BoundsError::EndOverflow`].
     pub fn try_slice(self, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
-        let (start, end) = match boundaries(range) {
-            Ok(bounds) => bounds,
-            Err(error) => {
-                self.dispose();
-                return Err(error);
-            }
-        };
+        let (start, end) = boundaries(range)?;
         let skipped = if start == 0 { self } else { self.skip(start) };
         Ok(match end {
             Some(end) => skipped.take(end - start),
@@ -496,7 +486,6 @@ impl<T> Seq<T> {
     }
 
     /// Builds a worker's shard, reporting invalid worker parameters without panicking.
-    /// The rejected configuration is disposed of without recursive tree destruction.
     ///
     /// ```
     /// use dataorder::{BoundsError, Seq};
@@ -509,7 +498,6 @@ impl<T> Seq<T> {
     /// [`BoundsError::InvalidShard`] when `index >= count`, including `count == 0`.
     pub fn try_shard(self, count: usize, index: usize) -> Result<Self, BoundsError> {
         if index >= count {
-            self.dispose();
             return Err(BoundsError::InvalidShard { count, index });
         }
         Ok(self.stride(count, index))
@@ -539,8 +527,8 @@ impl<T> Seq<T> {
     }
 
     /// Transforms sources like [`map`](Seq::map), stopping at the first error.
-    /// Sources after the error are not visited. Traversal and cleanup use a heap
-    /// stack, including disposal of unvisited inputs and mapped outputs on error.
+    /// Sources after the error are not visited. Unvisited inputs and mapped outputs
+    /// are dropped normally on error.
     ///
     /// ```
     /// use dataorder::Seq;
@@ -556,51 +544,17 @@ impl<T> Seq<T> {
     /// # Errors
     /// The first error `f` returns.
     pub fn try_map<U, E, F: FnMut(T) -> Result<U, E>>(self, mut f: F) -> Result<Seq<U>, E> {
-        map_iterative(self, &mut f)
-    }
-
-    /// Disposes of this configuration using a heap stack instead of recursive drop.
-    /// Use this for trees whose depth is unknown or which [`check`](Seq::check)
-    /// rejected. Source values still run their own destructors normally.
-    ///
-    /// ```
-    /// use dataorder::Seq;
-    /// let seq = (0..10_000).fold(Seq::source(1), |s, _| s.take(1));
-    /// assert!(seq.check().is_err());
-    /// seq.dispose();
-    /// ```
-    pub fn dispose(self) {
-        let mut stack = vec![self];
-        while let Some(seq) = stack.pop() {
-            match seq {
-                Self::Source(_) => {}
-                Self::Concat(parts) => stack.extend(parts),
-                Self::Mix(parts) => stack.extend(parts.into_iter().map(|p| p.seq)),
-                Self::Weighted { parts, .. } => stack.extend(parts.into_iter().map(|p| p.seq)),
-                Self::Shuffle { inner, .. }
-                | Self::Repeat { inner, .. }
-                | Self::Cycle { inner, .. }
-                | Self::Skip { inner, .. }
-                | Self::Take { inner, .. }
-                | Self::Stride { inner, .. } => stack.push(*inner),
-            }
-        }
-    }
-
-    pub(crate) fn dismantle(self) {
-        self.dispose();
+        map_sources(self, &mut f)
     }
 }
 
 impl<T: Source> Seq<T> {
-    /// Validates and returns this configuration, disposing of it safely on error.
-    /// Prefer this to a borrowed [`check`](Self::check) when rejecting a tree of
-    /// unknown depth: an early `?` cannot leave an overdeep tree to recursive drop.
+    /// Validates and returns this configuration, dropping it on error.
     /// This compiles a temporary order; use [`Order::new`] to retain compilation.
     ///
     /// ```
     /// use dataorder::{Seq, ErrorKind};
-    /// let seq = (0..10_000).fold(Seq::source(1), |s, _| s.take(1));
+    /// let seq = (0..dataorder::MAX_DEPTH).fold(Seq::source(1), |s, _| s.take(1));
     /// assert_eq!(seq.validate().unwrap_err().kind(), &ErrorKind::TooDeep);
     /// let valid = Seq::source(10).validate()?;
     /// assert_eq!(valid.check(), Ok(10));
@@ -608,23 +562,16 @@ impl<T: Source> Seq<T> {
     /// ```
     ///
     /// # Errors
-    /// As for [`check`](Self::check); rejected trees are disposed of on the heap.
+    /// As for [`check`](Self::check).
     pub fn validate(self) -> Result<Self, Error> {
-        match self.check() {
-            Ok(_) => Ok(self),
-            Err(error) => {
-                self.dispose();
-                Err(error)
-            }
-        }
+        self.check()?;
+        Ok(self)
     }
 
     /// Validates the configuration and returns its length without consuming it.
     /// Performs the same checks as [`Order::new`], using the sources' lengths.
     /// This builds and discards a compiled order; calling it before `Order::new`
     /// repeats compilation. Use `Order::new` directly to retain the compiled order.
-    /// This borrows the tree: on rejection, use [`dispose`](Self::dispose) rather
-    /// than recursive drop. [`validate`](Self::validate) handles that cleanup for you.
     ///
     /// ```
     /// use dataorder::{ErrorKind, Seq};
@@ -673,109 +620,26 @@ impl<T: Source> Seq<T> {
     }
 }
 
-/// A source-independent frame: completed children stay on the output stack until
-/// this frame rebuilds their parent. No dummy source values or recursive calls.
-pub(crate) enum Rebuild {
-    Concat(usize),
-    Mix(Vec<Sampling>),
-    Weighted(usize, Vec<(f64, Sampling)>),
-    Shuffle(u64),
-    Repeat(usize),
-    Cycle(usize),
-    Skip(usize),
-    Take(usize),
-    Stride(usize, usize),
-}
-
-enum MapWork<T> {
-    Enter(Seq<T>),
-    Finish(Rebuild),
-}
-
-/// The guard also dismantles pending trees if a caller's mapping function panics.
-struct Mapping<T, U> {
-    work: Vec<MapWork<T>>,
-    done: Vec<Seq<U>>,
-}
-
-impl<T, U> Drop for Mapping<T, U> {
-    fn drop(&mut self) {
-        for work in self.work.drain(..) {
-            if let MapWork::Enter(seq) = work {
-                seq.dispose();
-            }
-        }
-        for seq in self.done.drain(..) {
-            seq.dispose();
-        }
-    }
-}
-
-impl Rebuild {
-    /// Assemble already visited children; unary frames need no temporary child vector.
-    pub(crate) fn finish<T>(self, done: &mut Vec<Seq<T>>) -> Seq<T> {
-        match self {
-            Self::Concat(n) => Seq::Concat(done.split_off(done.len() - n)),
-            Self::Mix(parameters) => {
-                let children = done.drain(done.len() - parameters.len()..);
-                Seq::mix_with(children.zip(parameters))
-            }
-            Self::Weighted(total, parameters) => {
-                let children = done.drain(done.len() - parameters.len()..);
-                Seq::weighted_with(total, children.zip(parameters).map(|(seq, (weight, sampling))| (seq, weight, sampling)))
-            }
-            Self::Shuffle(seed) => done.pop().unwrap().shuffle(seed),
-            Self::Repeat(times) => done.pop().unwrap().repeat(times),
-            Self::Cycle(len) => done.pop().unwrap().cycle(len),
-            Self::Skip(n) => done.pop().unwrap().skip(n),
-            Self::Take(n) => done.pop().unwrap().take(n),
-            Self::Stride(step, offset) => done.pop().unwrap().stride(step, offset),
-        }
-    }
-}
-
-fn map_iterative<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> Result<Seq<U>, E> {
-    let mut state = Mapping { work: vec![MapWork::Enter(seq)], done: Vec::new() };
-    while let Some(work) = state.work.pop() {
-        match work {
-            MapWork::Enter(seq) => {
-                let (frame, inner) = match seq {
-                    Seq::Source(source) => {
-                        state.done.push(Seq::Source(f(source)?));
-                        continue;
-                    }
-                    Seq::Concat(parts) => {
-                        state.work.push(MapWork::Finish(Rebuild::Concat(parts.len())));
-                        state.work.extend(parts.into_iter().rev().map(MapWork::Enter));
-                        continue;
-                    }
-                    Seq::Mix(parts) => {
-                        let sampling = parts.iter().map(|p| p.sampling).collect();
-                        state.work.push(MapWork::Finish(Rebuild::Mix(sampling)));
-                        state.work.extend(parts.into_iter().rev().map(|p| MapWork::Enter(p.seq)));
-                        continue;
-                    }
-                    Seq::Weighted { total, parts } => {
-                        let parameters = parts.iter().map(|p| (p.weight, p.sampling)).collect();
-                        state.work.push(MapWork::Finish(Rebuild::Weighted(total, parameters)));
-                        state.work.extend(parts.into_iter().rev().map(|p| MapWork::Enter(p.seq)));
-                        continue;
-                    }
-                    Seq::Shuffle { seed, inner } => (Rebuild::Shuffle(seed), inner),
-                    Seq::Repeat { times, inner } => (Rebuild::Repeat(times), inner),
-                    Seq::Cycle { len, inner } => (Rebuild::Cycle(len), inner),
-                    Seq::Skip { n, inner } => (Rebuild::Skip(n), inner),
-                    Seq::Take { n, inner } => (Rebuild::Take(n), inner),
-                    Seq::Stride { step, offset, inner } => (Rebuild::Stride(step, offset), inner),
-                };
-                state.work.push(MapWork::Finish(frame));
-                state.work.push(MapWork::Enter(*inner));
-            }
-            MapWork::Finish(frame) => {
-                let seq = frame.finish(&mut state.done);
-                state.done.push(seq);
-            }
-        }
-    }
-    Ok(state.done.pop().unwrap())
+/// Map the supported, bounded-depth configuration using ordinary recursive ownership.
+fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> Result<Seq<U>, E> {
+    Ok(match seq {
+        Seq::Source(source) => Seq::source(f(source)?),
+        Seq::Concat(parts) => Seq::concat(parts.into_iter().map(|p| map_sources(p, f)).collect::<Result<Vec<_>, _>>()?),
+        Seq::Mix(parts) => Seq::Mix(
+            parts.into_iter().map(|p| Ok(MixPart { seq: map_sources(p.seq, f)?, sampling: p.sampling })).collect::<Result<_, E>>()?,
+        ),
+        Seq::Weighted { total, parts } => Seq::Weighted {
+            total,
+            parts: parts
+                .into_iter()
+                .map(|p| Ok(WeightedPart { seq: map_sources(p.seq, f)?, weight: p.weight, sampling: p.sampling }))
+                .collect::<Result<_, E>>()?,
+        },
+        Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
+        Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),
+        Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle(len),
+        Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
+        Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
+        Seq::Stride { step, offset, inner } => map_sources(*inner, f)?.stride(step, offset),
+    })
 }

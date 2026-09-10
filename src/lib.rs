@@ -120,10 +120,10 @@
 //!
 //! [`Order::new`] returns an [`Error`] with a kind and a path to the invalid node.
 //! [`Seq::check`] performs the same validation without consuming the configuration.
-//! [`Seq::validate`] consumes it, returning it on success and safely disposing of
-//! rejected trees. [`Seq::dispose`] also permits safe disposal after a borrowed check.
-//! This includes parts that would contribute no elements, such as the child of
-//! `repeat(0)`.
+//! [`Seq::validate`] consumes it, returning it on success. Validation includes parts
+//! that would contribute no elements, such as the child of `repeat(0)`.
+//! Configurations support up to [`MAX_DEPTH`] levels and use ordinary recursive
+//! traversal and destruction. Arbitrarily deep hand-built trees are unsupported.
 //!
 //! Skips and takes must stay within the child sequence. Strides must have a nonzero
 //! step, and an empty sequence cannot be cycled to a positive length. Weights must be
@@ -227,11 +227,10 @@
 //!   as `null`, which does not deserialize back into an `f64`.
 //! - Lengths and counts are `usize`; a configuration written on a 64-bit machine may
 //!   not fit on a 32-bit machine.
-//! - `serde_json`'s default recursion limit is 128 JSON objects or arrays. Chains over
-//!   a source exceed it at `Seq` depth 65 for `Take`, 44 for `Mix`, and 33 for `Weighted`,
-//!   before reaching [`MAX_DEPTH`]. Its `unbounded_depth` feature and
-//!   `Deserializer::disable_recursion_limit` lift that limit, but deserialization still
-//!   uses the stack. See [`Seq`]'s depth notes.
+//! - `serde_json`'s recursion limit also counts surrounding objects and arrays, so a
+//!   configuration embedded in a larger document can reach that parser limit.
+//!   Deserialization does not validate configuration depth; use [`Order::new`]
+//!   or [`Seq::check`] before using a loaded configuration.
 //!
 //! # Stability
 //!
@@ -282,8 +281,9 @@ pub(crate) fn float_bits(x: f64) -> u64 {
 ///
 /// A source alone has depth 1. Each enclosing transform adds a level, so a source
 /// with `MAX_DEPTH` transforms is too deep. The limit bounds recursive compilation;
-/// deeper configurations are rejected without recursing into the remaining tree.
-/// See [`Seq`] for stack use in other operations.
+/// deeper configurations are rejected during compilation. Tree destruction and
+/// other operations still recurse, so arbitrarily deep inputs are unsupported.
+/// See [`Seq`] for stack use.
 ///
 /// ```
 /// use dataorder::{ErrorKind, MAX_DEPTH, Seq};
@@ -291,7 +291,7 @@ pub(crate) fn float_bits(x: f64) -> u64 {
 /// assert_eq!(chain(MAX_DEPTH).check(), Ok(10));
 /// assert_eq!(chain(MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
 /// ```
-pub const MAX_DEPTH: u32 = 256;
+pub const MAX_DEPTH: u32 = 16;
 
 /// Maximum mix length accepted by [`Order::new`]: 2⁴⁶ elements.
 ///

@@ -44,18 +44,19 @@ fn element(order: &Order<usize>, pos: usize) -> (usize, usize) {
 
 #[test]
 fn unary_traversals_do_not_allocate_temporary_child_lists() {
-    let (parts, depth) = (128, 100);
+    let (parts, depth) = (128, dataorder::MAX_DEPTH as usize - 2);
     let make = || Seq::mix((0..parts).map(|_| (0..depth).fold(Seq::source(10), |seq, _| seq.take(10))));
     let seq = make();
     let count = allocations(|| {
         let order = Order::new(seq).unwrap();
         assert_eq!(order.len(), parts * 10);
     });
-    // One box for each transformed output node plus shared traversal/compile
-    // buffers. Temporary singleton Vecs would almost double this budget.
-    assert!(count < parts * depth + 1000, "compilation allocated {count} times");
+    // Identity transforms fold away; allow source/child vectors without a
+    // temporary singleton child list for each unary node.
+    assert!(count < 1000, "compilation allocated {count} times");
     let seq = make();
-    let count = allocations(|| seq.map(|n| n + 1).dispose());
+    let count = allocations(|| drop(seq.map(|n| n + 1)));
+    // Mapping rebuilds each transform's box and preserves the tree.
     assert!(count < parts * depth + 1000, "mapping allocated {count} times");
 }
 

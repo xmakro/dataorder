@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["unbounded_depth", "float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 # Benchmark subprocess containment only; the library gains no runtime dependency.
 [target.'cfg(windows)'.dev-dependencies]

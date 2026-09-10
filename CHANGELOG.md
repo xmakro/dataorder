@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** reduce `MAX_DEPTH` from 256 to 16 and remove `Seq::dispose`.
+  `Seq` remains an enum with the same builders and serialized format. Compilation,
+  mapping and cleanup now use ordinary recursion within the supported depth limit;
+  arbitrarily deep hand-built trees are unsupported.
+
 - **Breaking:** remove `Order::prepare` and the `Preparation`, `PreparedNode`,
   `PreparedKind`, `PreparedParameters`, `PreparedSource`, `PreparedMix` and
   `WeightedAllocation` report types. Use `Order::new` or `Order::with_seed` to

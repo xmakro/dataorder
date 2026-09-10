@@ -211,13 +211,12 @@ peak rate and limit behind excessive steepness.
 
 `Seq::check` performs compilation to validate a borrowed configuration;
 calling it before `Order::new` repeats that work.
-For configuration trees of unknown depth, use consuming `Seq::validate` to return
-the tree on success and dispose of it safely on error. After a borrowed check rejects
-a deep tree, call `Seq::dispose`; ordinary enum destruction is recursive.
+Use consuming `Seq::validate` to return the tree on success. Configurations support
+up to 16 levels (`MAX_DEPTH`); tree operations and ordinary Rust cleanup recurse
+with depth. Arbitrarily deep hand-built trees are unsupported.
 
 `Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
-`map` or `try_map`. Mapping uses a heap stack and safely cleans up unvisited and
-already-mapped branches after a callback error or panic. The optional `serde` feature adds configuration serialization. When
+`map` or `try_map`. The optional `serde` feature adds configuration serialization. When
 using JSON, also enable `serde_json/float_roundtrip` to preserve weights and schedules.
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
