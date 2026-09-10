@@ -41,7 +41,7 @@ fn large_orders_keep_baseline_outputs() {
         let order = Order::with_seed(cases[case].clone(), seeds[case]).unwrap();
         let item = order.get(pos).unwrap();
         assert_eq!((item.source.id, item.record_index), expected, "get: {fixture}");
-        let item = order.iter(pos..).unwrap().next().unwrap();
+        let item = order.cursor(pos..).unwrap().next().unwrap();
         assert_eq!((item.source.id, item.record_index), expected, "cursor: {fixture}");
     }
 }

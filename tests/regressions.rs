@@ -101,7 +101,7 @@ fn isolated_case() {
                 let order =
                     Order::new(Seq::mix([(Seq::source(300), Schedule::Uniform), (Seq::source(100), Schedule::trapezoid(0.0, d, d, 1.0))]))
                         .unwrap();
-                let all: Vec<_> = order.iter(..).unwrap().map(|item| (*item.source, item.record_index)).collect();
+                let all: Vec<_> = order.iter().map(|item| (*item.source, item.record_index)).collect();
                 for p in 0..order.len() {
                     assert_eq!(
                         all[p],
@@ -124,7 +124,7 @@ fn isolated_case() {
                 let order =
                     Order::new(Seq::mix([(Seq::source(1), Schedule::Uniform), (Seq::source(n), Schedule::ramp(0.0, 1e-296))])).unwrap();
                 let at = (n + 1) / 4;
-                let window: Vec<_> = order.iter(at - 8..at + 8).unwrap().map(|item| (*item.source, item.record_index)).collect();
+                let window: Vec<_> = order.cursor(at - 8..at + 8).unwrap().map(|item| (*item.source, item.record_index)).collect();
                 assert!(window.iter().any(|&(s, _)| s == 1));
                 for (j, expected) in window.into_iter().enumerate() {
                     let dataorder::Item { source: &s, record_index: i, .. } = order.get(at - 8 + j).unwrap();
@@ -136,7 +136,7 @@ fn isolated_case() {
                 let order =
                     Order::new(Seq::mix([(Seq::source(n), Schedule::Uniform), (Seq::source(1), Schedule::fading(0.0, 1.0))])).unwrap();
                 for start in [0, n / 4, n / 2 - 16, 3 * (n / 4), n - 16] {
-                    for (p, dataorder::Item { source: &s, record_index: i, .. }) in (start..).zip(order.iter(start..).unwrap().take(16)) {
+                    for (p, dataorder::Item { source: &s, record_index: i, .. }) in (start..).zip(order.cursor(start..).unwrap().take(16)) {
                         assert_eq!((s, i), {
                             let dataorder::Item { source: &s, record_index: i, .. } = order.get(p).unwrap();
                             (s, i)
@@ -178,12 +178,7 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
     for (a, b) in [(make(0), make(999)), (tail(0), tail(999))] {
         let a = Order::new(a.shuffle(1)).unwrap();
         let b = Order::new(b.shuffle(1)).unwrap();
-        assert!(
-            a.iter(..)
-                .unwrap()
-                .map(|item| (item.source.salt, item.record_index))
-                .eq(b.iter(..).unwrap().map(|item| (item.source.salt, item.record_index)))
-        );
+        assert!(a.iter().map(|item| (item.source.salt, item.record_index)).eq(b.iter().map(|item| (item.source.salt, item.record_index))));
         assert_eq!(a.sources().len(), 4);
     }
 }
@@ -204,7 +199,7 @@ fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
 fn empty_compaction_preserves_identity_and_error_paths() {
     let order = Order::new(Seq::mix([Seq::source(0), Seq::source(3), Seq::source(0), Seq::source(3)])).unwrap();
     assert_eq!(order.sources(), &[0, 3, 0, 3]);
-    assert_eq!(order.iter(..).unwrap().map(|item| item.source_ordinal).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
+    assert_eq!(order.iter().map(|item| item.source_ordinal).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
     let error = Order::new(Seq::mix([
         (Seq::source(0), Schedule::Uniform),
         (Seq::source(3), Schedule::Uniform),
@@ -231,10 +226,10 @@ fn json_preserves_float_bits_and_large_scheduled_orders() {
         assert_eq!(seq, back);
         let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
         assert!(
-            a.iter(n - 100..)
+            a.cursor(n - 100..)
                 .unwrap()
                 .map(|item| (item.source_ordinal, item.record_index))
-                .eq(b.iter(n - 100..).unwrap().map(|item| (item.source_ordinal, item.record_index)))
+                .eq(b.cursor(n - 100..).unwrap().map(|item| (item.source_ordinal, item.record_index)))
         );
     }
 }

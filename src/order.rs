@@ -4,7 +4,7 @@
 //! with lengths, concat offsets, interleave profiles and shuffle shapes. [`get`]
 //! follows that tree to resolve a position without keeping iteration state.
 
-use crate::cursor::Cursor;
+use crate::cursor::{Cursor, resolve_range};
 use crate::interleave::{Interleave, Schedule};
 use crate::perm::{self, Shape};
 use crate::seq::MixPart;
@@ -101,8 +101,8 @@ impl<T> Clone for Item<'_, T> {
 /// A validated sequence with random access and seekable iteration.
 ///
 /// Build one from a [`Seq`] with [`Order::new`]. It owns the source handles and
-/// returns [`Item`] values through [`get`](Order::get) and
-/// [`iter`](Order::iter). It stores the compiled structure, not the output elements.
+/// returns [`Item`] values through [`get`](Order::get), [`iter`](Order::iter), and
+/// [`cursor`](Order::cursor). It stores the compiled structure, not the output elements.
 ///
 /// Lengths and positions use `usize`. Every sequence node must fit in `usize`,
 /// even when a parent would truncate it.
@@ -147,7 +147,7 @@ impl<T: Source> Order<T> {
     /// use dataorder::{Order, Seq};
     /// let seq = Seq::source(100).shuffle(1);
     /// let (a, b) = (Order::with_seed(seq.clone(), 1)?, Order::with_seed(seq, 2)?);
-    /// assert!(a.iter(..)?.ne(b.iter(..)?));
+    /// assert!(a.iter().ne(b.iter()));
     /// assert_eq!(b.seed(), 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -190,7 +190,7 @@ impl<T> Order<T> {
     /// let mut order = Order::new(seq.clone())?;
     /// order.set_seed(7);
     /// let reseeded = Order::with_seed(seq, 7)?;
-    /// assert!(order.iter(..)?.eq(reseeded.iter(..)?));
+    /// assert!(order.iter().eq(reseeded.iter()));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_seed(&mut self, seed: u64) {
@@ -215,7 +215,7 @@ impl<T> Order<T> {
     /// Walks the path to a source. A concat searches its offsets in `O(log k)`; a mix
     /// seeks the interleave and allocates (see the crate's [cost model](crate#cost)), and
     /// a shuffle cycle-walks a permutation at constant average cost per position.
-    /// Use [`Order::iter`] for consecutive positions. For many scattered positions,
+    /// Use [`Order::iter`] or [`Order::cursor`] for consecutive positions. For many scattered positions,
     /// reuse a cursor with [`Cursor::seek`] to reuse its allocations.
     ///
     /// ```
@@ -237,9 +237,29 @@ impl<T> Order<T> {
         Some(Item { source_ordinal: s as usize, source: &self.sources[s as usize], record_index: i })
     }
 
+    /// Returns a cursor over the whole order, starting at position 0.
+    /// This is also the iterator used by `for item in &order`.
+    /// Use [`Order::cursor`] to select a range.
+    ///
+    /// Construction positions the cursor immediately and can allocate; see
+    /// [`Order::cursor`] for allocation and buffer reuse behavior.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(3))?;
+    /// assert_eq!(order.iter().map(|item| item.record_index).collect::<Vec<_>>(), [0, 1, 2]);
+    /// let mut cursor = order.iter();
+    /// cursor.seek(2)?;
+    /// assert_eq!(cursor.next(), order.get(2));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn iter(&self) -> Cursor<'_, T> {
+        Cursor::new(self, 0..self.len())
+    }
+
     /// Returns a cursor over the positions in `range`.
-    /// `iter(a..b)?` yields the element at each `p` in `a..b`; the end is exclusive.
-    /// `iter(..)?` visits the whole order, as does `for item in &order`.
+    /// `cursor(a..b)?` yields the element at each `p` in `a..b`; the end is exclusive.
+    /// `cursor(..)?` visits the whole order, as does [`Order::iter`].
     ///
     /// Construction positions the cursor immediately and can allocate, even for
     /// an empty range. Each entered mix reserves space for its parts, then initializes
@@ -250,16 +270,16 @@ impl<T> Order<T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).shuffle(3))?;
-    /// let all: Vec<usize> = order.iter(..)?.map(|item| item.record_index).collect();
-    /// assert_eq!(order.iter(4..7)?.map(|item| item.record_index).collect::<Vec<_>>(), all[4..7]);
-    /// assert_eq!(order.iter(8..)?.count(), 2);
+    /// let all: Vec<usize> = order.iter().map(|item| item.record_index).collect();
+    /// assert_eq!(order.cursor(4..7)?.map(|item| item.record_index).collect::<Vec<_>>(), all[4..7]);
+    /// assert_eq!(order.cursor(8..)?.count(), 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
-    pub fn iter(&self, range: impl RangeBounds<usize>) -> Result<Cursor<'_, T>, BoundsError> {
-        Cursor::new(self, range)
+    pub fn cursor(&self, range: impl RangeBounds<usize>) -> Result<Cursor<'_, T>, BoundsError> {
+        Ok(Cursor::new(self, resolve_range(range, self.len())?))
     }
 }
 
@@ -284,7 +304,7 @@ impl<'a, T> IntoIterator for &'a Order<T> {
 
     /// The whole order.
     fn into_iter(self) -> Cursor<'a, T> {
-        self.iter(..).expect("dataorder: full order range is valid")
+        self.iter()
     }
 }
 

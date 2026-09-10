@@ -31,14 +31,14 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
         })))
         .unwrap();
         let samples = fixture["samples"].as_array().unwrap();
-        let mut walking = order.iter(0..0).unwrap();
+        let mut walking = order.cursor(0..0).unwrap();
         let mut next_position = None;
         for sample in samples {
             let pos = sample[0].as_u64().unwrap() as usize;
             let expected = (sample[1].as_u64().unwrap() as usize, sample[2].as_u64().unwrap() as usize);
             let dataorder::Item { source, record_index: index, .. } = order.get(pos).unwrap();
             assert_eq!((source.ordinal, index), expected, "case {case}, position {pos}");
-            let dataorder::Item { source, record_index: index, .. } = order.iter(pos..).unwrap().next().unwrap();
+            let dataorder::Item { source, record_index: index, .. } = order.cursor(pos..).unwrap().next().unwrap();
             assert_eq!((source.ordinal, index), expected, "cursor: case {case}, position {pos}");
             // Every small fixture is a complete walk. Large fixtures contain short
             // independently generated windows: seek only across gaps, then exercise

@@ -34,7 +34,7 @@
 //!
 //! // Start anywhere, without replaying the earlier positions.
 //! let resume = 1_200_000_000;
-//! let mut cursor = order.iter(resume..resume + 10)?;
+//! let mut cursor = order.cursor(resume..resume + 10)?;
 //! let item = cursor.next().unwrap();
 //! assert_eq!(item.source_ordinal, 0);
 //! assert_eq!(*item.source, 1_000_000_000);
@@ -44,8 +44,9 @@
 //! ```
 //!
 //! Position 1,200,000,000 belongs to the *order*; the returned index belongs to the original
-//! source. [`Order::iter`] returns the same items as calling [`Order::get`] at each
-//! position in its range, regardless of previous iteration or seeks.
+//! source. [`Order::cursor`] returns the same items as calling [`Order::get`] at each
+//! position in its range, regardless of previous iteration or seeks. [`Order::iter`]
+//! visits the whole order and returns its cursor directly.
 //!
 //! Implement [`Source`] for your dataset handles, or use slices, arrays or vectors.
 //! `Order` owns its sources and yields references to them. A `Seq` can be cloned,
@@ -147,7 +148,7 @@
 //! A cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.
 //!
-//! [`Order::get`] returns `None` for an invalid position. [`Order::iter`],
+//! [`Order::get`] returns `None` for an invalid position. [`Order::cursor`],
 //! [`Cursor::seek`] and [`Cursor::set_range`] report [`BoundsError`] instead of
 //! panicking on invalid bounds. Failed cursor operations
 //! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;

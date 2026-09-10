@@ -48,17 +48,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resume deep into the second epoch without replaying the earlier positions.
     let resume = 1_200_000_000;
-    for item in order.iter(resume..resume + 10)? {
+    for item in order.cursor(resume..resume + 10)? {
         println!("record {} from a dataset of {} records", item.record_index, item.source);
     }
-    assert_eq!(order.iter(resume..)?.next(), order.get(resume));
+    assert_eq!(order.cursor(resume..)?.next(), order.get(resume));
     Ok(())
 }
 ```
 
 The position in an order differs from the index within a dataset: position
 1,200,000,000 above selects one of the original billion records. `get(pos)` returns
-`Option<Item>`; `iter(range)?` yields the same `Item` values in order. Each item
+`Option<Item>`; `iter()` visits the whole order, while `cursor(range)?` selects a range.
+Both return a seekable `Cursor` yielding the same `Item` values in order. Each item
 contains `source_ordinal`, `source` (a reference to the dataset handle), and `record_index`.
 
 ## Using your datasets
@@ -86,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let code = Seq::source(Dataset { name: "code", records: 200 }).shuffle(2);
     let order = Order::new(Seq::mix([web, code]))?;
 
-    for item in order.iter(..10)? {
+    for item in order.cursor(..10)? {
         // Use your own loader to read this record.
         println!("{}: record {}", item.source.name, item.record_index);
     }
@@ -156,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
-    let first_delayed = order.iter(..)?.position(|item| item.source_ordinal == 1).unwrap();
+    let first_delayed = order.iter().position(|item| item.source_ordinal == 1).unwrap();
     // Half of the 750 uniform items have appeared by virtual time 0.5.
     // The delayed source starts around output position 375, not 500.
     assert!((374..=377).contains(&first_delayed));
@@ -207,14 +208,14 @@ resume existing checkpoints with their original crate version.
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
-  returns `None` for invalid positions. `iter`, `seek` and `set_range` return
+  returns `None` for invalid positions. `cursor`, `seek` and `set_range` return
   `Result` for range operations. `step_by(0)` is an error when the order is built.
   Failed cursor operations leave their state unchanged.
 - **Lengths must fit `usize`.** Every intermediate sequence must fit, even when a
   later `take`, `cycle`, or `step_by` would shorten it. Overflow is reported at the
   offending node.
-- **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
-  ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
+- **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range.
+  For repeated seeks or ranges, reuse the `Cursor` with `seek` or `set_range` to reuse allocated buffers.
   Construction and moves to empty ranges can allocate. `last()` uses a direct lookup
   and can allocate independently of the cursor's buffers.
   Changing concat children creates fresh state. Clones copy current state without

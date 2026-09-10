@@ -105,7 +105,7 @@ fn golden_orders() {
         .iter()
         .map(|(name, seq, seed)| {
             let order = Order::with_seed(seq.clone(), *seed).unwrap_or_else(|e| panic!("{name}: {e}"));
-            fingerprint(order.iter(..).unwrap())
+            fingerprint(order.iter())
         })
         .collect();
     let names: Vec<&str> = cases.iter().map(|c| c.0).collect();
@@ -113,7 +113,7 @@ fn golden_orders() {
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle(7)).unwrap();
     const FIRST: [usize; 6] = [629, 114, 228, 812, 639, 604];
-    assert_eq!(order.iter(0..6).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
+    assert_eq!(order.cursor(0..6).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).unwrap().record_index == FIRST[k]));
 }
 
@@ -139,10 +139,9 @@ fn golden_name_salted_order() {
     const FIRST: [usize; 12] = [445, 928, 15, 77, 0, 293, 540, 797, 190, 407, 709, 652];
     const EXPECTED: u64 = 15_852_656_108_745_184_545;
     let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin" }).shuffle(7), 42).unwrap();
-    assert_eq!(order.iter(..12).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
+    assert_eq!(order.cursor(..12).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     let actual = order
-        .iter(..)
-        .unwrap()
+        .iter()
         .flat_map(|item| (item.record_index as u64).to_le_bytes())
         .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
     assert_eq!(actual, EXPECTED);

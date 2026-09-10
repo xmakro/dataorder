@@ -50,11 +50,11 @@ fn ordering(c: &mut Criterion) {
         // Fresh seek includes cursor construction, first item and destruction.
         group.bench_function("seek", |b| {
             let mut positions = positions.iter().cycle();
-            b.iter(|| order.iter(black_box(*positions.next().unwrap())..).unwrap().next().unwrap());
+            b.iter(|| order.cursor(black_box(*positions.next().unwrap())..).unwrap().next().unwrap());
         });
         group.bench_function("reused_seek", |b| {
             let mut positions = positions.iter().cycle();
-            let mut cursor = order.iter(..).unwrap();
+            let mut cursor = order.iter();
             b.iter(|| {
                 cursor.seek(black_box(*positions.next().unwrap())).unwrap();
                 cursor.next().unwrap()
@@ -66,7 +66,7 @@ fn ordering(c: &mut Criterion) {
         group.throughput(Throughput::Elements(WALK_LEN as u64));
         group.bench_function("walk", |b| {
             b.iter(|| {
-                for item in order.iter(black_box(start)..start + WALK_LEN).unwrap() {
+                for item in order.cursor(black_box(start)..start + WALK_LEN).unwrap() {
                     black_box(item);
                 }
             });
@@ -78,7 +78,7 @@ fn ordering(c: &mut Criterion) {
 fn cursor_state(c: &mut Criterion) {
     let part = |k| Seq::mix((0..k).map(|i| Seq::source(10).shuffle(i as u64)));
     let order = Order::new(Seq::concat([part(1000), part(2)]).repeat(2)).unwrap();
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     cursor.next();
     cursor.seek(10_000).unwrap();
     cursor.next();
@@ -107,7 +107,7 @@ fn cursor_state(c: &mut Criterion) {
     group.throughput(Throughput::Elements(order.len() as u64));
     group.bench_function("concat_walk", |b| {
         b.iter(|| {
-            for item in order.iter(..).unwrap() {
+            for item in order.iter() {
                 black_box(item);
             }
         });

@@ -103,7 +103,7 @@ fn position(raw: usize, end: usize) -> usize {
 }
 
 fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     let (mut pos, mut end) = (0, order.len());
     for (step, op) in ops.iter().enumerate() {
         let fail = || format!("operation {step}: {op:?}, position={pos}, end={end}");
@@ -240,7 +240,7 @@ fn empty_ranges_resume_after_seeks_skips_and_clones() {
     for seq in sequences {
         let order = Order::with_seed(seq, 19).unwrap();
         for start in [0, order.len() / 2, order.len()] {
-            let mut cursor = order.iter(start..start).unwrap();
+            let mut cursor = order.cursor(start..start).unwrap();
             assert_eq!(cursor.clone().count(), 0);
             assert_eq!(cursor.clone().last(), None);
             assert_eq!(cursor.next(), None);
@@ -276,7 +276,7 @@ fn exhausted_subranges_resume_at_their_end() {
         let order = Order::new(seq).unwrap();
         for end in 0..=order.len() {
             for exhaust in 0..3 {
-                let mut cursor = order.iter(..end).unwrap();
+                let mut cursor = order.cursor(..end).unwrap();
                 assert_eq!(cursor.clone().last(), end.checked_sub(1).and_then(|pos| order.get(pos)));
                 match exhaust {
                     0 => cursor.by_ref().for_each(drop),
@@ -304,7 +304,7 @@ fn boundary_skip_initializes_target_child_before_backward_seek() {
         Seq::source(3),
     ]))
     .unwrap();
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     cursor.next(); // Initialize buffers for the first child.
     cursor.seek(31).unwrap(); // End of the second child; its state has not been built.
     cursor.seek(10).unwrap(); // Same child index, but its state must now be initialized.
@@ -325,8 +325,8 @@ fn concat_children_keep_their_own_transform_parameters() {
     let seq = Seq::concat([nested(1, 11), nested(55, 19), Seq::source(3), nested(99, 7)]).repeat(3);
     let order = Order::with_seed(seq, 42).unwrap();
     let expected: Vec<_> = (0..order.len()).map(|pos| order.get(pos).unwrap()).collect();
-    assert_eq!(order.iter(..).unwrap().collect::<Vec<_>>(), expected);
-    let mut cursor = order.iter(..).unwrap();
+    assert_eq!(order.iter().collect::<Vec<_>>(), expected);
+    let mut cursor = order.iter();
     for pos in (0..order.len()).rev().step_by(3).chain((0..order.len()).step_by(7)) {
         cursor.seek(pos).unwrap();
         let mut copy = cursor.clone();
@@ -342,12 +342,12 @@ fn selections_resume_after_skips_and_exhaustion() {
     // Keep the slice around a repeat so the contiguous selection's cursor is exercised.
     let seq = Seq::source(7).shuffle(13).repeat(5);
     let base = Order::new(seq.clone()).unwrap();
-    let all: Vec<_> = base.iter(..).unwrap().map(|item| item.record_index).collect();
+    let all: Vec<_> = base.iter().map(|item| item.record_index).collect();
     for step in [1, 2, 8, usize::MAX] {
         let order = Order::new(seq.clone().skip(5).take(23).step_by(step)).unwrap();
         let expected: Vec<_> = all[5..28].iter().copied().step_by(step).collect();
         for n in 0..=expected.len() {
-            let mut cursor = order.iter(..).unwrap();
+            let mut cursor = order.iter();
             assert_eq!(cursor.nth(n).map(|item| item.record_index), expected.get(n).copied());
             cursor.seek(0).unwrap();
             assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);

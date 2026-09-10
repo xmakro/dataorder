@@ -18,7 +18,7 @@ use std::ops::{Bound, Range, RangeBounds};
 
 /// A seekable iterator over a range of an [`Order`].
 ///
-/// Created by [`Order::iter`], it yields [`Item`] values with explicit source ordinals.
+/// Created by [`Order::iter`] or [`Order::cursor`], it yields [`Item`] values with explicit source ordinals.
 /// Iteration moves forward; [`seek`](Cursor::seek) can move to an earlier or later
 /// position, and [`set_range`](Cursor::set_range) selects a new range.
 /// [`len`](ExactSizeIterator::len) reports how many elements remain.
@@ -38,14 +38,14 @@ pub struct Cursor<'a, T> {
 }
 
 impl<'a, T> Cursor<'a, T> {
-    pub(crate) fn new(order: &'a Order<T>, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
-        let range = resolve_range(range, order.len())?;
+    /// Constructs a cursor over a validated range within the order.
+    pub(crate) fn new(order: &'a Order<T>, range: Range<usize>) -> Self {
         let (start, end) = (range.start, range.end);
         let mut root = NodeCursor::new(&order.root);
         if start < order.root.len() {
             root.seek(start, order.ctx);
         }
-        Ok(Self { order, root, pos: start, end })
+        Self { order, root, pos: start, end }
     }
 
     /// Absolute order position of the next element, or the range end if exhausted.
@@ -67,7 +67,7 @@ impl<'a, T> Cursor<'a, T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::mix([Seq::source(100).shuffle(1), Seq::source(50)]))?;
-    /// let mut cursor = order.iter(100..)?;
+    /// let mut cursor = order.cursor(100..)?;
     /// cursor.seek(120)?;
     /// assert_eq!(cursor.offset(), 120);
     /// assert_eq!(cursor.next(), order.get(120));
@@ -96,8 +96,8 @@ impl<'a, T> Cursor<'a, T> {
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).shuffle(1))?;
-    /// let all: Vec<usize> = order.iter(..)?.map(|item| item.record_index).collect();
-    /// let mut cursor = order.iter(2..4)?;
+    /// let all: Vec<usize> = order.iter().map(|item| item.record_index).collect();
+    /// let mut cursor = order.cursor(2..4)?;
     /// assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), all[2..4]);
     /// cursor.set_range(7..)?;
     /// assert_eq!(cursor.len(), 3);
@@ -134,7 +134,7 @@ impl<'a, T> Cursor<'a, T> {
 }
 
 /// Normalize and validate against the order length.
-fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usize>, BoundsError> {
+pub(crate) fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usize>, BoundsError> {
     let start = match range.start_bound() {
         Bound::Included(&s) => s,
         Bound::Excluded(&s) => s.checked_add(1).ok_or(BoundsError::StartOverflow)?,

@@ -6,12 +6,12 @@ fn order(parts: &[(usize, Schedule)]) -> Order<usize> {
 }
 
 fn entries(order: &Order<usize>) -> Vec<(usize, usize)> {
-    order.iter(..).unwrap().map(|item| (item.source_ordinal, item.record_index)).collect()
+    order.iter().map(|item| (item.source_ordinal, item.record_index)).collect()
 }
 
 fn check_seeks(order: &Order<usize>) {
     let all = entries(order);
-    let mut cursor = order.iter(0..0).unwrap();
+    let mut cursor = order.cursor(0..0).unwrap();
     for start in (0..=order.len()).rev() {
         let end = (start + 11).min(order.len());
         cursor.set_range(start..end).unwrap();

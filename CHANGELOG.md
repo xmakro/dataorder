@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** split full-order iteration from ranged cursor construction.
+  `Order::iter()` now returns a `Cursor` directly; replace `iter(..)?` or
+  `iter(..).unwrap()` with `iter()`. Use `Order::cursor(range)` for checked ranges;
+  it returns `Result<Cursor, BoundsError>`. Both cursors remain seekable, and
+  `IntoIterator for &Order` uses `iter()`. Ordering, bounds errors, allocation
+  behavior and serialized configurations are unchanged.
+
 - **Breaking:** rename `Sampling` to `Schedule`, `MixPart.sampling` to
   `MixPart.schedule`, `SamplingReason` to `ScheduleReason`, and
   `ErrorKind::InvalidSampling { sampling, reason }` to
@@ -112,7 +119,7 @@
 - **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
   `Seq::map` or `Seq::try_map` before compilation.
 - **Breaking:** make checked access the default and remove the corresponding `try_`
-  aliases. `Order::get` returns `Option`; `Order::iter` and cursor
+  aliases. `Order::get` returns `Option`; `Order::cursor` and cursor
   `seek`/`set_range` return `Result`. Invalid cursor
   operations preserve its state.
 

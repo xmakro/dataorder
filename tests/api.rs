@@ -56,7 +56,7 @@ fn builders_accept_unresolved_sources() {
     let expected = Order::new(configuration(10, 20)).unwrap();
     assert_eq!(order.len(), 3);
     assert_eq!(order.sources(), [10, 20]);
-    assert!(order.iter(..).unwrap().eq(expected.iter(..).unwrap()));
+    assert!(order.iter().eq(expected.iter()));
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn workers_partition_short_sequences_with_explicit_offsets() {
         for worker in 0..workers {
             let seq = Seq::source(len).skip(worker.min(len)).step_by(workers);
             let order = Order::new(seq).unwrap();
-            let positions = order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>();
+            let positions = order.iter().map(|item| item.record_index).collect::<Vec<_>>();
             assert_eq!(positions, (worker..len).step_by(workers).collect::<Vec<_>>());
             combined.extend(positions);
         }
@@ -111,7 +111,7 @@ fn workers_partition_short_sequences_with_explicit_offsets() {
     }
     // Offsets are sequence positions; they need not be smaller than the step.
     let order = Order::new(Seq::source(10).skip(5).step_by(2)).unwrap();
-    assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [5, 7, 9]);
+    assert_eq!(order.iter().map(|item| item.record_index).collect::<Vec<_>>(), [5, 7, 9]);
     assert_eq!(Order::new(Seq::source(3).skip(4).step_by(workers)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 4, len: 3 });
 }
 
@@ -126,7 +126,7 @@ fn unresolved_position_operations_round_trip() {
     );
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
     let order = Order::new(back.map(|_| 10usize)).unwrap();
-    assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [5]);
+    assert_eq!(order.iter().map(|item| item.record_index).collect::<Vec<_>>(), [5]);
     let seq = Seq::source("data").skip(11).step_by(0);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
@@ -152,7 +152,7 @@ fn hand_built_configuration() {
     assert!(Order::new(empty).unwrap().is_empty());
     let order: Order<Shard> = seq.try_into().unwrap();
     assert_eq!(order.len(), 100);
-    let all = names(order.iter(..).unwrap());
+    let all = names(order.iter());
     assert_eq!(all.iter().filter(|e| e.0 == "a").count(), 75);
     assert_eq!(all.iter().filter(|e| e.0 == "b" || e.0 == "c").count(), 25);
     assert_eq!(order.sources().iter().map(|s| s.name).collect::<Vec<_>>(), ["a", "b", "c"]);
@@ -187,17 +187,36 @@ fn errors_name_kind_and_path() {
 }
 
 #[test]
+fn full_iteration_covers_empty_and_maximum_lengths() {
+    for len in [0, 1, 17, usize::MAX] {
+        let order = Order::new(Seq::source(len)).unwrap();
+        for mut cursor in [order.iter(), order.cursor(..).unwrap(), (&order).into_iter()] {
+            assert_eq!(cursor.offset(), 0);
+            assert_eq!(cursor.len(), len);
+            assert_eq!(cursor.next(), order.get(0));
+            cursor.seek(len).unwrap();
+            assert_eq!(cursor.len(), 0);
+            assert_eq!(cursor.next(), None);
+            cursor.seek(len.saturating_sub(1)).unwrap();
+            assert_eq!(cursor.next(), order.get(len.saturating_sub(1)));
+            cursor.set_range(..).unwrap();
+            assert_eq!(cursor.count(), len);
+        }
+    }
+}
+
+#[test]
 fn cursors_seek_skip_and_clone() {
     let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).skip(2).step_by(3)).unwrap();
-    let all = names(order.iter(..).unwrap());
+    let all = names(order.iter());
     assert_eq!(all.len(), order.len());
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     assert_eq!(cursor.nth(10).map(|item| (item.source.name, item.record_index)), Some(all[10]));
     cursor.seek(100).unwrap();
     let ahead = cursor.clone();
     assert_eq!(names(cursor), all[100..]);
     assert_eq!(names(ahead), all[100..]);
-    let mut back = order.iter(50..60).unwrap();
+    let mut back = order.cursor(50..60).unwrap();
     back.seek(55).unwrap();
     assert_eq!(back.len(), 5);
     back.seek(52).unwrap();
@@ -232,7 +251,7 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(boxed.salt(), dataorder::salt("s"));
     assert_eq!((&&shared).salt(), shared.salt());
     let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle(1)).unwrap();
-    let letters: String = order.iter(..).unwrap().map(|item| item.source[item.record_index]).collect();
+    let letters: String = order.iter().map(|item| item.source[item.record_index]).collect();
     assert_eq!(letters.len(), 5);
     assert_eq!(Order::new(Seq::source(&[1u8, 2, 3][..])).unwrap().len(), 3);
     assert_eq!(Order::new(Seq::source([0u8; 4])).unwrap().len(), 4);
@@ -246,7 +265,7 @@ fn serde_round_trip() {
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
-    assert!(a.iter(..).unwrap().eq(b.iter(..).unwrap()));
+    assert!(a.iter().eq(b.iter()));
     // The wire format is part of the API.
     let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle(9), Schedule::ramp(0.1, 0.2))]);
     assert_eq!(

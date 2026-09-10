@@ -70,7 +70,7 @@ fn seeks_within_each_concat_child_reuse_mix_buffers() {
     };
     let order = Order::new(Seq::concat([part(1000, 10, false), part(700, 20, true)]).repeat(3)).unwrap();
     let epoch = order.len() / 3;
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     for start in [0, 10_000, epoch, epoch + 10_000] {
         cursor.seek(start).unwrap();
         cursor.next();
@@ -93,7 +93,7 @@ fn seeks_within_each_concat_child_reuse_mix_buffers() {
 fn seeking_an_existing_cursor_allocates_nothing() {
     let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(10_000).shuffle(i + 1)))).unwrap();
     let n = order.len();
-    let mut cursor = order.iter(n / 2..).unwrap();
+    let mut cursor = order.cursor(n / 2..).unwrap();
     cursor.by_ref().take(1000).for_each(drop);
     let count = allocations(|| {
         cursor.seek(n / 4).unwrap();
@@ -113,7 +113,7 @@ fn seeking_an_existing_cursor_allocates_nothing() {
 #[test]
 fn seeking_backward_revives_parts_without_allocating() {
     let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
-    let mut cursor = order.iter(order.len() - 1..).unwrap();
+    let mut cursor = order.cursor(order.len() - 1..).unwrap();
     assert_eq!(cursor.next().map(|item| (*item.source, item.record_index)), Some(element(&order, order.len() - 1)));
     let count = allocations(|| cursor.seek(0).unwrap());
     assert_eq!(count, 0, "reviving the exhausted mix parts allocated {count} times");
@@ -124,7 +124,7 @@ fn seeking_backward_revives_parts_without_allocating() {
 #[test]
 fn cloned_cursors_revive_parts_and_reuse_new_buffers() {
     let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
-    let mut cursor = order.iter(order.len() - 1..).unwrap();
+    let mut cursor = order.cursor(order.len() - 1..).unwrap();
     cursor.next();
     let mut cloned = cursor.clone();
     cloned.seek(0).unwrap();
@@ -144,7 +144,7 @@ fn cloned_cursors_revive_parts_and_reuse_new_buffers() {
 fn cloned_cursors_cross_concat_children_independently() {
     let part = |k| Seq::mix((0..k).map(|i| Seq::source(10).shuffle(i as u64)));
     let order = Order::new(Seq::concat([part(1000), part(2)]).repeat(2)).unwrap();
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     cursor.next();
     cursor.seek(10_000).unwrap();
     cursor.next();
@@ -172,11 +172,11 @@ fn forward_seeks_land_in_the_target_repetition_and_part() {
     let order = Order::new(epoch().repeat(100_000)).unwrap();
     let n = order.len();
     for target in [n - 7, n - 1000 - 500 - 1, n / 2] {
-        let mut cursor = order.iter(..).unwrap();
+        let mut cursor = order.iter();
         let count = allocations(|| cursor.seek(target).unwrap());
         assert!(count <= 8, "forward seek across 100 000 repetitions made {count} allocations");
         assert_eq!(cursor.next().map(|item| (*item.source, item.record_index)), Some(element(&order, target)));
-        let mut cursor = order.iter(..).unwrap();
+        let mut cursor = order.iter();
         let count = allocations(|| {
             cursor.nth(target - 1);
         });
@@ -187,7 +187,7 @@ fn forward_seeks_land_in_the_target_repetition_and_part() {
     let order = Order::new(Seq::concat((0..20_000).map(|c| Seq::mix([Seq::source(50).shuffle(c + 1), Seq::source(30)])))).unwrap();
     let n = order.len();
     for target in [n - 7, n - 80, n / 2 + 1] {
-        let mut cursor = order.iter(..).unwrap();
+        let mut cursor = order.iter();
         let count = allocations(|| cursor.seek(target).unwrap());
         assert!(count <= 8, "forward seek across 20 000 parts made {count} allocations");
         assert_eq!(cursor.next().map(|item| (*item.source, item.record_index)), Some(element(&order, target)));
@@ -197,8 +197,8 @@ fn forward_seeks_land_in_the_target_repetition_and_part() {
 #[test]
 fn count_and_last_on_a_large_shuffled_source() {
     let order = Order::new(Seq::source(1usize << 30).shuffle(1)).unwrap();
-    assert_eq!(order.iter(5..).unwrap().count(), order.len() - 5);
-    assert_eq!(order.iter(..).unwrap().last().map(|item| (*item.source, item.record_index)), Some(element(&order, order.len() - 1)));
+    assert_eq!(order.cursor(5..).unwrap().count(), order.len() - 5);
+    assert_eq!(order.iter().last().map(|item| (*item.source, item.record_index)), Some(element(&order, order.len() - 1)));
 }
 
 /// Empty parts retain their source handles, but take no cursor slots or seek scratch.
@@ -212,7 +212,7 @@ fn empty_parts_do_not_allocate_runtime_state() {
     assert_eq!(padded.sources().len(), 100_002);
     let bytes = |order: &Order<usize>| {
         let before = BYTES.get();
-        let mut cursor = order.iter(500_000..).unwrap();
+        let mut cursor = order.cursor(500_000..).unwrap();
         black_box(cursor.next());
         black_box(order.get(1_000_001).unwrap());
         BYTES.get() - before
@@ -224,7 +224,7 @@ fn empty_parts_do_not_allocate_runtime_state() {
 fn shuffles_reuse_every_reached_mix_including_concat_children() {
     let mix = || Seq::mix((0..10).map(|_| Seq::source(100)));
     let order = Order::new(Seq::concat([mix(), Seq::mix([mix(), mix()])]).repeat(3).shuffle(8)).unwrap();
-    let mut cursor = order.iter(..).unwrap();
+    let mut cursor = order.iter();
     cursor.by_ref().for_each(drop); // Reach all cached mixes and exhaust the cursor.
     let mut clone = cursor.clone();
     // A clone warms its own seek scratch before allocation-free reuse.

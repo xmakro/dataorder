@@ -389,13 +389,13 @@ fn random_configurations_match_reference() {
             let crate::Item { source: s, record_index: idx, .. } = order.get(i).unwrap();
             assert_eq!((s.id, idx), r, "round {round}: get({i}) of {seq:?}");
         }
-        assert_eq!(ids(order.iter(0..n).unwrap()), reference, "round {round}: {seq:?}");
+        assert_eq!(ids(order.cursor(0..n).unwrap()), reference, "round {round}: {seq:?}");
         for _ in 0..4 {
             let a = rng.below(n + 1);
             let b = a + rng.below(n - a + 1);
-            assert_eq!(ids(order.iter(a..b).unwrap()), reference[a..b], "round {round}: {a}..{b} of {seq:?}");
+            assert_eq!(ids(order.cursor(a..b).unwrap()), reference[a..b], "round {round}: {a}..{b} of {seq:?}");
         }
-        let mut cursor = order.iter(0..n).unwrap();
+        let mut cursor = order.cursor(0..n).unwrap();
         for _ in 0..6 {
             let a = rng.below(n + 1);
             cursor.seek(a).unwrap();
@@ -450,11 +450,11 @@ fn large_configurations_match_reference() {
         if n == 0 || n > 200_000 {
             continue;
         }
-        assert_eq!(ids(order.iter(0..n).unwrap()), reference, "round {round}: {seq:?}");
+        assert_eq!(ids(order.cursor(0..n).unwrap()), reference, "round {round}: {seq:?}");
         for _ in 0..8 {
             let a = rng.below(n + 1);
             let b = (a + rng.below(500)).min(n);
-            assert_eq!(ids(order.iter(a..b).unwrap()), reference[a..b], "round {round}: {a}..{b}");
+            assert_eq!(ids(order.cursor(a..b).unwrap()), reference[a..b], "round {round}: {a}..{b}");
             let p = a.min(n - 1);
             let crate::Item { source: s, record_index: i, .. } = order.get(p).unwrap();
             assert_eq!((s.id, i), reference[p]);
@@ -470,7 +470,7 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     let epochs: Vec<Vec<usize>> = (0..3)
         .map(|e| {
             order
-                .iter(e * 1000..(e + 1) * 1000)
+                .cursor(e * 1000..(e + 1) * 1000)
                 .unwrap()
                 .map(|crate::Item { source: s, record_index: i, .. }| {
                     assert_eq!(s.id, 7);
@@ -490,49 +490,49 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     // The first repetition is the sequence itself, and repeating once changes nothing,
     // even around a repeat (which must not count one level deeper for it).
     let once = Order::new(src(7, 1000).shuffle(3)).unwrap();
-    assert_eq!(once.iter(0..1000).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), epochs[0]);
-    assert_eq!(ids(Order::new(src(7, 1000).shuffle(3).repeat(1)).unwrap().iter(0..1000).unwrap()), ids(once.iter(0..1000).unwrap()));
-    assert_eq!(ids(Order::new(seq.clone().repeat(1)).unwrap().iter(..).unwrap()), ids(order.iter(..).unwrap()));
-    assert_eq!(ids(Order::new(Seq::concat([seq.clone().repeat(1)]).repeat(1)).unwrap().iter(..).unwrap()), ids(order.iter(..).unwrap()));
+    assert_eq!(once.cursor(0..1000).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), epochs[0]);
+    assert_eq!(ids(Order::new(src(7, 1000).shuffle(3).repeat(1)).unwrap().cursor(0..1000).unwrap()), ids(once.cursor(0..1000).unwrap()));
+    assert_eq!(ids(Order::new(seq.clone().repeat(1)).unwrap().iter()), ids(order.iter()));
+    assert_eq!(ids(Order::new(Seq::concat([seq.clone().repeat(1)]).repeat(1)).unwrap().iter()), ids(order.iter()));
     // A cycle that fits within its part is not repeated, so it is the part itself;
     // one that repeats also preserves the entire first pass, including nested epochs.
     let part = || src(7, 100).shuffle(3).repeat(2);
     let fits = Order::new(Seq::mix([part().cycle(200), src(8, 1000).cycle(200)])).unwrap();
     let repeats = Order::new(Seq::mix([part().cycle(250), src(8, 1000).cycle(250)])).unwrap();
-    let sevens = |o: &Order<Src>| ids(o.iter(..).unwrap()).into_iter().filter(|e| e.0 == 7).collect::<Vec<_>>();
-    let alone = ids(Order::new(part()).unwrap().iter(..).unwrap());
+    let sevens = |o: &Order<Src>| ids(o.iter()).into_iter().filter(|e| e.0 == 7).collect::<Vec<_>>();
+    let alone = ids(Order::new(part()).unwrap().iter());
     assert_eq!(sevens(&fits), alone);
     assert_eq!(sevens(&repeats)[..200], alone);
     // Adding a repeat preserves the nested prefix, including when a take removes it.
     for extended in [part().repeat(2), part().cycle(201), part().repeat(2).take(200)] {
         let extended = Order::new(extended).unwrap();
-        assert_eq!(ids(extended.iter(..200).unwrap()), alone);
+        assert_eq!(ids(extended.cursor(..200).unwrap()), alone);
     }
     // Nested repeats: (outer 0, inner 1) and (outer 1, inner 0) are different orders.
     let nested = Order::new(src(7, 100).shuffle(3).repeat(2).repeat(2)).unwrap();
-    let block = |b: usize| ids(nested.iter(b * 100..(b + 1) * 100).unwrap());
+    let block = |b: usize| ids(nested.cursor(b * 100..(b + 1) * 100).unwrap());
     assert_ne!(block(1), block(2));
-    assert_eq!(block(0), ids(Order::new(src(7, 100).shuffle(3)).unwrap().iter(0..100).unwrap()));
+    assert_eq!(block(0), ids(Order::new(src(7, 100).shuffle(3)).unwrap().cursor(0..100).unwrap()));
     // Same seed twice under a concat: the same order twice.
     let twice = Order::new(Seq::concat([src(7, 1000).shuffle(3), src(7, 1000).shuffle(3)])).unwrap();
-    let v = ids(twice.iter(0..2000).unwrap());
+    let v = ids(twice.cursor(0..2000).unwrap());
     assert_eq!(v[..1000], v[1000..]);
     // Another salt or another length with the same seed: unrelated orders.
     let salted = Order::new(Seq::concat([src(7, 1000).shuffle(3), src(8, 1000).shuffle(3), src(7, 999).shuffle(3)])).unwrap();
-    let w = ids(salted.iter(..).unwrap());
+    let w = ids(salted.iter());
     let alike = |a: &[(u32, usize)], b: &[(u32, usize)]| a.iter().zip(b).filter(|(x, y)| x.1 == y.1).count();
     assert!(alike(&w[..1000], &w[1000..2000]) < 10);
     assert!(alike(&w[..999], &w[2000..]) < 10);
     assert!(alike(&w[1000..1999], &w[2000..]) < 10);
     // The order's seed changes every shuffle, whether given at construction or set later.
     let reseeded = Order::with_seed(seq, 99).unwrap();
-    assert_ne!(ids(reseeded.iter(0..1000).unwrap()), ids(order.iter(0..1000).unwrap()));
+    assert_ne!(ids(reseeded.cursor(0..1000).unwrap()), ids(order.cursor(0..1000).unwrap()));
     let mut later = order.clone();
     later.set_seed(99);
     assert_eq!(later.seed(), 99);
-    assert_eq!(ids(later.iter(..).unwrap()), ids(reseeded.iter(..).unwrap()));
+    assert_eq!(ids(later.iter()), ids(reseeded.iter()));
     later.set_seed(0);
-    assert_eq!(ids(later.iter(..).unwrap()), ids(order.iter(..).unwrap()));
+    assert_eq!(ids(later.iter()), ids(order.iter()));
 }
 
 /// Levels follow retained inner scopes, including unequal branches and selections that
@@ -578,9 +578,9 @@ fn repeat_levels_are_assigned_from_the_inside_out() {
             let n = repeated.len() / 3;
             for epoch in 0..3 {
                 let context = perm::epoch_ctx(seed, epoch, inner_level + 1);
-                let expected = ids(Order::with_seed(seq.clone(), context).unwrap().iter(..).unwrap());
+                let expected = ids(Order::with_seed(seq.clone(), context).unwrap().iter());
                 let start = epoch * n;
-                assert_eq!(ids(repeated.iter(start..start + n).unwrap()), expected, "{name}: epoch {epoch}");
+                assert_eq!(ids(repeated.cursor(start..start + n).unwrap()), expected, "{name}: epoch {epoch}");
                 for (pos, &item) in expected.iter().enumerate() {
                     let actual = repeated.get(start + pos).unwrap();
                     assert_eq!((actual.source.id, actual.record_index), item, "{name}: get({})", start + pos);
@@ -597,12 +597,12 @@ fn extending_nested_repetitions_preserves_every_existing_position() {
         let once = Order::with_seed(seq.clone(), seed).unwrap();
         let n = once.len();
         let long = Order::with_seed(seq.clone().repeat(3), seed).unwrap();
-        let all = ids(long.iter(..).unwrap());
-        assert_eq!(ids(once.iter(..).unwrap()), all[..n]);
+        let all = ids(long.iter());
+        assert_eq!(ids(once.iter()), all[..n]);
         for len in [0, 1, 17, n - 1, n, n + 1, 2 * n, 2 * n + 1, 3 * n] {
             for selected in [seq.clone().cycle(len), seq.clone().repeat(3).take(len)] {
                 let order = Order::with_seed(selected, seed).unwrap();
-                assert_eq!(ids(order.iter(..).unwrap()), all[..len], "prefix length {len}");
+                assert_eq!(ids(order.iter()), all[..len], "prefix length {len}");
             }
         }
         assert_ne!(all[..n], all[n..2 * n]);
@@ -614,11 +614,11 @@ fn extending_nested_repetitions_preserves_every_existing_position() {
 fn shards_partition_the_sequence() {
     let base = Seq::mix([src(0, 1000).shuffle(1), src(1, 300).shuffle(2)]).repeat(2);
     let order = Order::new(base.clone()).unwrap();
-    let all = ids(order.iter(0..order.len()).unwrap());
+    let all = ids(order.cursor(0..order.len()).unwrap());
     let mut from_shards = Vec::new();
     for w in 0..8 {
         let shard = Order::new(base.clone().skip(w).step_by(8)).unwrap();
-        let elems = ids(shard.iter(0..shard.len()).unwrap());
+        let elems = ids(shard.cursor(0..shard.len()).unwrap());
         for (i, &e) in elems.iter().enumerate() {
             assert_eq!(e, all[w + 8 * i]);
         }
@@ -647,12 +647,12 @@ fn map_keeps_the_order() {
     let order = Order::new(seq.clone()).unwrap();
     let loaded = Order::new(seq.clone().map(|s| Loaded { salt: s.salt(), len: s.len })).unwrap();
     assert_eq!(loaded.sources().iter().map(|l| l.len).collect::<Vec<_>>(), [700, 50, 120]);
-    let a: Vec<(usize, usize)> = order.iter(..).unwrap().map(|item| (item.source.len, item.record_index)).collect();
-    let b: Vec<(usize, usize)> = loaded.iter(..).unwrap().map(|item| (item.source.len, item.record_index)).collect();
+    let a: Vec<(usize, usize)> = order.iter().map(|item| (item.source.len, item.record_index)).collect();
+    let b: Vec<(usize, usize)> = loaded.iter().map(|item| (item.source.len, item.record_index)).collect();
     assert_eq!(a, b);
     let lens = Order::new(seq.map(|s| s.len)).unwrap();
     assert_eq!(lens.sources(), &[700, 50, 120]);
-    let c: Vec<(usize, usize)> = lens.iter(..).unwrap().map(|item| (*item.source, item.record_index)).collect();
+    let c: Vec<(usize, usize)> = lens.iter().map(|item| (*item.source, item.record_index)).collect();
     assert_ne!(a, c);
     let unshuffled = |v: &[(usize, usize)]| v.iter().enumerate().filter(|(_, e)| e.0 == 50).map(|(p, e)| (p, e.1)).collect::<Vec<_>>();
     assert_eq!(unshuffled(&a), unshuffled(&c));
@@ -701,19 +701,19 @@ fn errors() {
 fn cycles() {
     use crate::order::Node;
     let x = || src(0, 100).shuffle(3);
-    let all = ids(Order::new(x().repeat(4)).unwrap().iter(..).unwrap());
+    let all = ids(Order::new(x().repeat(4)).unwrap().iter());
     for len in [0, 1, 99, 100, 101, 250, 400] {
         let order = Order::new(x().cycle(len)).unwrap();
         assert_eq!(order.len(), len);
-        assert_eq!(ids(order.iter(..).unwrap()), all[..len], "cycle({len})");
-        assert_eq!(ids(Order::new(x().repeat(4).take(len)).unwrap().iter(..).unwrap()), all[..len]);
+        assert_eq!(ids(order.iter()), all[..len], "cycle({len})");
+        assert_eq!(ids(Order::new(x().repeat(4).take(len)).unwrap().iter()), all[..len]);
     }
-    assert_eq!(ids(Order::new(x().cycle(99)).unwrap().iter(..).unwrap()), ids(Order::new(x().take(99)).unwrap().iter(..).unwrap()));
+    assert_eq!(ids(Order::new(x().cycle(99)).unwrap().iter()), ids(Order::new(x().take(99)).unwrap().iter()));
     // Inner repeat levels stay unchanged when a cycle extends to another pass.
     let y = || src(0, 10).shuffle(3).repeat(2);
-    assert_eq!(ids(Order::new(y().cycle(15)).unwrap().iter(..).unwrap()), ids(Order::new(y()).unwrap().iter(..15).unwrap()));
-    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap()), ids(Order::new(y().repeat(3)).unwrap().iter(..45).unwrap()));
-    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap())[..20], ids(Order::new(y()).unwrap().iter(..).unwrap())[..]);
+    assert_eq!(ids(Order::new(y().cycle(15)).unwrap().iter()), ids(Order::new(y()).unwrap().cursor(..15).unwrap()));
+    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter()), ids(Order::new(y().repeat(3)).unwrap().cursor(..45).unwrap()));
+    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter())[..20], ids(Order::new(y()).unwrap().iter())[..]);
     // Node shapes: no slice above a repeat, a short cycle is a slice or the child.
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
     assert!(matches!(root(x().cycle(250)), Node::Repeat { child_len: 100, len: 250, .. }));
@@ -729,18 +729,18 @@ fn cycles() {
     let endless = Order::new(x().cycle(usize::MAX)).unwrap();
     assert_eq!(endless.len(), usize::MAX);
     let last = usize::MAX - 1;
-    assert_eq!(ids(endless.iter(last..).unwrap()), vec![(0, endless.get(last).unwrap().record_index)]);
-    assert_eq!(ids(endless.iter(..300).unwrap()), all[..300]);
+    assert_eq!(ids(endless.cursor(last..).unwrap()), vec![(0, endless.get(last).unwrap().record_index)]);
+    assert_eq!(ids(endless.cursor(..300).unwrap()), all[..300]);
     // A cycle over a concatenation narrows it like a take, beyond one repetition it counts
     // every part.
-    let base = ids(Order::new(src(0, 100).shuffle(1)).unwrap().iter(..).unwrap());
-    assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(100).shuffle(1)).unwrap().iter(..).unwrap()), base);
-    assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(200).shuffle(1)).unwrap().iter(..).unwrap())[..100], base[..]);
+    let base = ids(Order::new(src(0, 100).shuffle(1)).unwrap().iter());
+    assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(100).shuffle(1)).unwrap().iter()), base);
+    assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(200).shuffle(1)).unwrap().iter())[..100], base[..]);
     // A cycled concat part is narrowed to the requested count before mixing.
     let part = || Seq::concat([src(0, 100), src(1, 50)]);
     let narrowed = Order::new(Seq::mix([part().cycle(75), src(2, 75)]).shuffle(1)).unwrap();
     let plain = Order::new(Seq::mix([src(0, 100).take(75), src(2, 75)]).shuffle(1)).unwrap();
-    assert_eq!(ids(narrowed.iter(..).unwrap()), ids(plain.iter(..).unwrap()));
+    assert_eq!(ids(narrowed.iter()), ids(plain.iter()));
 }
 
 #[test]
@@ -774,8 +774,8 @@ fn configurations_over_the_depth_limit_are_rejected() {
 #[test]
 fn empty_parts_do_not_affect_shuffles_above() {
     let x = || src(0, 100);
-    let base = ids(Order::new(x().shuffle(1)).unwrap().iter(..).unwrap());
-    let same = |seq: Seq<Src>| assert_eq!(ids(Order::new(seq).unwrap().iter(..).unwrap()), base);
+    let base = ids(Order::new(x().shuffle(1)).unwrap().iter());
+    let same = |seq: Seq<Src>| assert_eq!(ids(Order::new(seq).unwrap().iter()), base);
     same(Seq::concat([x(), src(1, 0)]).shuffle(1));
     same(Seq::concat([src(0, 0), x()]).shuffle(1));
     same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).skip(2).step_by(1)]).shuffle(1));
@@ -789,12 +789,12 @@ fn empty_parts_do_not_affect_shuffles_above() {
     same(Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100).shuffle(1));
     same(Seq::concat([Seq::concat([src(1, 5), x()]), src(2, 3)]).skip(5).take(100).shuffle(1));
     same(Seq::concat([src(1, 5), Seq::concat([x(), src(2, 3)])]).take(105).skip(5).shuffle(1));
-    let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter(..).unwrap());
+    let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter());
     assert_ne!(with(src(1, 1)), base);
     assert_ne!(with(src(0, 1)), base);
     // An explicit skip removes preceding concat parts before deriving a later
     // shuffle salt.
-    let strided = |seq: Seq<Src>| ids(Order::new(seq).unwrap().iter(..).unwrap());
+    let strided = |seq: Seq<Src>| ids(Order::new(seq).unwrap().iter());
     assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2)), strided(x().step_by(2)));
     assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2).shuffle(1)), strided(x().step_by(2).shuffle(1)));
 }
@@ -825,8 +825,8 @@ fn folds() {
         matches!(root(cat().skip(5).take(30)), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
     );
     assert_eq!(
-        ids(Order::new(cat().skip(15).skip(3).step_by(7)).unwrap().iter(..).unwrap()),
-        ids(Order::new(cat()).unwrap().iter(..).unwrap()).into_iter().skip(18).step_by(7).collect::<Vec<_>>()
+        ids(Order::new(cat().skip(15).skip(3).step_by(7)).unwrap().iter()),
+        ids(Order::new(cat()).unwrap().iter()).into_iter().skip(18).step_by(7).collect::<Vec<_>>()
     );
 }
 
@@ -852,7 +852,7 @@ fn empty_mix_parts_do_not_affect_the_order() {
             with.insert(at, (src(99, 0), Schedule::delayed(0.9)));
         }
         let (Ok(a), Ok(b)) = (Order::new(Seq::mix(with)), Order::new(Seq::mix(parts))) else { continue };
-        assert_eq!(ids(a.iter(..).unwrap()), ids(b.iter(..).unwrap()), "round {round}");
+        assert_eq!(ids(a.iter()), ids(b.iter()), "round {round}");
         assert_eq!(a.sources().len(), b.sources().len() + a.sources().iter().filter(|s| s.id == 99).count());
     }
 }
@@ -886,18 +886,18 @@ fn seq_eq_and_hash() {
 fn edge_cases() {
     let empty = Order::new(Seq::<Src>::concat([])).unwrap();
     assert_eq!(empty.len(), 0);
-    assert_eq!(empty.iter(0..0).unwrap().count(), 0);
+    assert_eq!(empty.cursor(0..0).unwrap().count(), 0);
     let empty = Order::new(src(1, 5).shuffle(1).take(0).repeat(4)).unwrap();
     assert!(empty.is_empty());
     assert_eq!(Order::new(src(1, 5).skip(5).step_by(3)).unwrap().len(), 0);
     assert_eq!(Order::new(src(1, 5).skip(9).step_by(3)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 9, len: 5 });
     let one = Order::new(src(2, 1).shuffle(5).repeat(3)).unwrap();
-    assert_eq!(ids(one.iter(0..3).unwrap()), vec![(2, 0); 3]);
+    assert_eq!(ids(one.cursor(0..3).unwrap()), vec![(2, 0); 3]);
     let order = Order::with_seed(src(0, 5), 77).unwrap();
     assert_eq!(order.sources(), &[Src { id: 0, len: 5 }]);
     assert_eq!(order.seed(), 77);
     assert_eq!(format!("{order:?}"), "Order { len: 5, seed: 77, sources: [Src { id: 0, len: 5 }] }");
-    let mut c = order.iter(1..4).unwrap();
+    let mut c = order.cursor(1..4).unwrap();
     assert_eq!(format!("{c:?}"), "Cursor { position: 1, end: 4 }");
     assert_eq!(c.len(), 3);
     assert_eq!(c.next().map(|item| (item.source.id, item.record_index)), Some((0, 1)));
@@ -913,25 +913,25 @@ fn edge_cases() {
     assert_eq!(ids(c), vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
     // `count` and `last` answer without walking, `last` by random access.
     let shuffled = Order::new(src(0, 1000).shuffle(3)).unwrap();
-    assert_eq!(shuffled.iter(10..).unwrap().count(), 990);
+    assert_eq!(shuffled.cursor(10..).unwrap().count(), 990);
     assert_eq!(
-        shuffled.iter(10..900).unwrap().last().map(|item| (item.source.id, item.record_index)),
+        shuffled.cursor(10..900).unwrap().last().map(|item| (item.source.id, item.record_index)),
         Some((0, shuffled.get(899).unwrap().record_index))
     );
-    assert_eq!(shuffled.iter(7..7).unwrap().last(), None);
-    let mut c = shuffled.iter(..).unwrap();
+    assert_eq!(shuffled.cursor(7..7).unwrap().last(), None);
+    let mut c = shuffled.iter();
     c.nth(4);
     assert_eq!(c.count(), 995);
-    // Range forms of `iter`.
-    assert_eq!(ids(order.iter(..).unwrap()), ids(order.iter(0..5).unwrap()));
-    assert_eq!(ids(order.iter(3..).unwrap()), vec![(0, 3), (0, 4)]);
-    assert_eq!(ids(order.iter(..=1).unwrap()), vec![(0, 0), (0, 1)]);
-    assert_eq!(ids(order.iter(2..=2).unwrap()), vec![(0, 2)]);
-    assert_eq!(order.iter(5..).unwrap().count(), 0);
-    assert_eq!(ids(order.iter((std::ops::Bound::Excluded(3), std::ops::Bound::Unbounded)).unwrap()), vec![(0, 4)]);
-    assert_eq!(ids((&order).into_iter()), ids(order.iter(..).unwrap()));
+    // Range forms of `cursor`.
+    assert_eq!(ids(order.iter()), ids(order.cursor(0..5).unwrap()));
+    assert_eq!(ids(order.cursor(3..).unwrap()), vec![(0, 3), (0, 4)]);
+    assert_eq!(ids(order.cursor(..=1).unwrap()), vec![(0, 0), (0, 1)]);
+    assert_eq!(ids(order.cursor(2..=2).unwrap()), vec![(0, 2)]);
+    assert_eq!(order.cursor(5..).unwrap().count(), 0);
+    assert_eq!(ids(order.cursor((std::ops::Bound::Excluded(3), std::ops::Bound::Unbounded)).unwrap()), vec![(0, 4)]);
+    assert_eq!(ids((&order).into_iter()), ids(order.iter()));
     // A cursor run past its end, or ranged at the end, still moves forward correctly.
-    let mut c = order.iter(1..3).unwrap();
+    let mut c = order.cursor(1..3).unwrap();
     assert_eq!(c.nth(10), None);
     c.set_range(2..).unwrap();
     assert_eq!(ids(c.by_ref()), vec![(0, 2), (0, 3), (0, 4)]);
@@ -940,7 +940,7 @@ fn edge_cases() {
     c.seek(1).unwrap();
     c.set_range(3..4).unwrap();
     assert_eq!(ids(c.by_ref()), vec![(0, 3)]);
-    let mut at_end = order.iter(5..).unwrap();
+    let mut at_end = order.cursor(5..).unwrap();
     assert_eq!(at_end.next(), None);
     at_end.set_range(4..).unwrap();
     assert_eq!(ids(at_end), vec![(0, 4)]);
@@ -951,10 +951,10 @@ fn edge_cases() {
     assert_eq!(shared.len(), 13);
     assert_eq!(shared.sources().len(), 3);
     // Which source an element came from, also when sources compare equal.
-    let which: Vec<usize> = shared.iter(..).unwrap().map(|item| item.source_ordinal).collect();
+    let which: Vec<usize> = shared.iter().map(|item| item.source_ordinal).collect();
     assert_eq!(which, [vec![0; 5], vec![1; 3], vec![2; 5]].concat());
     let equal = Order::new(Seq::mix([src(1, 4), src(1, 4), src(1, 2)])).unwrap();
-    let which: Vec<usize> = equal.iter(..).unwrap().map(|item| item.source_ordinal).collect();
+    let which: Vec<usize> = equal.iter().map(|item| item.source_ordinal).collect();
     assert_eq!(which, [0, 1, 0, 1, 2, 0, 1, 0, 1, 2]);
     struct Unit;
     impl Source for Unit {
@@ -963,7 +963,7 @@ fn edge_cases() {
         }
     }
     let units = Order::new(Seq::concat([Seq::source(Unit), Seq::source(Unit)])).unwrap();
-    assert_eq!(units.iter(..).unwrap().map(|item| item.source_ordinal).collect::<Vec<_>>(), [0, 0, 1, 1]);
+    assert_eq!(units.iter().map(|item| item.source_ordinal).collect::<Vec<_>>(), [0, 0, 1, 1]);
 }
 
 #[test]
@@ -977,8 +977,8 @@ fn huge_lengths() {
     let crate::Item { source: s, record_index: i, .. } = order.get(last).unwrap();
     assert_eq!(s.id, 0);
     assert!(i < 1 << 40);
-    assert_eq!(ids(order.iter(last..).unwrap()), vec![(0, i)]);
-    let v = ids(order.iter(1 << 59..(1 << 59) + 5).unwrap());
+    assert_eq!(ids(order.cursor(last..).unwrap()), vec![(0, i)]);
+    let v = ids(order.cursor(1 << 59..(1 << 59) + 5).unwrap());
     for (k, &e) in v.iter().enumerate() {
         let crate::Item { source: s, record_index: i, .. } = order.get((1 << 59) + k).unwrap();
         assert_eq!((s.id, i), e);
@@ -1024,7 +1024,7 @@ fn sequence_lengths_must_fit_usize() {
         let order = Order::new(seq).unwrap();
         assert_eq!(order.len(), usize::MAX);
         let last = usize::MAX - 1;
-        assert_eq!(order.iter(last..).unwrap().next(), order.get(last));
+        assert_eq!(order.cursor(last..).unwrap().next(), order.get(last));
     }
 }
 
@@ -1032,13 +1032,13 @@ fn sequence_lengths_must_fit_usize() {
 fn cloned_cursor_continues_independently() {
     let order = Order::new(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).skip(1).step_by(3)).unwrap();
     let n = order.len();
-    let mut c = order.iter(0..n).unwrap();
+    let mut c = order.cursor(0..n).unwrap();
     let head = ids(c.by_ref().take(100));
     let d = c.clone();
     let rest_c = ids(c);
     let rest_d = ids(d);
     assert_eq!(rest_c, rest_d);
-    assert_eq!([head, rest_c].concat(), ids(order.iter(0..n).unwrap()));
+    assert_eq!([head, rest_c].concat(), ids(order.cursor(0..n).unwrap()));
 }
 
 #[test]
@@ -1057,9 +1057,9 @@ fn types_are_send_and_sync() {
 #[test]
 fn skip_and_take_ranges() {
     let a = || src(0, 10);
-    assert_eq!(ids(Order::new(a().take(3)).unwrap().iter(0..3).unwrap()), vec![(0, 0), (0, 1), (0, 2)]);
-    assert_eq!(ids(Order::new(a().skip(8)).unwrap().iter(0..2).unwrap()), vec![(0, 8), (0, 9)]);
-    assert_eq!(ids(Order::new(a().skip(3).take(1)).unwrap().iter(0..1).unwrap()), vec![(0, 3)]);
+    assert_eq!(ids(Order::new(a().take(3)).unwrap().cursor(0..3).unwrap()), vec![(0, 0), (0, 1), (0, 2)]);
+    assert_eq!(ids(Order::new(a().skip(8)).unwrap().cursor(0..2).unwrap()), vec![(0, 8), (0, 9)]);
+    assert_eq!(ids(Order::new(a().skip(3).take(1)).unwrap().cursor(0..1).unwrap()), vec![(0, 3)]);
     assert_eq!(Order::new(a()).unwrap().len(), 10);
     assert_eq!(Order::new(a().skip(4).take(0)).unwrap().len(), 0);
 }
@@ -1078,7 +1078,7 @@ fn steep_schedule_at_scale() {
     let n = order.len();
     assert_eq!(n, (1 << 45) + (1 << 44) + (1 << 40));
     for start in [0, n / 2 - 777, n - 1500, 12_345_678_901] {
-        let walked = ids(order.iter(start..start + 1500).unwrap());
+        let walked = ids(order.cursor(start..start + 1500).unwrap());
         for (k, &e) in walked.iter().enumerate() {
             let crate::Item { source: s, record_index: i, .. } = order.get(start + k).unwrap();
             assert_eq!((s.id, i), e, "position {}", start + k);
@@ -1096,7 +1096,7 @@ fn mix_with_explicit_counts() {
     let seq = Seq::mix([src(0, 100).shuffle(1).cycle(1800), src(1, 5000).shuffle(2).cycle(1200)]);
     let order = Order::new(seq).unwrap();
     assert_eq!(order.len(), 3000);
-    let all = ids(order.iter(0..3000).unwrap());
+    let all = ids(order.cursor(0..3000).unwrap());
     assert_eq!(all.iter().filter(|e| e.0 == 0).count(), 1800);
     assert_eq!(all.iter().filter(|e| e.0 == 1).count(), 1200);
     // Source 0 (100 elements) is repeated 18 times, each repetition a permutation, the
