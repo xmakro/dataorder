@@ -1,4 +1,4 @@
-//! Fallible position, range and shard validation shared by builders and cursors.
+//! Fallible position, range and shard validation used by orders and cursors.
 
 use std::fmt;
 use std::ops::{Bound, Range, RangeBounds};

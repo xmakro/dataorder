@@ -1,18 +1,19 @@
 //! Sequence configuration and builders. Each node is a source, a transform or a
-//! combination of other sequences; [`Order::new`] validates and compiles the tree.
+//! combination of other sequences; [`Order::new`](crate::Order::new) validates and
+//! compiles the tree.
 
-use crate::bounds::{BoundsError, boundaries};
-use crate::{Error, MAX_DEPTH, Order, Sampling, Source};
+use crate::Sampling;
 use std::convert::Infallible;
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 
 /// A description of how to order sources of type `T`.
 ///
 /// Build a sequence with [`source`](Seq::source) and the methods below, then pass it
-/// to [`Order::new`]. `T` must implement [`Source`] when you build the order; before
-/// that, it can be any type, such as a path you later [`map`](Seq::map) to a dataset.
+/// to [`Order::new`](crate::Order::new). `T` must implement [`Source`](crate::Source)
+/// when you build the order; before that, it can be any type, such as a path you
+/// later [`map`](Seq::map) to a dataset.
 /// You can also construct enum variants directly. Builders store the configuration
-/// without loading records or generating indices.
+/// without validating it, loading records or generating indices.
 ///
 /// `Seq` supports cloning, comparison, hashing and, with the `serde` feature,
 /// serialization when `T` does. Schedule parameters are compared by their bits,
@@ -20,18 +21,16 @@ use std::ops::RangeBounds;
 ///
 /// # Errors
 ///
-/// [`Order::new`] and [`check`](Seq::check) report invalid configurations as an
-/// [`Error`] with the path to the invalid node. This includes out-of-range skips
-/// and takes, zero strides, overflow, invalid schedules, and excessive depth.
-///
-/// Two builders return [`BoundsError`] immediately: [`slice`](Seq::slice) for
-/// reversed or overflowing range bounds, and [`shard`](Seq::shard) for an index
-/// outside `0..count`.
+/// [`Order::new`](crate::Order::new) reports invalid configurations as an
+/// [`Error`](crate::Error) with the path to the invalid node. This includes invalid slice and shard bounds,
+/// out-of-range skips and takes, zero strides, overflow, invalid schedules, and
+/// excessive depth. All sequence builders accept any `T` and defer these checks
+/// until the order is built.
 ///
 /// # Depth
 ///
-/// [`Order::new`], [`check`](Seq::check) and [`validate`](Seq::validate) stop at
-/// [`MAX_DEPTH`] (16 levels). Keep configurations within this supported limit.
+/// [`Order::new`](crate::Order::new) stops at [`MAX_DEPTH`](crate::MAX_DEPTH) (16 levels).
+/// Keep configurations within this supported limit.
 /// Tree operations and ordinary Rust destruction recurse with tree depth;
 /// arbitrarily deep hand-built trees are unsupported. Stack use also depends on
 /// the size of `T`; prefer small dataset handles over large inline sources.
@@ -104,6 +103,17 @@ pub enum Seq<T> {
         /// The sequence to take from.
         inner: Box<Self>,
     },
+    /// The positions between `start` and `end` of `inner`.
+    /// Bounds are stored as given and validated when the order is built.
+    /// This adds one level of configuration depth, even when both bounds are unbounded.
+    Slice {
+        /// Start bound.
+        start: Bound<usize>,
+        /// End bound.
+        end: Bound<usize>,
+        /// The sequence to slice.
+        inner: Box<Self>,
+    },
     /// Positions `offset, offset + step, offset + 2·step, …` of `inner`.
     /// `step` must be positive. An offset at or past the end gives an empty sequence.
     /// Use [`shard`](Seq::shard) to partition positions among workers.
@@ -113,6 +123,16 @@ pub enum Seq<T> {
         /// First kept position.
         offset: usize,
         /// The sequence to stride over.
+        inner: Box<Self>,
+    },
+    /// Positions `index, index + count, …` of `inner`.
+    /// `index` must be less than `count` when the order is built.
+    Shard {
+        /// Number of workers.
+        count: usize,
+        /// Worker index.
+        index: usize,
+        /// The sequence to shard.
         inner: Box<Self>,
     },
 }
@@ -253,27 +273,19 @@ impl<T> Seq<T> {
         Self::Cycle { len, inner: Box::new(self) }
     }
 
-    /// The positions in `range` of this sequence: a [`Skip`](Seq::Skip) of its start and a
-    /// [`Take`](Seq::Take) of its length, either omitted when trivial.
+    /// The positions in `range` of this sequence.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(10).slice(3..=5)?)?;
+    /// let order = Order::new(Seq::source(10).slice(3..=5))?;
     /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [3, 4, 5]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// Bounds against the child length are still validated by [`Order::new`].
-    ///
-    /// # Errors
-    /// [`BoundsError::Reversed`], [`BoundsError::StartOverflow`] or [`BoundsError::EndOverflow`].
-    pub fn slice(self, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
-        let (start, end) = boundaries(range)?;
-        let skipped = if start == 0 { self } else { self.skip(start) };
-        Ok(match end {
-            Some(end) => skipped.take(end - start),
-            None => skipped,
-        })
+    /// Reversed, overflowing and out-of-range bounds are rejected by [`Order::new`](crate::Order::new).
+    #[must_use]
+    pub fn slice(self, range: impl RangeBounds<usize>) -> Self {
+        Self::Slice { start: range.start_bound().cloned(), end: range.end_bound().cloned(), inner: Box::new(self) }
     }
 
     /// The first `n` positions (an error when the order is built if there are fewer).
@@ -346,18 +358,15 @@ impl<T> Seq<T> {
     /// use dataorder::{Order, Seq};
     /// let seq = Seq::source(10).shuffle(1);
     /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..)?.map(|item| item.record_index).collect();
-    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1)?)?.iter(..)?.map(|item| item.record_index).collect();
+    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1))?.iter(..)?.map(|item| item.record_index).collect();
     /// assert_eq!(shard, [all[1], all[5], all[9]]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// # Errors
-    /// [`BoundsError::InvalidShard`] when `index >= count`, including `count == 0`.
-    pub fn shard(self, count: usize, index: usize) -> Result<Self, BoundsError> {
-        if index >= count {
-            return Err(BoundsError::InvalidShard { count, index });
-        }
-        Ok(self.stride(count, index))
+    /// [`Order::new`](crate::Order::new) rejects `index >= count`, including `count == 0`.
+    #[must_use]
+    pub fn shard(self, count: usize, index: usize) -> Self {
+        Self::Shard { count, index, inner: Box::new(self) }
     }
 
     /// Transforms each source with `f`, preserving the sequence structure.
@@ -405,71 +414,6 @@ impl<T> Seq<T> {
     }
 }
 
-impl<T: Source> Seq<T> {
-    /// Validates and returns this configuration, dropping it on error.
-    /// This compiles a temporary order; use [`Order::new`] to retain compilation.
-    ///
-    /// ```
-    /// use dataorder::{Seq, ErrorKind};
-    /// let seq = (0..dataorder::MAX_DEPTH).fold(Seq::source(1), |s, _| s.take(1));
-    /// assert_eq!(seq.validate().unwrap_err().kind(), &ErrorKind::TooDeep);
-    /// let valid = Seq::source(10).validate()?;
-    /// assert_eq!(valid.check(), Ok(10));
-    /// # Ok::<(), dataorder::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    /// As for [`check`](Self::check).
-    pub fn validate(self) -> Result<Self, Error> {
-        self.check()?;
-        Ok(self)
-    }
-
-    /// Validates the configuration and returns its length without consuming it.
-    /// Performs the same checks as [`Order::new`], using the sources' lengths.
-    /// This builds and discards a compiled order; calling it before `Order::new`
-    /// repeats compilation. Use `Order::new` directly to retain the compiled order.
-    ///
-    /// ```
-    /// use dataorder::{ErrorKind, Seq};
-    /// assert_eq!(Seq::source(10).skip(3).check(), Ok(7));
-    /// let err = Seq::concat([Seq::source(10), Seq::source(5).take(6)]).check().unwrap_err();
-    /// assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 6, len: 5 });
-    /// assert_eq!(err.path(), [1]); // the second part of the concat
-    /// ```
-    ///
-    /// # Errors
-    /// Whatever [`Order::new`] would report.
-    pub fn check(&self) -> Result<usize, Error> {
-        Order::new(self.lens()).map(|o| o.len())
-    }
-
-    /// The same expression over the sources' lengths, cut off where [`Order::new`] stops
-    /// looking (one level beyond [`MAX_DEPTH`]), so that checking never recurses deeper than
-    /// compiling does.
-    pub(crate) fn lens(&self) -> Seq<usize> {
-        self.lens_at(1)
-    }
-
-    fn lens_at(&self, level: u32) -> Seq<usize> {
-        if level > MAX_DEPTH {
-            return Seq::Source(0);
-        }
-        let inner = |s: &Self| Box::new(s.lens_at(level + 1));
-        match self {
-            Self::Source(t) => Seq::Source(t.len()),
-            Self::Concat(parts) => Seq::Concat(parts.iter().map(|p| p.lens_at(level + 1)).collect()),
-            Self::Mix(parts) => Seq::Mix(parts.iter().map(|p| MixPart { seq: p.seq.lens_at(level + 1), sampling: p.sampling }).collect()),
-            Self::Shuffle { seed, inner: i } => Seq::Shuffle { seed: *seed, inner: inner(i) },
-            Self::Repeat { times, inner: i } => Seq::Repeat { times: *times, inner: inner(i) },
-            Self::Cycle { len, inner: i } => Seq::Cycle { len: *len, inner: inner(i) },
-            Self::Skip { n, inner: i } => Seq::Skip { n: *n, inner: inner(i) },
-            Self::Take { n, inner: i } => Seq::Take { n: *n, inner: inner(i) },
-            Self::Stride { step, offset, inner: i } => Seq::Stride { step: *step, offset: *offset, inner: inner(i) },
-        }
-    }
-}
-
 /// Map the supported, bounded-depth configuration using ordinary recursive ownership.
 fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> Result<Seq<U>, E> {
     Ok(match seq {
@@ -483,6 +427,8 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle(len),
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
         Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
+        Seq::Slice { start, end, inner } => map_sources(*inner, f)?.slice((start, end)),
         Seq::Stride { step, offset, inner } => map_sources(*inner, f)?.stride(step, offset),
+        Seq::Shard { count, index, inner } => map_sources(*inner, f)?.shard(count, index),
     })
 }

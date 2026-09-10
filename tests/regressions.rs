@@ -37,7 +37,7 @@ fn large_inline_sources_fit_a_thread_stack() {
 }
 
 #[test]
-fn public_validation_rejects_configurations_over_the_depth_limit() {
+fn order_rejects_configurations_over_the_depth_limit() {
     isolated("depth");
 }
 
@@ -71,13 +71,10 @@ fn isolated_case() {
             .stack_size(2 << 20)
             .spawn(|| {
                 let deep = || (0..MAX_DEPTH).fold(Seq::source(1usize), |s, _| s.take(1));
-                let seq = deep();
-                assert_eq!(seq.check().unwrap_err().kind(), &ErrorKind::TooDeep);
-                drop(seq);
-                assert_eq!(deep().validate().unwrap_err().kind(), &ErrorKind::TooDeep);
-                assert!(deep().shard(0, 0).is_err());
-                assert!(deep().slice(..=usize::MAX).is_err());
-                assert_eq!(Seq::source(3).validate().unwrap(), Seq::source(3));
+                assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
+                assert!(Order::new(deep().shard(0, 0)).is_err());
+                assert!(Order::new(deep().slice(..=usize::MAX)).is_err());
+                assert_eq!(Order::new(Seq::source(3)).unwrap().len(), 3);
             })
             .unwrap()
             .join()
@@ -197,14 +194,11 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
 #[test]
 fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
     let global = Seq::mix_with([(Seq::source(3), Sampling::Uniform), (Seq::source(1), Sampling::delayed(0.75))]);
-    assert_eq!(global.check(), Ok(4));
-    let shard = Seq::mix_with([
-        (Seq::source(3).shard(2, 0).unwrap(), Sampling::Uniform),
-        (Seq::source(1).shard(2, 0).unwrap(), Sampling::delayed(0.75)),
-    ]);
-    assert_eq!(shard.check(), Ok(3));
+    assert_eq!(Order::new(global.clone()).unwrap().len(), 4);
+    let shard = Seq::mix_with([(Seq::source(3).shard(2, 0), Sampling::Uniform), (Seq::source(1).shard(2, 0), Sampling::delayed(0.75))]);
+    assert_eq!(Order::new(shard).unwrap().len(), 3);
     for worker in 0..2 {
-        assert_eq!(global.clone().shard(2, worker).unwrap().check(), Ok(2));
+        assert_eq!(Order::new(global.clone().shard(2, worker)).unwrap().len(), 2);
     }
 }
 
@@ -213,13 +207,12 @@ fn empty_compaction_preserves_identity_and_error_paths() {
     let order = Order::new(Seq::mix([Seq::source(0), Seq::source(3), Seq::source(0), Seq::source(3)])).unwrap();
     assert_eq!(order.sources(), &[0, 3, 0, 3]);
     assert_eq!(order.iter(..).unwrap().map(|item| item.source_ordinal).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
-    let error = Seq::mix_with([
+    let error = Order::new(Seq::mix_with([
         (Seq::source(0), Sampling::Uniform),
         (Seq::source(3), Sampling::Uniform),
         (Seq::source(0), Sampling::delayed(f64::NAN)),
         (Seq::source(3), Sampling::Uniform),
-    ])
-    .check()
+    ]))
     .unwrap_err();
     assert_eq!(error.path(), &[2]);
     assert!(matches!(error.kind(), ErrorKind::InvalidSampling { .. }));

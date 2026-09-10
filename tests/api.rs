@@ -1,7 +1,8 @@
 //! The public surface, used as a downstream crate would: building configurations by hand,
 //! matching on non-exhaustive enums, errors with paths, cursors, sources.
 
-use dataorder::{Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source};
+use dataorder::{BoundsError, Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source};
+use std::ops::Bound;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shard {
@@ -28,6 +29,94 @@ fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
 }
 
 #[test]
+fn builders_accept_unresolved_sources() {
+    // No trait bounds, including Source or Clone, are needed to build the tree.
+    fn configuration<T>(first: T, second: T) -> Seq<T> {
+        Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix_with([(Seq::source(second), Sampling::Uniform)])])
+            .shuffle(7)
+            .repeat(2)
+            .cycle(50)
+            .skip(2)
+            .take(40)
+            .stride(2, 1)
+            .slice(1..=8)
+            .shard(3, 1)
+    }
+    struct Unresolved(&'static str);
+    let seq = configuration(Unresolved("10"), Unresolved("20"));
+    let mut visited = Vec::new();
+    let seq = seq.map(|source| {
+        visited.push(source.0);
+        source.0
+    });
+    assert_eq!(visited, ["10", "20"]);
+    let order = Order::new(seq.try_map(str::parse::<usize>).unwrap()).unwrap();
+    let expected = Order::new(configuration(10, 20)).unwrap();
+    assert_eq!(order.len(), 3);
+    assert_eq!(order.sources(), [10, 20]);
+    assert!(order.iter(..).unwrap().eq(expected.iter(..).unwrap()));
+}
+
+#[test]
+#[allow(clippy::reversed_empty_ranges)]
+fn bounds_are_validated_only_when_compiling() {
+    let invalid = [
+        (Seq::source("data").slice(5..3), BoundsError::Reversed { start: 5, end: 3 }),
+        (Seq::source("data").slice(..=usize::MAX), BoundsError::EndOverflow),
+        (Seq::source("data").slice((Bound::Excluded(usize::MAX), Bound::Unbounded)), BoundsError::StartOverflow),
+        (Seq::source("data").shard(0, 0), BoundsError::InvalidShard { count: 0, index: 0 }),
+        (Seq::source("data").shard(2, 2), BoundsError::InvalidShard { count: 2, index: 2 }),
+    ];
+    for (seq, bounds) in invalid {
+        // Mapping must preserve invalid nodes, including in an empty subtree.
+        let seq = Seq::concat([Seq::source("other"), seq.repeat(0)]).map(|_| 10usize);
+        let expected = ErrorKind::InvalidBounds { error: bounds };
+        let error = Order::new(seq.clone()).unwrap_err();
+        assert_eq!(error.kind(), &expected);
+        assert_eq!(error.path(), [1, 0]);
+        assert_eq!(Order::with_seed(seq.clone(), 7).unwrap_err(), error);
+        assert_eq!(Order::try_from(seq).unwrap_err(), error);
+    }
+    let seq = Seq::source("data").slice(..11);
+    assert_eq!(Order::new(seq.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::TakeOutOfRange { n: 11, len: 10 });
+    let seq = Seq::source("data").slice(11..);
+    assert_eq!(Order::new(seq.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 11, len: 10 });
+}
+
+#[test]
+fn slice_and_shard_count_as_configuration_nodes() {
+    for slice in [false, true] {
+        let chain = |levels| (1..levels).fold(Seq::source(10), |seq, _| if slice { seq.slice(..) } else { seq.shard(1, 0) });
+        assert_eq!(Order::new(chain(dataorder::MAX_DEPTH)).unwrap().len(), 10);
+        let error = Order::new(chain(dataorder::MAX_DEPTH + 1)).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::TooDeep);
+        assert_eq!(error.path().len(), dataorder::MAX_DEPTH as usize);
+    }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn unresolved_slice_and_shard_round_trip() {
+    let seq = Seq::source("data").slice((Bound::Excluded(1), Bound::Included(8))).shard(3, 1);
+    let json = serde_json::to_string(&seq).unwrap();
+    assert_eq!(
+        json,
+        r#"{"Shard":{"count":3,"index":1,"inner":{"Slice":{"start":{"Excluded":1},"end":{"Included":8},"inner":{"Source":"data"}}}}}"#
+    );
+    let back: Seq<String> = serde_json::from_str(&json).unwrap();
+    let order = Order::new(back.map(|_| 10usize)).unwrap();
+    assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [3, 6]);
+    let seq = Seq::source("data").slice(..=usize::MAX).shard(0, 0);
+    let json = serde_json::to_string(&seq).unwrap();
+    let back: Seq<String> = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, seq.map(str::to_owned));
+    assert_eq!(
+        Order::new(back.map(|_| 10usize)).unwrap_err().kind(),
+        &ErrorKind::InvalidBounds { error: BoundsError::InvalidShard { count: 0, index: 0 } }
+    );
+}
+
+#[test]
 fn hand_built_configuration() {
     let seq = Seq::Mix(vec![
         MixPart { seq: shard("a", 10).shuffle(1).cycle(75), sampling: Sampling::Uniform },
@@ -35,7 +124,6 @@ fn hand_built_configuration() {
             Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::delayed(0.5) }]).cycle(25),
         ),
     ]);
-    assert_eq!(seq.check(), Ok(100));
     // The builders take parts, pairs or bare sequences alike.
     let Seq::Mix(parts) = seq.clone() else { unreachable!() };
     assert_eq!(Seq::mix_with(parts), seq);
@@ -43,6 +131,7 @@ fn hand_built_configuration() {
     assert_eq!(mixed, Seq::mix_with([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
     assert_eq!(mixed, Seq::mix_with([shard("b", 40), shard("c", 5)]));
     let order: Order<Shard> = seq.try_into().unwrap();
+    assert_eq!(order.len(), 100);
     let all = names(order.iter(..).unwrap());
     assert_eq!(all.iter().filter(|e| e.0 == "a").count(), 75);
     assert_eq!(all.iter().filter(|e| e.0 == "b" || e.0 == "c").count(), 25);
@@ -76,7 +165,7 @@ fn errors_name_kind_and_path() {
 
 #[test]
 fn cursors_seek_skip_and_clone() {
-    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).shard(3, 2).unwrap()).unwrap();
+    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).shard(3, 2)).unwrap();
     let all = names(order.iter(..).unwrap());
     assert_eq!(all.len(), order.len());
     let mut cursor = order.iter(..).unwrap();
@@ -107,14 +196,14 @@ fn sources_through_pointers_and_lengths() {
         Seq::source(Box::new(shared.clone()) as Box<dyn Source>),
         Seq::source(Box::new(&*shared) as Box<dyn Source>),
     ]);
-    assert_eq!(seq.check(), Ok(22));
+    assert_eq!(Order::new(seq).unwrap().len(), 22);
     let mut n = 3usize;
-    assert_eq!(Seq::source(&mut n).check(), Ok(3));
+    assert_eq!(Order::new(Seq::source(&mut n)).unwrap().len(), 3);
     let lens = Seq::mix([Seq::source(4), Seq::source(6)]).map(|n| n * 2);
-    assert_eq!(lens.check(), Ok(20));
+    assert_eq!(Order::new(lens.clone()).unwrap().len(), 20);
     let opened = lens.clone().try_map(|n| if n < 10 { Ok(shard("x", n).map(|s| s.len)) } else { Err(n) });
     assert_eq!(opened, Err(12));
-    assert_eq!(lens.try_map(|n| Ok::<_, ()>(n / 2)).unwrap().check(), Ok(10));
+    assert_eq!(Order::new(lens.try_map(|n| Ok::<_, ()>(n / 2)).unwrap()).unwrap().len(), 10);
     // Salts pass through pointers; slices, arrays and vectors are sources of their elements.
     let boxed: Box<&Shard> = Box::new(&shared);
     assert_eq!(boxed.salt(), dataorder::salt("s"));
@@ -122,15 +211,14 @@ fn sources_through_pointers_and_lengths() {
     let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle(1)).unwrap();
     let letters: String = order.iter(..).unwrap().map(|item| item.source[item.record_index]).collect();
     assert_eq!(letters.len(), 5);
-    assert_eq!(Seq::source(&[1u8, 2, 3][..]).check(), Ok(3));
-    assert_eq!(Seq::source([0u8; 4]).check(), Ok(4));
+    assert_eq!(Order::new(Seq::source(&[1u8, 2, 3][..])).unwrap().len(), 3);
+    assert_eq!(Order::new(Seq::source([0u8; 4])).unwrap().len(), 4);
 }
 
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let seq =
-        Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1).unwrap();
+    let seq = Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
@@ -165,10 +253,9 @@ fn serde_round_trips_at_the_supported_depth_limit() {
             "Take" => seq.take(10),
             _ => Seq::mix([seq]),
         });
-        assert_eq!(seq.check(), Ok(10));
         let json = serde_json::to_string(&seq).unwrap();
         let back: Seq<usize> = serde_json::from_str(&json).unwrap();
         assert_eq!(back, seq, "{variant}");
-        assert_eq!(back.check(), Ok(10));
+        assert_eq!(Order::new(back).unwrap().len(), 10);
     }
 }

@@ -124,7 +124,7 @@ Choose each dataset's count with `.cycle(count)`, which repeats or truncates the
 sequence as needed. This gives a 75/25 mixture of one million records:
 
 ```rust
-use dataorder::Seq;
+use dataorder::{Order, Seq};
 
 let web = Seq::source(100_000);
 let code = Seq::source(500_000);
@@ -132,7 +132,8 @@ let seq = Seq::mix([
     web.shuffle(1).cycle(750_000),
     code.shuffle(2).cycle(250_000),
 ]);
-assert_eq!(seq.check(), Ok(1_000_000));
+assert_eq!(Order::new(seq)?.len(), 1_000_000);
+# Ok::<(), dataorder::Error>(())
 ```
 
 Each input keeps its order; existing shuffles are reseeded for additional epochs.
@@ -205,9 +206,9 @@ resume existing checkpoints with their original crate version.
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
-  returns `None` for invalid positions. `iter`, `seek`, `set_range`,
-  and `Seq::slice` return `Result` for range operations. `Seq::shard` returns
-  `Result` after checking worker counts and indices.
+  returns `None` for invalid positions. `iter`, `seek` and `set_range` return
+  `Result` for range operations. `Seq::slice` and `Seq::shard` store their bounds;
+  `Order::new` validates the ranges, worker counts and indices.
   Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
@@ -222,9 +223,9 @@ Invalid schedules expose further context through `Error::sampling_detail()`:
 non-finite parameters, invalid breakpoints, coefficient overflow, or the length,
 peak rate and limit behind excessive steepness.
 
-`Seq::check` performs compilation to validate a borrowed configuration;
-calling it before `Order::new` repeats that work.
-Use consuming `Seq::validate` to return the tree on success. Configurations support
+`Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders
+defer configuration validation to `Order::new`, where `T: Source` is required.
+Use `map` or `try_map` to resolve sources before compiling. Configurations support
 up to 16 levels (`MAX_DEPTH`); tree operations and ordinary Rust cleanup recurse
 with depth. Arbitrarily deep hand-built trees are unsupported.
 

@@ -39,23 +39,11 @@ struct Configuration {
     worker: usize,
 }
 impl Configuration {
-    fn validate(mut self) -> Result<Self, String> {
-        // Validate the worker's order: on 32-bit targets the unsharded sequence
-        // can exceed usize even though this worker's positions fit. Validate
-        // the configuration before cloning it.
-        let sharded = self.sequence.shard(self.workers, self.worker).map_err(|e| e.to_string())?;
-        let Seq::Stride { inner, .. } = sharded.validate().map_err(|e| e.to_string())? else {
-            unreachable!("shard preserves its configuration wrapper");
-        };
-        // Keep the original configuration as the checkpoint identity. Validation
-        // returns the configuration, not its simplified compiled representation.
-        self.sequence = *inner;
-        Ok(self)
-    }
-
-    // Called with validated configurations before cloning the tree.
+    // Keep the original configuration as the checkpoint identity. Compile the
+    // worker's shard: on 32-bit targets the unsharded sequence can exceed usize
+    // even though this worker's positions fit.
     fn order(&self) -> Result<Order<Dataset>, String> {
-        let seq = self.sequence.clone().shard(self.workers, self.worker).map_err(|e| e.to_string())?;
+        let seq = self.sequence.clone().shard(self.workers, self.worker);
         Order::with_seed(seq, self.seed).map_err(|e| e.to_string())
     }
 }
@@ -78,7 +66,6 @@ struct Worker {
 }
 impl Worker {
     fn new(configuration: Configuration) -> Result<Self, String> {
-        let configuration = configuration.validate()?;
         let order = configuration.order()?;
         let worker = Self { configuration, order, next_offset: 0 };
         // Check the actual checkpoint envelope before accepting any work, using the same parser
@@ -114,7 +101,6 @@ impl Worker {
     fn restore(json: &str, current: Configuration) -> Result<Self, String> {
         // Keep serde_json's default depth limit. Before calling this function,
         // load current source metadata from the storage system, not the checkpoint.
-        let current = current.validate()?;
         let saved: Checkpoint = serde_json::from_str(json).map_err(|e| e.to_string())?;
         if saved.format_version != FORMAT_VERSION {
             return Err("unsupported checkpoint format".into());
@@ -181,7 +167,7 @@ mod tests {
                 worker,
             };
             #[cfg(target_pointer_width = "32")]
-            assert!(matches!(config.sequence.check().unwrap_err().kind(), dataorder::ErrorKind::OrderTooLong { .. }));
+            assert!(matches!(Order::new(config.sequence.clone()).unwrap_err().kind(), dataorder::ErrorKind::OrderTooLong { .. }));
             let mut running = Worker::new(config.clone()).unwrap();
             assert_eq!(running.configuration, config);
             assert_eq!(running.order.len(), 1usize << 31);

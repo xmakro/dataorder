@@ -1,16 +1,16 @@
 //! Configuration errors, including their location in the sequence tree.
 
-use crate::Sampling;
 use crate::interleave::{MAX_TOTAL_LEN, SamplingError};
+use crate::{BoundsError, Sampling};
 use std::fmt;
 
-/// A configuration error from [`Order::new`](crate::Order::new) or [`Seq::check`](crate::Seq::check).
+/// A configuration error from [`Order::new`](crate::Order::new).
 /// [`kind`](Error::kind) describes the problem; [`path`](Error::path) identifies
 /// the node where it was found.
 ///
 /// ```
-/// use dataorder::{ErrorKind, Seq};
-/// let err = Seq::concat([Seq::source(10), Seq::source(5).take(6)]).check().unwrap_err();
+/// use dataorder::{ErrorKind, Order, Seq};
+/// let err = Order::new(Seq::concat([Seq::source(10), Seq::source(5).take(6)])).unwrap_err();
 /// assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 6, len: 5 });
 /// assert_eq!(err.path(), [1]);
 /// assert_eq!(err.to_string(), "cannot take 6 of 5 positions (at node 1)");
@@ -121,15 +121,20 @@ impl fmt::Display for SamplingDetail {
 /// The reason a configuration failed validation.
 ///
 /// ```
-/// use dataorder::{ErrorKind, Sampling, Seq};
-/// let err = Seq::source(10).stride(0, 0).check().unwrap_err();
+/// use dataorder::{ErrorKind, Order, Sampling, Seq};
+/// let err = Order::new(Seq::source(10).stride(0, 0)).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::ZeroStep));
-/// let err = Seq::mix_with([(Seq::source(10), Sampling::delayed(1.5))]).check().unwrap_err();
+/// let err = Order::new(Seq::mix_with([(Seq::source(10), Sampling::delayed(1.5))])).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::InvalidSampling { .. }));
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// Invalid slice bounds or shard parameters.
+    InvalidBounds {
+        /// The malformed range or shard bounds.
+        error: BoundsError,
+    },
     /// A `Skip` of `n` positions from a sequence of `len < n`. The length is that of an
     /// intermediate node, which may exceed `usize` on a 32-bit target.
     SkipOutOfRange {
@@ -180,6 +185,7 @@ pub enum ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidBounds { error } => error.fmt(f),
             Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
             Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
             Self::ZeroStep => write!(f, "stride step is zero"),

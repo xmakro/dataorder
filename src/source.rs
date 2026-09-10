@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 /// A dataset described by its length and an optional shuffle salt.
 ///
-/// Implement this trait for your dataset handle, then pass it to
-/// [`Seq::source`](crate::Seq::source). The order yields `(&handle, index)` without
+/// Implement this trait for your dataset handle when compiling a sequence with
+/// [`Order::new`](crate::Order::new). [`Seq`](crate::Seq) itself accepts any type.
+/// The order yields `(&handle, index)` without
 /// reading any records. [`salt`](Source::salt) lets datasets of the same length
 /// have distinct shuffle inputs.
 ///

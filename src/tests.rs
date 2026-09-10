@@ -60,6 +60,14 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
         }
         Seq::Skip { n, inner } => reachable(inner, range.start + n..range.end + n, out),
         Seq::Take { inner, .. } => reachable(inner, range, out),
+        Seq::Slice { start, inner, .. } => {
+            let start = match start {
+                std::ops::Bound::Included(start) => *start,
+                std::ops::Bound::Excluded(start) => start + 1,
+                std::ops::Bound::Unbounded => 0,
+            };
+            reachable(inner, range.start + start..range.end + start, out);
+        }
         Seq::Mix(parts) => {
             let mut nonempty = parts.iter().filter(|p| !eval(&p.seq, 0).unwrap().is_empty());
             if let (Some(part), None) = (nonempty.next(), nonempty.next()) {
@@ -69,8 +77,9 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
             }
         }
         Seq::Stride { step: 1, offset, inner } => reachable(inner, range.start + offset..range.end + offset, out),
+        Seq::Shard { count: 1, inner, .. } => reachable(inner, range, out),
         Seq::Cycle { len, inner } => cycled(inner, *len, out),
-        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::Stride { inner, .. } => whole(inner, out),
+        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::Stride { inner, .. } | Seq::Shard { inner, .. } => whole(inner, out),
     }
 }
 
@@ -195,6 +204,21 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             }
             v[..*n].to_vec()
         }
+        Seq::Slice { start, end, inner } => {
+            let (start, end) = crate::bounds::boundaries((*start, *end)).map_err(|error| root(ErrorKind::InvalidBounds { error }))?;
+            let seq = inner.clone().skip(start);
+            let seq = match end {
+                Some(end) => seq.take(end - start),
+                None => seq,
+            };
+            eval_at(&seq, ctx, depth)?
+        }
+        Seq::Shard { count, index, inner } => {
+            if index >= count {
+                return Err(root(ErrorKind::InvalidBounds { error: BoundsError::InvalidShard { count: *count, index: *index } }));
+            }
+            eval_at(&inner.clone().stride(*count, *index), ctx, depth)?
+        }
         Seq::Stride { step, offset, inner } => {
             if *step == 0 {
                 return Err(root(ErrorKind::ZeroStep));
@@ -253,7 +277,7 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
             match rng.below(3) {
                 0 => inner.skip(start),
                 1 => inner.take(rng.below(n + 1)),
-                _ => inner.slice(start..start + rng.below(n - start + 1)).unwrap(),
+                _ => inner.slice(start..start + rng.below(n - start + 1)),
             }
         }
         _ => {
@@ -274,7 +298,6 @@ fn random_configurations_match_reference() {
     for round in 0..800 {
         let seq = random_seq(&mut rng, 4, &lens);
         let seed = rng.next();
-        assert_eq!(seq.check(), Order::new(seq.clone()).map(|o| o.len()), "round {round}: check");
         let order = match Order::with_seed(seq.clone(), seed) {
             Ok(o) => o,
             Err(e) if e.is_sampling() => {
@@ -448,7 +471,7 @@ fn shards_partition_the_sequence() {
     let all = ids(order.iter(0..order.len()).unwrap());
     let mut from_shards = Vec::new();
     for w in 0..8 {
-        let shard = Order::new(base.clone().shard(8, w).unwrap()).unwrap();
+        let shard = Order::new(base.clone().shard(8, w)).unwrap();
         let elems = ids(shard.iter(0..shard.len()).unwrap());
         for (i, &e) in elems.iter().enumerate() {
             assert_eq!(e, all[w + 8 * i]);
@@ -474,7 +497,7 @@ fn map_keeps_the_order() {
             self.salt
         }
     }
-    let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).shard(3, 1).unwrap();
+    let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).shard(3, 1);
     let order = Order::new(seq.clone()).unwrap();
     let loaded = Order::new(seq.clone().map(|s| Loaded { salt: s.salt(), len: s.len })).unwrap();
     assert_eq!(loaded.sources().iter().map(|l| l.len).collect::<Vec<_>>(), [700, 50, 120]);
@@ -492,11 +515,11 @@ fn map_keeps_the_order() {
 #[test]
 fn errors() {
     let a = src(0, 10);
-    assert_eq!(Order::new(a.clone().slice(3..12).unwrap()).unwrap_err(), root(ErrorKind::TakeOutOfRange { n: 9, len: 7 }));
+    assert_eq!(Order::new(a.clone().slice(3..12)).unwrap_err(), root(ErrorKind::TakeOutOfRange { n: 9, len: 7 }));
     assert_eq!(Order::new(a.clone().skip(11)).unwrap_err(), root(ErrorKind::SkipOutOfRange { n: 11, len: 10 }));
     assert_eq!(Order::new(a.clone().take(11)).unwrap_err(), root(ErrorKind::TakeOutOfRange { n: 11, len: 10 }));
-    assert_eq!(Order::new(a.clone().slice(2..=9).unwrap()).unwrap().len(), 8);
-    assert_eq!(Order::new(a.clone().slice(10..).unwrap()).unwrap().len(), 0);
+    assert_eq!(Order::new(a.clone().slice(2..=9)).unwrap().len(), 8);
+    assert_eq!(Order::new(a.clone().slice(10..)).unwrap().len(), 0);
     assert_eq!(Order::new(a.clone().stride(0, 0)).unwrap_err(), root(ErrorKind::ZeroStep));
     // Beyond 64 bits on every target: a repeat of a repeat, and a concat of two halves of 2⁶⁴.
     assert_eq!(Order::new(a.clone().repeat(usize::MAX).repeat(usize::MAX)).unwrap_err().kind(), &ErrorKind::LengthOverflow);
@@ -542,7 +565,6 @@ fn cycles() {
         let order = Order::new(x().cycle(len)).unwrap();
         assert_eq!(order.len(), len);
         assert_eq!(ids(order.iter(..).unwrap()), all[..len], "cycle({len})");
-        assert_eq!(x().cycle(len).check(), Ok(len));
         assert_eq!(ids(Order::new(x().repeat(4).take(len)).unwrap().iter(..).unwrap()), all[..len]);
     }
     assert_eq!(ids(Order::new(x().cycle(99)).unwrap().iter(..).unwrap()), ids(Order::new(x().take(99)).unwrap().iter(..).unwrap()));
@@ -587,7 +609,6 @@ fn depth_limit() {
     let err = Order::new(chain(MAX_DEPTH + 1)).unwrap_err();
     assert_eq!(err.kind(), &ErrorKind::TooDeep);
     assert_eq!(err.path().len(), MAX_DEPTH as usize);
-    assert_eq!(chain(MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
 }
 
 /// Configurations just beyond the supported limit report the first invalid node.
@@ -596,17 +617,13 @@ fn configurations_over_the_depth_limit_are_rejected() {
     let run = || {
         let deep = || (0..MAX_DEPTH).fold(src(0, 10), |s, _| s.take(10));
         assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
-        let d = deep();
-        assert_eq!(d.check().unwrap_err().kind(), &ErrorKind::TooDeep);
-        drop(d);
         let bad = || src(0, 10).take(99);
         let out_of_range = ErrorKind::TakeOutOfRange { n: 99, len: 10 };
         assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
         assert_eq!(Order::new(Seq::mix([bad(), deep()])).unwrap_err().kind(), &out_of_range);
         assert_eq!(Order::new(deep().stride(0, 0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
         let first_too_deep = Seq::concat([deep(), bad()]);
-        assert_eq!(first_too_deep.check().unwrap_err().kind(), &ErrorKind::TooDeep);
-        drop(first_too_deep);
+        assert_eq!(Order::new(first_too_deep).unwrap_err().kind(), &ErrorKind::TooDeep);
     };
     std::thread::Builder::new().stack_size(2 << 20).spawn(run).unwrap().join().unwrap();
 }
@@ -629,7 +646,7 @@ fn empty_parts_do_not_affect_shuffles_above() {
     same(Seq::concat([x(), src(1, 50)]).take(100).shuffle(1));
     same(Seq::concat([src(1, 50), x()]).skip(50).shuffle(1));
     same(Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100).shuffle(1));
-    same(Seq::concat([src(1, 50), x(), src(2, 7)]).slice(50..150).unwrap().shuffle(1));
+    same(Seq::concat([src(1, 50), x(), src(2, 7)]).slice(50..150).shuffle(1));
     same(Seq::concat([Seq::concat([src(1, 5), x()]), src(2, 3)]).skip(5).take(100).shuffle(1));
     same(Seq::concat([src(1, 5), Seq::concat([x(), src(2, 3)])]).take(105).skip(5).shuffle(1));
     let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter(..).unwrap());
@@ -648,9 +665,9 @@ fn folds() {
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
     let a = || src(0, 100);
     assert!(
-        matches!(root(a().shard(8, 1).unwrap().shard(4, 1).unwrap()), Node::Stride { step: 32, offset: 9, len: 3, ref child } if matches!(**child, Node::Source { .. }))
+        matches!(root(a().shard(8, 1).shard(4, 1)), Node::Stride { step: 32, offset: 9, len: 3, ref child } if matches!(**child, Node::Source { .. }))
     );
-    assert!(matches!(root(a().shard(8, 1).unwrap().shard(4, 1).unwrap().shard(2, 1).unwrap()), Node::Source { offset: 41, len: 1, .. }));
+    assert!(matches!(root(a().shard(8, 1).shard(4, 1).shard(2, 1)), Node::Source { offset: 41, len: 1, .. }));
     assert!(
         matches!(root(a().shuffle(1).skip(10).stride(3, 2)), Node::Stride { step: 3, offset: 12, len: 30, ref child } if matches!(**child, Node::Shuffle { .. }))
     );
@@ -664,7 +681,7 @@ fn folds() {
     assert!(matches!(root(cat().skip(10).take(20)), Node::Source { src: 1, offset: 0, len: 20 }));
     assert!(matches!(root(cat().skip(10)), Node::Concat { ref children, .. } if children.len() == 2));
     assert!(
-        matches!(root(cat().slice(5..35).unwrap()), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
+        matches!(root(cat().slice(5..35)), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
     );
     assert_eq!(
         ids(Order::new(cat().skip(15).stride(7, 3)).unwrap().iter(..).unwrap()),
@@ -834,6 +851,11 @@ fn orders_longer_than_usize_are_rejected() {
         assert_eq!(err, root(ErrorKind::OrderTooLong { len: usize::MAX as u64 + 1 }));
         let intermediate = Seq::concat([src(0, usize::MAX), src(1, 1)]).take(10);
         assert_eq!(Order::new(intermediate).unwrap().len(), 10);
+        let intermediate = || Seq::concat([src(0, usize::MAX), src(1, 1)]);
+        assert_eq!(Order::new(intermediate().slice(..10)).unwrap().len(), 10);
+        let tail = Order::new(intermediate().slice(usize::MAX..)).unwrap();
+        assert_eq!(ids(tail.iter(..).unwrap()), [(1, 0)]);
+        assert_eq!(Order::new(intermediate().slice(..).shard(2, 0)).unwrap().len(), (usize::MAX / 2) + 1);
         let err = Order::new(Seq::concat([src(0, usize::MAX), src(1, 1)]).skip(usize::MAX).skip(3)).unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 3, len: 1 });
     }
@@ -841,7 +863,7 @@ fn orders_longer_than_usize_are_rejected() {
 
 #[test]
 fn cloned_cursor_continues_independently() {
-    let order = Order::new(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).shard(3, 1).unwrap()).unwrap();
+    let order = Order::new(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).shard(3, 1)).unwrap();
     let n = order.len();
     let mut c = order.iter(0..n).unwrap();
     let head = ids(c.by_ref().take(100));
@@ -868,11 +890,11 @@ fn types_are_send_and_sync() {
 #[test]
 fn slice_bounds() {
     let a = || src(0, 10);
-    assert_eq!(ids(Order::new(a().slice(..=2).unwrap()).unwrap().iter(0..3).unwrap()), vec![(0, 0), (0, 1), (0, 2)]);
-    assert_eq!(ids(Order::new(a().slice(8..).unwrap()).unwrap().iter(0..2).unwrap()), vec![(0, 8), (0, 9)]);
-    assert_eq!(ids(Order::new(a().slice(3..=3).unwrap()).unwrap().iter(0..1).unwrap()), vec![(0, 3)]);
-    assert_eq!(Order::new(a().slice(..).unwrap()).unwrap().len(), 10);
-    assert_eq!(Order::new(a().slice(4..4).unwrap()).unwrap().len(), 0);
+    assert_eq!(ids(Order::new(a().slice(..=2)).unwrap().iter(0..3).unwrap()), vec![(0, 0), (0, 1), (0, 2)]);
+    assert_eq!(ids(Order::new(a().slice(8..)).unwrap().iter(0..2).unwrap()), vec![(0, 8), (0, 9)]);
+    assert_eq!(ids(Order::new(a().slice(3..=3)).unwrap().iter(0..1).unwrap()), vec![(0, 3)]);
+    assert_eq!(Order::new(a().slice(..)).unwrap().len(), 10);
+    assert_eq!(Order::new(a().slice(4..4)).unwrap().len(), 0);
 }
 
 /// Schedules at the steep end of what a mix accepts, at lengths near its limit: seeks and
@@ -905,8 +927,8 @@ fn steep_schedule_at_scale() {
 #[test]
 fn mix_with_explicit_counts() {
     let seq = Seq::mix([src(0, 100).shuffle(1).cycle(1800), src(1, 5000).shuffle(2).cycle(1200)]);
-    assert_eq!(seq.check(), Ok(3000));
     let order = Order::new(seq).unwrap();
+    assert_eq!(order.len(), 3000);
     let all = ids(order.iter(0..3000).unwrap());
     assert_eq!(all.iter().filter(|e| e.0 == 0).count(), 1800);
     assert_eq!(all.iter().filter(|e| e.0 == 1).count(), 1200);

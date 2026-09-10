@@ -16,11 +16,13 @@ fn standard_iterator_position_is_available() {
 #[allow(clippy::reversed_empty_ranges)]
 fn checked_access_preserves_cursor_on_errors() {
     for (count, index) in [(0, 0), (2, 2), (1, usize::MAX)] {
-        let error = Seq::source(10).shard(count, index).unwrap_err();
-        assert_eq!(error, BoundsError::InvalidShard { count, index });
-        assert_eq!(error.to_string(), format!("shard index {index} out of range for {count} shards"));
+        let error = Order::new(Seq::source(10).shard(count, index)).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::InvalidBounds { error: BoundsError::InvalidShard { count, index } });
+        assert_eq!(error.to_string(), format!("shard index {index} out of range for {count} shards (at the root)"));
     }
-    assert_eq!(Seq::source(10).shard(3, 1).unwrap(), Seq::source(10).stride(3, 1));
+    let shard = Order::new(Seq::source(10).shard(3, 1)).unwrap();
+    let stride = Order::new(Seq::source(10).stride(3, 1)).unwrap();
+    assert!(shard.iter(..).unwrap().eq(stride.iter(..).unwrap()));
     let order = Order::new(Seq::mix([Seq::source(10).shuffle(1), Seq::source(7)])).unwrap();
     assert_eq!(order.get(16), (&order).into_iter().nth(16));
     assert_eq!(order.get(17), None);
@@ -32,10 +34,16 @@ fn checked_access_preserves_cursor_on_errors() {
     assert_eq!(order.iter((Bound::Excluded(usize::MAX), Bound::Unbounded)).unwrap_err(), BoundsError::StartOverflow);
     assert_eq!(order.iter(10..9).unwrap_err(), BoundsError::Reversed { start: 10, end: 9 });
     assert_eq!(order.iter(..18).unwrap_err(), BoundsError::OutOfBounds { end: 18, len: 17 });
-    assert_eq!(Seq::source(10).slice(..=usize::MAX).unwrap_err(), BoundsError::EndOverflow);
-    assert_eq!(Seq::source(10).slice(5..3).unwrap_err(), BoundsError::Reversed { start: 5, end: 3 });
-    assert_eq!(Seq::source(10).slice(3..=5).unwrap().check(), Ok(3));
-    assert!(Seq::source(10).slice(..11).unwrap().check().is_err());
+    assert_eq!(
+        Order::new(Seq::source(10).slice(..=usize::MAX)).unwrap_err().kind(),
+        &ErrorKind::InvalidBounds { error: BoundsError::EndOverflow }
+    );
+    assert_eq!(
+        Order::new(Seq::source(10).slice(5..3)).unwrap_err().kind(),
+        &ErrorKind::InvalidBounds { error: BoundsError::Reversed { start: 5, end: 3 } }
+    );
+    assert_eq!(Order::new(Seq::source(10).slice(3..=5)).unwrap().len(), 3);
+    assert!(Order::new(Seq::source(10).slice(..11)).is_err());
     let mut c = order.iter(3..10).unwrap();
     c.next(); // Initialize the cursor before testing rollback.
     let expected = c.clone().collect::<Vec<_>>();
@@ -110,7 +118,7 @@ fn items_copy_without_cloning_source_handles() {
 fn sharding_preserves_global_partition_not_worker_mixture() {
     let seq = Seq::mix([Seq::source(4).shuffle(1), Seq::source(4).shuffle(2)]);
     for worker in 0..2 {
-        let order = Order::new(seq.clone().shard(2, worker).unwrap()).unwrap();
+        let order = Order::new(seq.clone().shard(2, worker)).unwrap();
         assert!(order.iter(..).unwrap().all(|item| item.source_ordinal == worker));
     }
 }

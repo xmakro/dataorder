@@ -354,20 +354,19 @@ fn typical() {
     measure("mix(100 × shuffled)", Seq::mix(shuffled(100, m)), 5 * m);
     measure("mix(100 × shuffled, 20% scheduled)", Seq::mix_with(scheduled(100, m)), 5 * m);
     measure("mix(1000 × shuffled, 20% scheduled)", Seq::mix_with(scheduled(1000, 100_000)), 5 * m);
-    measure("↑ .shard(8, 0)", Seq::mix_with(scheduled(100, m)).shard(8, 0).unwrap(), m);
-    measure("↑ .shard(512, 0)", Seq::mix_with(scheduled(100, m)).shard(512, 0).unwrap(), 100_000);
+    measure("↑ .shard(8, 0)", Seq::mix_with(scheduled(100, m)).shard(8, 0), m);
+    measure("↑ .shard(512, 0)", Seq::mix_with(scheduled(100, m)).shard(512, 0), 100_000);
     let nested = Seq::mix_with([
         (Seq::concat([src(0, m).shuffle(1), src(1, m).shuffle(2)]).shuffle(3), Sampling::Uniform),
         (src(2, m).shuffle(4).take(500_000), Sampling::DelayedLinear { start: 0.5, full: 0.5 }),
         (src(3, m).shuffle(5).repeat(2), Sampling::DelayedLinear { start: 0.1, full: 0.4 }),
     ])
     .repeat(3)
-    .shard(4, 1)
-    .unwrap();
+    .shard(4, 1);
     measure("repeat(3, mix(3 nested)).shard(4, 1)", nested, m);
     let two_mixes = || Seq::mix([Seq::mix(shuffled(100, m)), Seq::mix((100..200).map(|i| src(i, m).shuffle(i as u64 + 1)))]);
     measure("mix(mix(100 × shuffled) × 2)", two_mixes(), 5 * m);
-    measure("mix(mix(100 × shuffled) × 2).shard(8, 0)", two_mixes().shard(8, 0).unwrap(), m);
+    measure("mix(mix(100 × shuffled) × 2).shard(8, 0)", two_mixes().shard(8, 0), m);
     measure("shuffle(mix(100 × source 1e6))  [slow path]", Seq::mix((0..100).map(|i| src(i, m))).shuffle(9), 100_000);
 }
 

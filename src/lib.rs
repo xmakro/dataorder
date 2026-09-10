@@ -50,7 +50,8 @@
 //! Implement [`Source`] for your dataset handles, or use slices, arrays or vectors.
 //! `Order` owns its sources and yields references to them. A `Seq` can be cloned,
 //! compared, hashed, [mapped to another source type](Seq::map) and optionally
-//! [serialized](#feature-flags).
+//! [serialized](#feature-flags). `Seq<T>` accepts any `T`; only constructing an
+//! `Order<T>` requires `T: Source`.
 //!
 //! # Semantics
 //!
@@ -67,6 +68,8 @@
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
 //! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
+//! | [`Slice`](Seq::Slice) | Range length | Positions within the given bounds |
+//! | [`Shard`](Seq::Shard) | Number of worker positions | Child position `index + p × count` |
 //! | [`Stride`](Seq::Stride) | Number of selected positions | Child position `offset + p × step` |
 //!
 //! A mix uses every element of every part once. Set each part's exact count with
@@ -119,8 +122,7 @@
 //! # Validation and limits
 //!
 //! [`Order::new`] returns an [`Error`] with a kind and a path to the invalid node.
-//! [`Seq::check`] performs the same validation without consuming the configuration.
-//! [`Seq::validate`] consumes it, returning it on success. Validation includes parts
+//! All sequence builders defer validation until an order is built, including parts
 //! that would contribute no elements, such as the child of `repeat(0)`.
 //! Configurations support up to [`MAX_DEPTH`] levels and use ordinary recursive
 //! traversal and destruction. Arbitrarily deep hand-built trees are unsupported.
@@ -133,7 +135,7 @@
 //! Lengths and positions use `usize` in the public API and `u64` internally. The final
 //! order must fit in `usize`; on a 32-bit target, intermediate nodes may be longer.
 //! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
-//! [`MAX_DEPTH`]. [`Seq`] documents stack use and the bounds checked by its builders.
+//! [`MAX_DEPTH`]. [`Seq`] documents stack use; its builders work with any source type.
 //!
 //! Compilation simplifies nodes without changing their order. It flattens nested
 //! concatenations, removes empty parts, merges nested strides, and folds skips and
@@ -143,8 +145,8 @@
 //! through [`Order::sources`], including those whose nodes were removed.
 //!
 //! [`Order::get`] returns `None` for an invalid position. [`Order::iter`],
-//! [`Cursor::seek`], [`Cursor::set_range`], [`Seq::slice`] and [`Seq::shard`] report
-//! [`BoundsError`] instead of panicking on invalid bounds. Failed cursor operations
+//! [`Cursor::seek`] and [`Cursor::set_range`] report [`BoundsError`] instead of
+//! panicking on invalid bounds. Failed cursor operations
 //! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;
 //! `position(predicate)` remains the standard consuming iterator search.
 //! Every [`Item`] includes its source's ordinal in [`Order::sources`], so equal and
@@ -228,8 +230,8 @@
 //!   not fit on a 32-bit machine.
 //! - `serde_json`'s recursion limit also counts surrounding objects and arrays, so a
 //!   configuration embedded in a larger document can reach that parser limit.
-//!   Deserialization does not validate configuration depth; use [`Order::new`]
-//!   or [`Seq::check`] before using a loaded configuration.
+//!   Deserialization does not validate the configuration. Resolve its sources with
+//!   [`Seq::map`] or [`Seq::try_map`] as needed, then compile it with [`Order::new`].
 //!
 //! # Stability
 //!
@@ -284,10 +286,10 @@ pub(crate) fn float_bits(x: f64) -> u64 {
 /// See [`Seq`] for stack use.
 ///
 /// ```
-/// use dataorder::{ErrorKind, MAX_DEPTH, Seq};
+/// use dataorder::{ErrorKind, MAX_DEPTH, Order, Seq};
 /// let chain = |levels: u32| (1..levels).fold(Seq::source(10), |s, _| s.take(10));
-/// assert_eq!(chain(MAX_DEPTH).check(), Ok(10));
-/// assert_eq!(chain(MAX_DEPTH + 1).check().unwrap_err().kind(), &ErrorKind::TooDeep);
+/// assert_eq!(Order::new(chain(MAX_DEPTH)).map(|order| order.len()), Ok(10));
+/// assert_eq!(Order::new(chain(MAX_DEPTH + 1)).unwrap_err().kind(), &ErrorKind::TooDeep);
 /// ```
 pub const MAX_DEPTH: u32 = 16;
 
@@ -299,12 +301,12 @@ pub const MAX_DEPTH: u32 = 16;
 /// mixes can produce longer orders.
 ///
 /// ```
-/// use dataorder::{ErrorKind, MAX_MIX_LEN, Seq};
+/// use dataorder::{ErrorKind, MAX_MIX_LEN, Order, Seq};
 /// assert_eq!(MAX_MIX_LEN, 1 << 46);
 /// let long = Seq::mix([Seq::source(1 << 30).repeat(1 << 16), Seq::source(1)]);
-/// assert_eq!(long.check().unwrap_err().kind(), &ErrorKind::MixTooLong);
+/// assert_eq!(Order::new(long).unwrap_err().kind(), &ErrorKind::MixTooLong);
 /// let repeated = Seq::mix([Seq::source(1 << 30), Seq::source(1)]).repeat(3);
-/// assert_eq!(repeated.check(), Ok(3 * (1 << 30) + 3));
+/// assert_eq!(Order::new(repeated).map(|order| order.len()), Ok(3 * (1 << 30) + 3));
 /// ```
 pub const MAX_MIX_LEN: u64 = interleave::MAX_TOTAL_LEN;
 

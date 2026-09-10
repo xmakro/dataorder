@@ -2,6 +2,16 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Seq::check` and `Seq::validate`; all sequence builders
+  accept any `T` and defer configuration checks to `Order::new` or
+  `Order::with_seed`, which require `T: Source`. `Seq::slice` and `Seq::shard`
+  now return `Seq` directly and store `Slice { start, end, inner }` and
+  `Shard { count, index, inner }` variants. Malformed bounds produce
+  `ErrorKind::InvalidBounds` with a node path during compilation. Each new
+  variant adds one level of configuration depth, including an unbounded slice.
+  Serialized builder output uses these new variants; existing `Skip`, `Take`
+  and `Stride` configurations remain supported.
+
 - **Breaking:** use `Item { source_ordinal, source, record_index }` for both
   `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,
   `Order::source_index`, `Cursor::indexed` and `IndexedCursor`. Every result
@@ -17,8 +27,8 @@
 - **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
   `Seq::map` or `Seq::try_map` before compilation.
 - **Breaking:** make checked access the default and remove the corresponding `try_`
-  aliases. `Order::get` returns `Option`; `Order::iter`, cursor
-  `seek`/`set_range`, and `Seq::slice`/`shard` return `Result`. Invalid cursor
+  aliases. `Order::get` returns `Option`; `Order::iter` and cursor
+  `seek`/`set_range` return `Result`. Invalid cursor
   operations preserve its state.
 
 - **Breaking:** reduce `MAX_DEPTH` from 256 to 16 and remove `Seq::dispose`.
