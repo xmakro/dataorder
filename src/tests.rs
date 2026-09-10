@@ -906,7 +906,7 @@ fn edge_cases() {
     assert_eq!(format!("{order:?}"), "Order { len: 5, seed: 77, sources: [Src { id: 0, len: 5 }] }");
     let mut c = order.iter(1..4).unwrap();
     assert_eq!(format!("{c:?}"), "Cursor { position: 1, end: 4 }");
-    assert_eq!(c.remaining(), 3);
+    assert_eq!(c.len(), 3);
     assert_eq!(c.next().map(|item| (item.source.id, item.record_index)), Some((0, 1)));
     c.seek(4).unwrap();
     assert!(c.next().is_none());

@@ -152,7 +152,7 @@ fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
                 }
             }
         }
-        if (cursor.offset(), cursor.remaining()) != (pos, end - pos) {
+        if (cursor.offset(), cursor.len()) != (pos, end - pos) {
             return Err(format!("{op:?}: cursor state differs from model"));
         }
     }

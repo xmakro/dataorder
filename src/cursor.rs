@@ -21,6 +21,7 @@ use std::ops::{Bound, Range, RangeBounds};
 /// Created by [`Order::iter`], it yields [`Item`] values with explicit source ordinals.
 /// Iteration moves forward; [`seek`](Cursor::seek) can move to an earlier or later
 /// position, and [`set_range`](Cursor::set_range) selects a new range.
+/// [`len`](ExactSizeIterator::len) reports how many elements remain.
 ///
 /// [`nth`](Iterator::nth) skips without returning intermediate elements.
 /// [`count`](Iterator::count) uses the remaining length; [`last`](Iterator::last)
@@ -52,12 +53,6 @@ impl<'a, T> Cursor<'a, T> {
     #[must_use]
     pub fn offset(&self) -> usize {
         self.pos as usize
-    }
-
-    /// Elements left until the end of the range.
-    #[must_use]
-    pub fn remaining(&self) -> usize {
-        (self.end - self.pos) as usize
     }
 
     /// Moves to absolute order position `pos`, keeping the current range end.
@@ -196,12 +191,13 @@ impl<'a, T> Iterator for Cursor<'a, T> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining(), Some(self.remaining()))
+        let len = self.len();
+        (len, Some(len))
     }
 
     /// The elements left, without walking them.
     fn count(self) -> usize {
-        self.remaining()
+        self.len()
     }
 
     /// The last element of the range, by random access without walking there.
@@ -210,7 +206,12 @@ impl<'a, T> Iterator for Cursor<'a, T> {
     }
 }
 
-impl<T> ExactSizeIterator for Cursor<'_, T> {}
+impl<T> ExactSizeIterator for Cursor<'_, T> {
+    /// Elements left until the end of the range.
+    fn len(&self) -> usize {
+        (self.end - self.pos) as usize
+    }
+}
 
 impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 

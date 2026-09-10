@@ -2,6 +2,9 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Cursor::remaining`; use `ExactSizeIterator::len()`
+  (`cursor.len()`) to read the remaining element count.
+
 - Return lengths and `u8` repetition levels up recursive compiler and folding
   visits. These summaries are temporary; repeat nodes retain their own level for
   reseeding. Ordering outputs and public signatures are unchanged by this refactor.
