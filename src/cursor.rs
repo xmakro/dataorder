@@ -19,8 +19,8 @@ use std::ops::{Bound, Range, RangeBounds};
 /// A seekable iterator over a range of an [`Order`].
 ///
 /// Created by [`Order::iter`] or [`Order::cursor`], it yields [`Item`] values with explicit source ordinals.
-/// Iteration moves forward; [`seek`](Cursor::seek) can move to an earlier or later
-/// position, and [`set_range`](Cursor::set_range) selects a new range.
+/// Iteration moves forward; [`reset`](Cursor::reset) replaces the remaining range
+/// using absolute order positions and moves to its start.
 /// [`len`](ExactSizeIterator::len) reports how many elements remain.
 ///
 /// [`nth`](Iterator::nth) skips without returning intermediate elements.
@@ -55,55 +55,33 @@ impl<'a, T> Cursor<'a, T> {
         self.pos
     }
 
-    /// Moves to absolute order position `pos`, keeping the current range end.
-    /// `pos` may be before the range's original start. Seeking to the end exhausts
-    /// the cursor; seeking backward lets iteration resume.
+    /// Replaces the remaining range and moves to its start.
+    /// Bounds use absolute positions in the original order, as in [`Order::cursor`].
+    /// An unbounded start means 0; an unbounded end means the order's length.
+    /// `reset(..)` restarts the whole order, and `reset(pos..)` reads from `pos`
+    /// to the order's end. Use `reset(pos..end)` to keep a chosen endpoint.
+    /// The previous range does not constrain the new one.
     ///
-    /// Forward seeks skip; backward seeks reposition the cursor tree. Both reuse
+    /// Forward moves skip; backward moves reposition the cursor tree. Both reuse
     /// existing buffers within the current child. Entering another concat child
     /// creates fresh state; entering a previously unvisited mix part can also allocate.
-    /// Use this method for repeated random access.
-    ///
-    /// ```
-    /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::mix([Seq::source(100).shuffle(1), Seq::source(50)]))?;
-    /// let mut cursor = order.cursor(100..)?;
-    /// cursor.seek(120)?;
-    /// assert_eq!(cursor.offset(), 120);
-    /// assert_eq!(cursor.next(), order.get(120));
-    /// cursor.seek(7)?; // Absolute position, even before the original range start.
-    /// assert_eq!(cursor.len(), 150 - 7);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// On error, the cursor is unchanged.
-    ///
-    /// # Errors
-    /// [`BoundsError::SeekOutOfBounds`] when `pos` exceeds the current range end.
-    pub fn seek(&mut self, pos: usize) -> Result<(), BoundsError> {
-        if pos > self.end {
-            return Err(BoundsError::SeekOutOfBounds { pos, end: self.end });
-        }
-        self.reposition(pos);
-        Ok(())
-    }
-
-    /// Selects a new range of the order and moves to its start.
-    /// Reuses existing buffers, like [`seek`](Cursor::seek), so one cursor can serve
-    /// multiple ranges. The range may extend beyond the previous range's end.
+    /// Use this method for repeated random access or to visit multiple ranges.
     /// Empty ranges are positioned like other ranges and can allocate.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(10).shuffle(1))?;
     /// let all: Vec<usize> = order.iter().map(|item| item.record_index).collect();
-    /// let mut cursor = order.cursor(2..4)?;
-    /// assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), all[2..4]);
-    /// cursor.set_range(7..)?;
+    /// let mut cursor = order.cursor(2..6)?;
+    /// cursor.reset(4..6)?; // Keep the chosen endpoint explicitly.
+    /// assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), all[4..6]);
+    /// cursor.reset(7..)?; // Continue through the order's end, beyond the old range.
     /// assert_eq!(cursor.len(), 3);
     /// assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), all[7..]);
-    /// cursor.set_range(..=0)?;
-    /// assert_eq!(cursor.map(|item| item.record_index).collect::<Vec<_>>(), all[..1]);
+    /// cursor.reset(..=0)?;
+    /// assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), all[..1]);
+    /// cursor.reset(..)?; // Restart the whole order.
+    /// assert_eq!(cursor.map(|item| item.record_index).collect::<Vec<_>>(), all);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -111,7 +89,7 @@ impl<'a, T> Cursor<'a, T> {
     ///
     /// # Errors
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
-    pub fn set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
+    pub fn reset(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
         let range = resolve_range(range, self.order.len())?;
         self.end = range.end;
         self.reposition(range.start);

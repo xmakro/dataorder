@@ -2,6 +2,15 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** replace `Cursor::seek` and `Cursor::set_range` with
+  `Cursor::reset(range)`. Each reset replaces the remaining range and moves to its
+  start, using absolute order positions. Replace `set_range(range)` with
+  `reset(range)`; replace `seek(pos)` with `reset(pos..end)` to retain a chosen
+  endpoint, or `reset(pos..)` to read through the order's end. `reset(..)` restarts
+  the whole order. Remove `BoundsError::SeekOutOfBounds`; resets use the same
+  range validation as `Order::cursor`, and failures leave the cursor unchanged.
+  Buffer reuse, ordering and serialized configurations are unchanged.
+
 - **Breaking:** rename `ORDERING_VERSION` to `CRATE_VERSION`. Its value remains
   the linked crate's package version, including patches that preserve ordering.
   Use the renamed constant for conservative exact-version checkpoint checks.

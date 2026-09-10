@@ -208,14 +208,17 @@ resume existing checkpoints with their original crate version.
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
-  returns `None` for invalid positions. `cursor`, `seek` and `set_range` return
+  returns `None` for invalid positions. `cursor` and `reset` return
   `Result` for range operations. `step_by(0)` is an error when the order is built.
   Failed cursor operations leave their state unchanged.
 - **Lengths must fit `usize`.** Every intermediate sequence must fit, even when a
   later `take`, `cycle`, or `step_by` would shorten it. Overflow is reported at the
   offending node.
 - **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range.
-  For repeated seeks or ranges, reuse the `Cursor` with `seek` or `set_range` to reuse allocated buffers.
+  Use `reset(range)?` to replace the remaining range and reuse allocated buffers.
+  Every range uses absolute order positions: `reset(pos..end)` keeps a chosen
+  endpoint, `reset(pos..)` reads through the order's end, and `reset(..)` restarts
+  the whole order. The previous range does not constrain the new one.
   Construction and moves to empty ranges can allocate. `last()` uses a direct lookup
   and can allocate independently of the cursor's buffers.
   Changing concat children creates fresh state. Clones copy current state without

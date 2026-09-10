@@ -194,32 +194,67 @@ fn full_iteration_covers_empty_and_maximum_lengths() {
             assert_eq!(cursor.offset(), 0);
             assert_eq!(cursor.len(), len);
             assert_eq!(cursor.next(), order.get(0));
-            cursor.seek(len).unwrap();
+            cursor.reset(len..).unwrap();
             assert_eq!(cursor.len(), 0);
             assert_eq!(cursor.next(), None);
-            cursor.seek(len.saturating_sub(1)).unwrap();
+            cursor.reset(len.saturating_sub(1)..).unwrap();
             assert_eq!(cursor.next(), order.get(len.saturating_sub(1)));
-            cursor.set_range(..).unwrap();
+            cursor.reset(..).unwrap();
             assert_eq!(cursor.count(), len);
         }
     }
 }
 
 #[test]
-fn cursors_seek_skip_and_clone() {
+fn resets_replace_remaining_ranges_in_order_coordinates() {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+
+    let mix = Seq::mix([shard("a", 250).shuffle(1), shard("b", 150)]);
+    for seq in [shard("a", 400), mix.clone(), mix.shuffle(2)] {
+        let order = Order::new(seq).unwrap();
+        let mut cursor = order.cursor(100..200).unwrap();
+        assert_eq!(cursor.next(), order.get(100));
+        for (bounds, expected) in [
+            ((Included(150), Excluded(200)), 150..200),
+            ((Included(300), Excluded(400)), 300..400),
+            ((Included(150), Unbounded), 150..400),
+            ((Included(100), Excluded(100)), 100..100),
+            ((Included(100), Included(100)), 100..101),
+            ((Unbounded, Included(2)), 0..3),
+            ((Excluded(1), Included(3)), 2..4),
+            ((Unbounded, Unbounded), 0..400),
+            ((Included(400), Unbounded), 400..400),
+            ((Unbounded, Unbounded), 0..400),
+        ] {
+            cursor.reset(bounds).unwrap();
+            assert_eq!(cursor.offset(), expected.start);
+            assert_eq!(cursor.len(), expected.len());
+            assert_eq!(cursor.clone().count(), expected.len());
+            assert_eq!(cursor.clone().last(), expected.clone().last().and_then(|pos| order.get(pos)));
+            let items: Vec<_> = expected.clone().map(|pos| order.get(pos).unwrap()).collect();
+            assert_eq!(cursor.by_ref().collect::<Vec<_>>(), items);
+            assert_eq!(cursor.offset(), expected.end);
+            assert_eq!(cursor.len(), 0);
+            assert_eq!(cursor.next(), None);
+        }
+    }
+}
+
+#[test]
+fn cursors_reset_skip_and_clone() {
     let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).skip(2).step_by(3)).unwrap();
     let all = names(order.iter());
     assert_eq!(all.len(), order.len());
     let mut cursor = order.iter();
     assert_eq!(cursor.nth(10).map(|item| (item.source.name, item.record_index)), Some(all[10]));
-    cursor.seek(100).unwrap();
+    cursor.reset(100..).unwrap();
     let ahead = cursor.clone();
     assert_eq!(names(cursor), all[100..]);
     assert_eq!(names(ahead), all[100..]);
     let mut back = order.cursor(50..60).unwrap();
-    back.seek(55).unwrap();
+    back.reset(55..60).unwrap();
     assert_eq!(back.len(), 5);
-    back.seek(52).unwrap();
+    back.reset(52..60).unwrap();
     assert_eq!(names(back), all[52..60]);
     for (i, e) in (&order).into_iter().enumerate() {
         assert_eq!((e.source.name, e.record_index), all[i]);

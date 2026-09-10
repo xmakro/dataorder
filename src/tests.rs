@@ -398,7 +398,7 @@ fn random_configurations_match_reference() {
         let mut cursor = order.cursor(0..n).unwrap();
         for _ in 0..6 {
             let a = rng.below(n + 1);
-            cursor.seek(a).unwrap();
+            cursor.reset(a..).unwrap();
             assert_eq!(cursor.offset(), a);
             let m = rng.below(n - a + 1);
             assert_eq!(cursor.len(), n - a);
@@ -406,7 +406,7 @@ fn random_configurations_match_reference() {
             assert_eq!(got, reference[a..a + m], "round {round}: seek {a} of {seq:?}");
             // A forward seek and `nth` skip; both must land where a fresh cursor would.
             let b = a + m + rng.below(n - a - m + 1);
-            cursor.seek(b).unwrap();
+            cursor.reset(b..).unwrap();
             assert_eq!(ids(cursor.by_ref().take(3)), reference[b..(b + 3).min(n)], "round {round}: forward seek {b} of {seq:?}");
             let p = cursor.offset();
             let k = rng.below(5);
@@ -417,13 +417,13 @@ fn random_configurations_match_reference() {
             );
             assert_eq!(cursor.offset(), (p + k + 1).min(n));
         }
-        // `set_range` re-ranges the same cursor, forward or backward, from wherever it stands.
+        // `reset` re-ranges the same cursor, forward or backward, from wherever it stands.
         for _ in 0..4 {
             let a = rng.below(n + 1);
             let b = a + rng.below(n - a + 1);
-            cursor.set_range(a..b).unwrap();
+            cursor.reset(a..b).unwrap();
             assert_eq!(cursor.len(), b - a);
-            assert_eq!(ids(cursor.by_ref()), reference[a..b], "round {round}: set_range {a}..{b} of {seq:?}");
+            assert_eq!(ids(cursor.by_ref()), reference[a..b], "round {round}: reset {a}..{b} of {seq:?}");
             assert_eq!(cursor.offset(), b);
         }
         assert_eq!(ids((&order).into_iter()), reference);
@@ -901,15 +901,15 @@ fn edge_cases() {
     assert_eq!(format!("{c:?}"), "Cursor { position: 1, end: 4 }");
     assert_eq!(c.len(), 3);
     assert_eq!(c.next().map(|item| (item.source.id, item.record_index)), Some((0, 1)));
-    c.seek(4).unwrap();
+    c.reset(4..4).unwrap();
     assert!(c.next().is_none());
     assert_eq!(c.nth(3), None);
-    c.seek(0).unwrap();
+    c.reset(0..4).unwrap();
     assert_eq!(c.nth(2).map(|item| (item.source.id, item.record_index)), Some((0, 2)));
     assert_eq!(c.offset(), 3);
     assert_eq!(c.nth(1), None);
     assert_eq!(c.offset(), 4);
-    c.seek(0).unwrap();
+    c.reset(0..4).unwrap();
     assert_eq!(ids(c), vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
     // `count` and `last` answer without walking, `last` by random access.
     let shuffled = Order::new(src(0, 1000).shuffle(3)).unwrap();
@@ -933,16 +933,16 @@ fn edge_cases() {
     // A cursor run past its end, or ranged at the end, still moves forward correctly.
     let mut c = order.cursor(1..3).unwrap();
     assert_eq!(c.nth(10), None);
-    c.set_range(2..).unwrap();
+    c.reset(2..).unwrap();
     assert_eq!(ids(c.by_ref()), vec![(0, 2), (0, 3), (0, 4)]);
-    c.set_range(..1).unwrap();
+    c.reset(..1).unwrap();
     assert_eq!(ids(c.by_ref()), vec![(0, 0)]);
-    c.seek(1).unwrap();
-    c.set_range(3..4).unwrap();
+    c.reset(1..1).unwrap();
+    c.reset(3..4).unwrap();
     assert_eq!(ids(c.by_ref()), vec![(0, 3)]);
     let mut at_end = order.cursor(5..).unwrap();
     assert_eq!(at_end.next(), None);
-    at_end.set_range(4..).unwrap();
+    at_end.reset(4..).unwrap();
     assert_eq!(ids(at_end), vec![(0, 4)]);
     assert_eq!(order.into_sources(), vec![Src { id: 0, len: 5 }]);
     // Bare lengths are sources; a source may be shared through a reference.

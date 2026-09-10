@@ -82,12 +82,12 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
 enum Op {
     Next,
     Nth(usize),
-    Seek(usize),
-    Range(usize, usize),
+    ResetFrom(usize),
+    ResetRange(usize, usize),
     Clone,
     Last,
     Count,
-    BadSeek,
+    PastEnd,
     BadRange,
 }
 
@@ -117,14 +117,14 @@ fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
                 }
                 pos = if n < end - pos { pos + n + 1 } else { end };
             }
-            Op::Seek(raw) => {
-                pos = position(raw, end);
-                cursor.seek(pos).unwrap();
+            Op::ResetFrom(raw) => {
+                (pos, end) = (position(raw, order.len()), order.len());
+                cursor.reset(pos..).unwrap();
             }
-            Op::Range(a, b) => {
+            Op::ResetRange(a, b) => {
                 let (a, b) = (position(a, order.len()), position(b, order.len()));
                 (pos, end) = (a.min(b), a.max(b));
-                cursor.set_range(pos..end).unwrap();
+                cursor.reset(pos..end).unwrap();
             }
             Op::Clone => cursor = cursor.clone(),
             Op::Last => {
@@ -138,16 +138,16 @@ fn replay(order: &Order<usize>, ops: &[Op]) -> Result<(), String> {
                     return Err(fail());
                 }
             }
-            Op::BadSeek => {
-                if let Some(bad) = end.checked_add(1)
-                    && cursor.seek(bad).is_ok()
+            Op::PastEnd => {
+                if let Some(bad) = order.len().checked_add(1)
+                    && cursor.reset(..bad).is_ok()
                 {
                     return Err(fail());
                 }
             }
             Op::BadRange => {
                 use std::ops::Bound::{Excluded, Unbounded};
-                if cursor.set_range((Excluded(usize::MAX), Unbounded)).is_ok() {
+                if cursor.reset((Excluded(usize::MAX), Unbounded)).is_ok() {
                     return Err(fail());
                 }
             }
@@ -202,12 +202,12 @@ fn operation_sequences_match_random_access() {
                 match r.below(10) {
                     0 | 1 => Op::Next,
                     2 => Op::Nth(raw),
-                    3 => Op::Seek(raw),
-                    4 => Op::Range(raw, r.next() as usize),
+                    3 => Op::ResetFrom(raw),
+                    4 => Op::ResetRange(raw, r.next() as usize),
                     5 => Op::Clone,
                     6 => Op::Last,
                     7 => Op::Count,
-                    8 => Op::BadSeek,
+                    8 => Op::PastEnd,
                     _ => Op::BadRange,
                 }
             })
@@ -222,12 +222,12 @@ fn operation_sequences_match_random_access() {
 #[test]
 fn failure_history_shrinking_keeps_only_relevant_operations() {
     let result =
-        minimize(vec![Op::Next, Op::Clone, Op::Next, Op::BadSeek, Op::Count], |ops| ops.iter().any(|op| matches!(op, Op::BadSeek)));
-    assert!(matches!(result.as_slice(), [Op::BadSeek]));
+        minimize(vec![Op::Next, Op::Clone, Op::Next, Op::PastEnd, Op::Count], |ops| ops.iter().any(|op| matches!(op, Op::PastEnd)));
+    assert!(matches!(result.as_slice(), [Op::PastEnd]));
 }
 
 #[test]
-fn empty_ranges_resume_after_seeks_skips_and_clones() {
+fn empty_ranges_resume_after_resets_skips_and_clones() {
     let mix = || Seq::mix([Seq::source(100).shuffle(1), Seq::source(50).shuffle(2)]);
     let sequences = [
         Seq::source(0),
@@ -245,20 +245,20 @@ fn empty_ranges_resume_after_seeks_skips_and_clones() {
             assert_eq!(cursor.clone().last(), None);
             assert_eq!(cursor.next(), None);
             assert_eq!(cursor.nth(usize::MAX), None);
-            cursor.set_range(0..0).unwrap();
-            cursor.set_range(..).unwrap();
+            cursor.reset(0..0).unwrap();
+            cursor.reset(..).unwrap();
             assert_eq!(cursor.clone().count(), order.len());
             assert_eq!(cursor.clone().last(), order.len().checked_sub(1).and_then(|pos| order.get(pos)));
             let pos = order.len() / 3;
-            cursor.seek(pos).unwrap();
+            cursor.reset(pos..).unwrap();
             let mut cloned = cursor.clone();
             assert_eq!(cursor.nth(1), order.get(pos + 1));
             assert_eq!(cloned.nth(1), order.get(pos + 1));
-            cursor.set_range(order.len()..).unwrap();
+            cursor.reset(order.len()..).unwrap();
             assert_eq!(cursor.next(), None);
             let mut cloned = cursor.clone();
             for c in [&mut cursor, &mut cloned] {
-                c.set_range(..).unwrap();
+                c.reset(..).unwrap();
                 assert_eq!(c.next(), order.get(0));
             }
         }
@@ -281,15 +281,15 @@ fn exhausted_subranges_resume_at_their_end() {
                 match exhaust {
                     0 => cursor.by_ref().for_each(drop),
                     1 => assert_eq!(cursor.nth(usize::MAX), None),
-                    _ => cursor.seek(end).unwrap(),
+                    _ => cursor.reset(end..end).unwrap(),
                 }
                 assert_eq!((cursor.offset(), cursor.len()), (end, 0));
                 assert_eq!(cursor.clone().last(), None);
                 // Extending the range at the same position must find the next element,
                 // including at concat/repeat boundaries and after the order's end.
-                cursor.set_range(end..).unwrap();
+                cursor.reset(end..).unwrap();
                 assert_eq!(cursor.next(), order.get(end));
-                cursor.seek(0).unwrap();
+                cursor.reset(0..).unwrap();
                 assert_eq!(cursor.next(), order.get(0));
             }
         }
@@ -306,8 +306,8 @@ fn boundary_skip_initializes_target_child_before_backward_seek() {
     .unwrap();
     let mut cursor = order.iter();
     cursor.next(); // Initialize buffers for the first child.
-    cursor.seek(31).unwrap(); // End of the second child; its state has not been built.
-    cursor.seek(10).unwrap(); // Same child index, but its state must now be initialized.
+    cursor.reset(31..).unwrap(); // End of the second child; its state has not been built.
+    cursor.reset(10..).unwrap(); // Same child index, but its state must now be initialized.
     assert_eq!(cursor.next(), Some(order.get(10).unwrap()));
 }
 
@@ -328,7 +328,7 @@ fn concat_children_keep_their_own_transform_parameters() {
     assert_eq!(order.iter().collect::<Vec<_>>(), expected);
     let mut cursor = order.iter();
     for pos in (0..order.len()).rev().step_by(3).chain((0..order.len()).step_by(7)) {
-        cursor.seek(pos).unwrap();
+        cursor.reset(pos..).unwrap();
         let mut copy = cursor.clone();
         for expected in &expected[pos..(pos + 5).min(order.len())] {
             assert_eq!(cursor.next(), Some(*expected));
@@ -349,11 +349,11 @@ fn selections_resume_after_skips_and_exhaustion() {
         for n in 0..=expected.len() {
             let mut cursor = order.iter();
             assert_eq!(cursor.nth(n).map(|item| item.record_index), expected.get(n).copied());
-            cursor.seek(0).unwrap();
+            cursor.reset(0..).unwrap();
             assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);
-            cursor.set_range(order.len()..).unwrap();
+            cursor.reset(order.len()..).unwrap();
             assert_eq!(cursor.next(), None);
-            cursor.set_range(..).unwrap();
+            cursor.reset(..).unwrap();
             let mut copy = cursor.clone();
             assert_eq!(copy.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);
             assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);

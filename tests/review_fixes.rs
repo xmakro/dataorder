@@ -29,14 +29,21 @@ fn checked_access_preserves_cursor_on_errors() {
     let mut c = order.cursor(3..10).unwrap();
     c.next(); // Initialize the cursor before testing rollback.
     let expected = c.clone().collect::<Vec<_>>();
-    assert_eq!(c.seek(11), Err(BoundsError::SeekOutOfBounds { pos: 11, end: 10 }));
-    assert!(c.set_range(2..18).is_err());
-    assert!(c.set_range(12..4).is_err());
+    assert_eq!(c.reset(..=usize::MAX), Err(BoundsError::EndOverflow));
     assert_eq!(c.offset(), 4);
     assert_eq!(c.clone().collect::<Vec<_>>(), expected);
-    c.set_range(17..17).unwrap();
+    assert_eq!(c.reset((Bound::Excluded(usize::MAX), Bound::Unbounded)), Err(BoundsError::StartOverflow));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset(2..18), Err(BoundsError::OutOfBounds { end: 18, len: 17 }));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset(12..4), Err(BoundsError::Reversed { start: 12, end: 4 }));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    c.reset(17..17).unwrap();
     assert_eq!(c.next(), None);
-    c.set_range(..).unwrap();
+    c.reset(..).unwrap();
     assert_eq!(c.next(), order.get(0));
     let huge = Order::new(Seq::source(usize::MAX)).unwrap();
     assert_eq!(huge.cursor(usize::MAX - 1..).unwrap().next().unwrap().record_index, usize::MAX - 1);
@@ -61,19 +68,19 @@ fn items_distinguish_zero_sized_sources() {
     }
     assert_eq!(cursor.nth(3), Some(Item { source_ordinal: 1, source: &Zero, record_index: 1 }));
     assert_eq!(cursor.offset(), 4);
-    assert!(cursor.seek(9).is_err());
-    assert!(cursor.set_range(..9).is_err());
+    assert!(cursor.reset(9..).is_err());
+    assert!(cursor.reset(..9).is_err());
     assert_eq!(cursor.offset(), 4);
-    cursor.seek(0).unwrap();
+    cursor.reset(0..).unwrap();
     assert_eq!(cursor.next(), Some(Item { source_ordinal: 0, source: &Zero, record_index: 0 }));
     assert_eq!(cursor.clone().last(), Some(Item { source_ordinal: 1, source: &Zero, record_index: 3 }));
     assert_eq!(cursor.clone().count(), 7);
-    cursor.set_range(2..4).unwrap();
+    cursor.reset(2..4).unwrap();
     assert_eq!(cursor.nth(usize::MAX), None);
     assert_eq!(cursor.offset(), 4);
     assert_eq!(cursor.next(), None);
-    cursor.set_range(..).unwrap();
-    cursor.seek(2).unwrap();
+    cursor.reset(..).unwrap();
+    cursor.reset(2..).unwrap();
     assert_eq!(cursor.offset(), 2);
 }
 

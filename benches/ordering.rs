@@ -56,7 +56,7 @@ fn ordering(c: &mut Criterion) {
             let mut positions = positions.iter().cycle();
             let mut cursor = order.iter();
             b.iter(|| {
-                cursor.seek(black_box(*positions.next().unwrap())).unwrap();
+                cursor.reset(black_box(*positions.next().unwrap())..).unwrap();
                 cursor.next().unwrap()
             });
         });
@@ -80,7 +80,7 @@ fn cursor_state(c: &mut Criterion) {
     let order = Order::new(Seq::concat([part(1000), part(2)]).repeat(2)).unwrap();
     let mut cursor = order.iter();
     cursor.next();
-    cursor.seek(10_000).unwrap();
+    cursor.reset(10_000..).unwrap();
     cursor.next();
 
     let mut group = c.benchmark_group("cursor_state");
@@ -89,7 +89,7 @@ fn cursor_state(c: &mut Criterion) {
         b.iter_batched(
             || cursor.clone(),
             |mut copy| {
-                copy.seek(0).unwrap();
+                copy.reset(0..).unwrap();
                 black_box(copy.next());
             },
             BatchSize::LargeInput,
@@ -99,7 +99,7 @@ fn cursor_state(c: &mut Criterion) {
     group.bench_function("concat_seeks", |b| {
         b.iter(|| {
             for pos in [0, 10_000] {
-                cursor.seek(black_box(pos)).unwrap();
+                cursor.reset(black_box(pos)..).unwrap();
                 black_box(cursor.next());
             }
         });

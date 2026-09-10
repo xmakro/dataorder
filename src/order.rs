@@ -216,7 +216,7 @@ impl<T> Order<T> {
     /// seeks the interleave and allocates (see the crate's [cost model](crate#cost)), and
     /// a shuffle cycle-walks a permutation at constant average cost per position.
     /// Use [`Order::iter`] or [`Order::cursor`] for consecutive positions. For many scattered positions,
-    /// reuse a cursor with [`Cursor::seek`] to reuse its allocations.
+    /// reuse a cursor with [`Cursor::reset`] (`reset(pos..)`) to reuse its allocations.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -249,7 +249,7 @@ impl<T> Order<T> {
     /// let order = Order::new(Seq::source(3))?;
     /// assert_eq!(order.iter().map(|item| item.record_index).collect::<Vec<_>>(), [0, 1, 2]);
     /// let mut cursor = order.iter();
-    /// cursor.seek(2)?;
+    /// cursor.reset(2..)?;
     /// assert_eq!(cursor.next(), order.get(2));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -264,8 +264,7 @@ impl<T> Order<T> {
     /// Construction positions the cursor immediately and can allocate, even for
     /// an empty range. Each entered mix reserves space for its parts, then initializes
     /// child cursors as it draws from them. Prefer reusing a cursor with
-    /// [`seek`](Cursor::seek) or [`set_range`](Cursor::set_range) when visiting many
-    /// ranges, especially over large mixes.
+    /// [`reset`](Cursor::reset) when visiting many ranges, especially over large mixes.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

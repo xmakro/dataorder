@@ -14,7 +14,7 @@ fn check_seeks(order: &Order<usize>) {
     let mut cursor = order.cursor(0..0).unwrap();
     for start in (0..=order.len()).rev() {
         let end = (start + 11).min(order.len());
-        cursor.set_range(start..end).unwrap();
+        cursor.reset(start..end).unwrap();
         let window: Vec<_> = cursor.by_ref().map(|item| (item.source_ordinal, item.record_index)).collect();
         assert_eq!(window, all[start..end], "seek {start}");
         if start < order.len() {

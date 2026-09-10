@@ -187,7 +187,7 @@ impl ScheduleError {
     }
 }
 
-/// An invalid range or cursor position. Failed cursor operations leave the
+/// An invalid order range. Failed cursor operations leave the
 /// cursor unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -210,13 +210,6 @@ pub enum BoundsError {
         /// Order length.
         len: usize,
     },
-    /// A seek extends beyond the cursor's current range end.
-    SeekOutOfBounds {
-        /// Requested absolute position.
-        pos: usize,
-        /// Cursor's exclusive range end.
-        end: usize,
-    },
 }
 
 impl fmt::Display for BoundsError {
@@ -226,7 +219,6 @@ impl fmt::Display for BoundsError {
             Self::EndOverflow => write!(f, "range end overflows usize"),
             Self::Reversed { start, end } => write!(f, "range {start}..{end} ends before it starts"),
             Self::OutOfBounds { end, len } => write!(f, "range end {end} out of range for {len} positions"),
-            Self::SeekOutOfBounds { pos, end } => write!(f, "seek to {pos} beyond the end {end}"),
         }
     }
 }

@@ -44,7 +44,7 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
             // independently generated windows: seek only across gaps, then exercise
             // the tournament and cached segment transitions with consecutive nexts.
             if next_position != Some(pos) {
-                walking.set_range(pos..).unwrap();
+                walking.reset(pos..).unwrap();
             }
             let dataorder::Item { source, record_index: index, .. } = walking.next().unwrap();
             assert_eq!((source.ordinal, index), expected, "walk: case {case}, position {pos}");

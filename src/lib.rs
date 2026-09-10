@@ -148,10 +148,12 @@
 //! A cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.
 //!
-//! [`Order::get`] returns `None` for an invalid position. [`Order::cursor`],
-//! [`Cursor::seek`] and [`Cursor::set_range`] report [`BoundsError`] instead of
-//! panicking on invalid bounds. Failed cursor operations
-//! leave their state unchanged. [`Cursor::offset`] reads the next absolute position;
+//! [`Order::get`] returns `None` for an invalid position. [`Order::cursor`] and
+//! [`Cursor::reset`] report [`BoundsError`] instead of panicking on invalid bounds.
+//! Both take ranges in absolute order positions. Resetting replaces the remaining
+//! range and moves to its start; unbounded endpoints refer to the whole order.
+//! Failed cursor operations leave their state unchanged.
+//! [`Cursor::offset`] reads the next absolute position;
 //! `position(predicate)` remains the standard consuming iterator search.
 //! Every [`Item`] includes its source's ordinal in [`Order::sources`], so equal and
 //! zero-sized sources can be distinguished. Ordinals are local to an order.
@@ -196,9 +198,9 @@
 //! see [`Seq::step_by`].
 //!
 //! Cursor construction positions its state immediately and can allocate, even for
-//! an empty range or a cursor used only for `count()`. [`Cursor::seek`],
-//! [`Cursor::set_range`] and [`Iterator::nth`] reuse existing buffers within the
-//! current child, including when moving to empty ranges. Concat transitions replace
+//! an empty range or a cursor used only for `count()`. [`Cursor::reset`] and
+//! [`Iterator::nth`] reuse existing buffers within the current child, including
+//! when moving to empty ranges. Concat transitions replace
 //! child state, and entering a new mix part can allocate. Cloning copies current state
 //! without preserving spare buffer capacity; subsequent seeks may allocate new buffers.
 //! `last()` uses [`Order::get`] and can allocate independently of the cursor's buffers.
