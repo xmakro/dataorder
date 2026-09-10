@@ -48,7 +48,7 @@ fn golden_orders() {
         ("mix uniform", Seq::mix([src(0, 1000).shuffle(1), src(1, 300).shuffle(2), src(2, 50)]), 0),
         (
             "mix scheduled",
-            Seq::mix_with([
+            Seq::mix([
                 (src(0, 2000).shuffle(1), Uniform),
                 (src(1, 400).shuffle(2), DelayedLinear { start: 0.5, full: 0.5 }),
                 (src(2, 600), DelayedLinear { start: 0.2, full: 0.6 }),
@@ -74,7 +74,7 @@ fn golden_orders() {
         ),
         (
             "mix fading",
-            Seq::mix_with([
+            Seq::mix([
                 (src(0, 1500).shuffle(1), Uniform),
                 (src(1, 300).shuffle(2), Sampling::until(0.4)),
                 (src(2, 400), Sampling::trapezoid(0.2, 0.4, 0.6, 0.9)),

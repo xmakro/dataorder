@@ -11,7 +11,7 @@ fn ordering(c: &mut Criterion) {
         ("mix_100", Seq::mix((0..100).map(|i| Seq::source(1_000_000).shuffle(i + 1)))),
         (
             "scheduled_1000",
-            Seq::mix_with((0..1000).map(|i| {
+            Seq::mix((0..1000).map(|i| {
                 let sampling = if i % 5 == 0 { Sampling::ramp(0.2 + 0.05 * (i % 7) as f64, 0.7) } else { Sampling::Uniform };
                 (Seq::source(100_000).shuffle(i + 1), sampling)
             })),

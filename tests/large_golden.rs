@@ -25,7 +25,7 @@ fn source(id: usize, len: usize) -> Seq<Src> {
 fn large_orders_keep_baseline_outputs() {
     let cases = [
         Seq::mix([source(0, 1 << 30).shuffle(11).repeat(1 << 15), source(1, 1 << 30).shuffle(22).repeat(1 << 15)]),
-        Seq::mix_with([
+        Seq::mix([
             (source(0, 3 * (1 << 28)).shuffle(11).repeat(1 << 16), Sampling::Uniform),
             (source(1, 1 << 27).shuffle(22).repeat(1 << 16), Sampling::trapezoid(0.1, 0.3, 0.6, 0.9)),
             (source(2, 1 << 27).shuffle(33).repeat(1 << 16), Sampling::delayed(0.5)),

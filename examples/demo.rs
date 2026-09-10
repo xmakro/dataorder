@@ -20,7 +20,7 @@ impl Source for Src {
 }
 
 fn main() {
-    let seq = Seq::mix_with([
+    let seq = Seq::mix([
         (Seq::source(Src { name: 'A', len: 60 }).shuffle(1).repeat(2), Sampling::Uniform),
         (Seq::source(Src { name: 'B', len: 20 }).shuffle(2).repeat(2), Sampling::delayed(0.5)), // B: starts at virtual time 0.5
         (Seq::source(Src { name: 'C', len: 40 }).shuffle(3).repeat(2), Sampling::ramp(0.2, 0.6)), // C: ramps from virtual time 0.2 to 0.6

@@ -2,7 +2,7 @@
 use dataorder::{Order, Sampling, Seq};
 
 fn order(parts: &[(usize, Sampling)]) -> Order<usize> {
-    Order::new(Seq::mix_with(parts.iter().map(|&(n, sampling)| (Seq::source(n), sampling)))).unwrap()
+    Order::new(Seq::mix(parts.iter().map(|&(n, sampling)| (Seq::source(n), sampling)))).unwrap()
 }
 
 fn entries(order: &Order<usize>) -> Vec<(usize, usize)> {

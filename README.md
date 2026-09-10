@@ -109,7 +109,7 @@ so you can nest mixes and concatenations.
 | Read sequences one after another | `Seq::concat(sequences)` |
 | Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
 | Choose exact counts for each dataset | `Seq::mix([a.cycle(a_count), b.cycle(b_count), …])` |
-| Control when a sequence contributes records | `Seq::mix_with`, with a `Sampling` schedule |
+| Control when a sequence contributes records | `Seq::mix`, with a `Sampling` schedule |
 | Shuffle positions | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
 | Repeat or truncate to an exact length | `.cycle(len)` |
@@ -150,7 +150,7 @@ virtual time 0.5:
 use dataorder::{Order, Sampling, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seq = Seq::mix_with([
+    let seq = Seq::mix([
         (Seq::source(300).shuffle(1).cycle(750), Sampling::Uniform),
         (Seq::source(100).shuffle(2).cycle(250), Sampling::delayed(0.5)),
     ]);

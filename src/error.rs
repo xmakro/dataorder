@@ -124,7 +124,7 @@ impl fmt::Display for SamplingDetail {
 /// use dataorder::{ErrorKind, Order, Sampling, Seq};
 /// let err = Order::new(Seq::source(10).step_by(0)).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::ZeroStep));
-/// let err = Order::new(Seq::mix_with([(Seq::source(10), Sampling::delayed(1.5))])).unwrap_err();
+/// let err = Order::new(Seq::mix([(Seq::source(10), Sampling::delayed(1.5))])).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::InvalidSampling { .. }));
 /// ```
 #[derive(Clone, Debug, PartialEq)]

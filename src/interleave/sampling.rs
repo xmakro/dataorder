@@ -35,7 +35,7 @@ use std::hash::{Hash, Hasher};
 ///
 /// ```
 /// use dataorder::{Order, Sampling, Seq};
-/// let order = Order::new(Seq::mix_with([
+/// let order = Order::new(Seq::mix([
 ///     (Seq::source(100), Sampling::Uniform),
 ///     (Seq::source(100), Sampling::delayed(0.6)),
 /// ]))?;

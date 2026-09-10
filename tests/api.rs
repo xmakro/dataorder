@@ -31,7 +31,7 @@ fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
 fn builders_accept_unresolved_sources() {
     // No trait bounds, including Source or Clone, are needed to build the tree.
     fn configuration<T>(first: T, second: T) -> Seq<T> {
-        Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix_with([(Seq::source(second), Sampling::Uniform)])])
+        Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix([(Seq::source(second), Sampling::Uniform)])])
             .shuffle(7)
             .repeat(2)
             .cycle(50)
@@ -142,12 +142,14 @@ fn hand_built_configuration() {
             Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::delayed(0.5) }]).cycle(25),
         ),
     ]);
-    // The builders take parts, pairs or bare sequences alike.
+    // The mix builder takes parts, pairs or bare sequences alike.
     let Seq::Mix(parts) = seq.clone() else { unreachable!() };
-    assert_eq!(Seq::mix_with(parts), seq);
-    let mixed = Seq::mix_with([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::default() }]);
-    assert_eq!(mixed, Seq::mix_with([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
-    assert_eq!(mixed, Seq::mix_with([shard("b", 40), shard("c", 5)]));
+    assert_eq!(Seq::mix(parts), seq);
+    let mixed = Seq::mix([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::default() }]);
+    assert_eq!(mixed, Seq::mix([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
+    assert_eq!(mixed, Seq::mix([shard("b", 40), shard("c", 5)]));
+    let empty = Seq::mix(std::iter::empty::<Seq<Shard>>());
+    assert!(Order::new(empty).unwrap().is_empty());
     let order: Order<Shard> = seq.try_into().unwrap();
     assert_eq!(order.len(), 100);
     let all = names(order.iter(..).unwrap());
@@ -239,15 +241,14 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let seq =
-        Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).skip(1).step_by(2);
+    let seq = Seq::mix([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).skip(1).step_by(2);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
     assert!(a.iter(..).unwrap().eq(b.iter(..).unwrap()));
     // The wire format is part of the API.
-    let seq: Seq<usize> = Seq::mix_with([(Seq::source(4).shuffle(1).cycle(9), Sampling::ramp(0.1, 0.2))]);
+    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle(9), Sampling::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
         r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#

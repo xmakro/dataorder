@@ -338,7 +338,7 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         }
         0 => Seq::concat(parts(rng, depth - 1)),
         1 => Seq::mix(parts(rng, depth - 1)),
-        2 => Seq::mix_with(parts(rng, depth - 1).into_iter().map(|p| {
+        2 => Seq::mix(parts(rng, depth - 1).into_iter().map(|p| {
             let sampling = match rng.below(6) {
                 0 => Sampling::DelayedLinear { start: 0.3, full: 0.6 },
                 1 => Sampling::DelayedLinear { start: 0.5, full: 0.5 },
@@ -678,13 +678,13 @@ fn errors() {
     let half = || src(0, usize::MAX / 2 + 1);
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
     // A mix that folds away is still validated; a schedule problem is found at the part.
-    let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
+    let over1 = Seq::mix([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(
         Order::new(over1).unwrap_err(),
         at(ErrorKind::InvalidSampling { sampling: Sampling::DelayedLinear { start: 2.0, full: 2.0 } }, &[0])
             .with_sampling_detail(Some(crate::SamplingDetail::InvalidBreakpoints))
     );
-    let steep = Seq::concat([a.clone(), Seq::mix_with([(a.clone(), Sampling::Uniform), (src(1, 1 << 30), Sampling::until(1e-6))])]);
+    let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Sampling::Uniform), (src(1, 1 << 30), Sampling::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
     assert_eq!(err.kind(), &ErrorKind::TooSteep);
     assert_eq!(err.path(), &[1, 1]);
@@ -858,7 +858,7 @@ fn empty_mix_parts_do_not_affect_the_order() {
             let at = rng.below(with.len() + 1);
             with.insert(at, (src(99, 0), Sampling::delayed(0.9)));
         }
-        let (Ok(a), Ok(b)) = (Order::new(Seq::mix_with(with)), Order::new(Seq::mix_with(parts))) else { continue };
+        let (Ok(a), Ok(b)) = (Order::new(Seq::mix(with)), Order::new(Seq::mix(parts))) else { continue };
         assert_eq!(ids(a.iter(..).unwrap()), ids(b.iter(..).unwrap()), "round {round}");
         assert_eq!(a.sources().len(), b.sources().len() + a.sources().iter().filter(|s| s.id == 99).count());
     }
@@ -868,15 +868,15 @@ fn empty_mix_parts_do_not_affect_the_order() {
 #[test]
 fn seq_eq_and_hash() {
     use std::collections::HashSet;
-    let a = Seq::mix_with([(src(0, 5), Sampling::ramp(0.0, 0.5))]);
-    let b = Seq::mix_with([(src(0, 5), Sampling::ramp(-0.0, 0.5))]);
-    let c = Seq::mix_with([(src(0, 5), Sampling::ramp(0.1, 0.5))]);
+    let a = Seq::mix([(src(0, 5), Sampling::ramp(0.0, 0.5))]);
+    let b = Seq::mix([(src(0, 5), Sampling::ramp(-0.0, 0.5))]);
+    let c = Seq::mix([(src(0, 5), Sampling::ramp(0.1, 0.5))]);
     assert_eq!(a, b);
     assert_ne!(a, c);
     let set: HashSet<Seq<Src>> = [a.clone(), b, c.clone(), a.clone()].into_iter().collect();
     assert_eq!(set.len(), 2);
     assert!(set.contains(&a) && set.contains(&c));
-    let nan = Seq::mix_with([(src(0, 5), Sampling::delayed(f64::NAN))]);
+    let nan = Seq::mix([(src(0, 5), Sampling::delayed(f64::NAN))]);
     assert_eq!(nan, nan.clone());
     assert_eq!(Sampling::delayed(0.5), Sampling::ramp(0.5, 0.5));
     assert_eq!(Sampling::until(0.5), Sampling::fading(0.5, 0.5));
@@ -1066,7 +1066,7 @@ fn skip_and_take_ranges() {
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn steep_schedule_at_scale() {
-    let seq = Seq::mix_with([
+    let seq = Seq::mix([
         (src(0, 1 << 45), Sampling::Uniform),
         (src(1, 1 << 44), Sampling::delayed(0.5)), // final rate 2: length × rate = 2⁴⁵, within 2⁴⁶
         (src(2, 1 << 40), Sampling::ramp(0.0, 1.0)),
@@ -1082,7 +1082,7 @@ fn steep_schedule_at_scale() {
         }
     }
     // Too steep is rejected, not looped over.
-    let steep = Seq::mix_with([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
+    let steep = Seq::mix([(src(0, 1 << 45), Sampling::Uniform), (src(1, 1 << 46), Sampling::delayed(0.5))]);
     assert!(matches!(Order::new(steep).unwrap_err().kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong));
     assert_eq!(MAX_MIX_LEN, 1 << 46);
 }

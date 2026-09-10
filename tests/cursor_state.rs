@@ -65,7 +65,7 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
                 _ => Sampling::trapezoid(0.125, 0.25, 0.75, 0.875),
             };
             let b = m.min(if sampling == Sampling::Uniform { 100 } else { a / 3 });
-            (Seq::mix_with([(s.take(a), Sampling::Uniform), (t.take(b), sampling)]), a + b)
+            (Seq::mix([(s.take(a), Sampling::Uniform), (t.take(b), sampling)]), a + b)
         }
         _ => {
             if n == 0 {

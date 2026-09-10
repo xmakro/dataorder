@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** merge `Seq::mix_with` into `Seq::mix`, which now accepts bare
+  sequences, `(seq, sampling)` pairs or `MixPart` values. Replace `mix_with` calls
+  with `mix`. Empty inputs need an explicit element type, such as
+  `Seq::mix(std::iter::empty::<Seq<usize>>())`. Ordering and serialized
+  configurations are unchanged.
+
 - **Breaking:** require every sequence node's length to fit in `usize`, including
   intermediates later truncated or discarded. Oversized intermediates on 32-bit
   targets are rejected at their node. Remove `ErrorKind::OrderTooLong`; length
@@ -72,7 +78,7 @@
 - **Breaking:** remove `Seq::Weighted`, `Seq::weighted`, `Seq::weighted_with`,
   `WeightedPart`, and the `InvalidWeight`, `ZeroWeights` and `EmptyWeightedPart`
   error kinds. Choose exact counts with `Seq::mix([a.cycle(a_count), b.cycle(b_count)])`
-  or attach schedules with `Seq::mix_with`. Remove the exact floating-point quota
+  or attach schedules with `Seq::mix`. Remove the exact floating-point quota
   allocator and its fixtures and benchmarks. Serialized `Weighted` configurations
   must be rewritten using explicit counts.
 

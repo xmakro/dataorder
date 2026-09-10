@@ -20,7 +20,7 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
         if lens.iter().map(|n| n.as_u64().unwrap()).sum::<u64>() > usize::MAX as u64 {
             continue; // Large public lengths are checked on the 64-bit CI targets.
         }
-        let order = Order::new(Seq::mix_with(lens.iter().enumerate().map(|(i, n)| {
+        let order = Order::new(Seq::mix(lens.iter().enumerate().map(|(i, n)| {
             let sampling = match fixture["schedules"][i].as_array() {
                 None => Sampling::Uniform,
                 Some(p) => {

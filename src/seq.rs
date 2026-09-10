@@ -158,7 +158,10 @@ impl<T> Seq<T> {
         Self::Concat(parts.into_iter().collect())
     }
 
-    /// The parts interleaved, all [`Sampling::Uniform`].
+    /// Interleaves parts, preserving each part's order.
+    /// Accepts bare sequences (all [`Sampling::Uniform`]), `(seq, sampling)` pairs,
+    /// or [`MixPart`] values. Schedules are independent on a shared virtual clock;
+    /// see [`Sampling`] for how virtual time maps to output progress.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -168,18 +171,12 @@ impl<T> Seq<T> {
     /// assert_eq!(sources, [4, 4, 2, 4, 4, 2]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[must_use]
-    pub fn mix(parts: impl IntoIterator<Item = Self>) -> Self {
-        Self::Mix(parts.into_iter().map(MixPart::from).collect())
-    }
-
-    /// Interleaves parts with independent schedules on a shared virtual clock.
-    /// See [`Sampling`] for how virtual time maps to output progress.
-    /// Accepts `(seq, sampling)` pairs or other values that convert into [`MixPart`].
+    ///
+    /// Attach a schedule to each part to control when it contributes:
     ///
     /// ```
     /// use dataorder::{Order, Sampling, Seq};
-    /// let seq = Seq::mix_with([
+    /// let seq = Seq::mix([
     ///     (Seq::source(700), Sampling::Uniform),
     ///     (Seq::source(300), Sampling::delayed(0.5)),
     /// ]);
@@ -190,8 +187,11 @@ impl<T> Seq<T> {
     /// assert!((349..=351).contains(&first));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// Empty inputs need an explicit element type, for example
+    /// `Seq::mix(std::iter::empty::<Seq<usize>>())`.
     #[must_use]
-    pub fn mix_with(parts: impl IntoIterator<Item = impl Into<MixPart<T>>>) -> Self {
+    pub fn mix(parts: impl IntoIterator<Item = impl Into<MixPart<T>>>) -> Self {
         Self::Mix(parts.into_iter().map(Into::into).collect())
     }
 

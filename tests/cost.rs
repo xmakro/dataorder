@@ -64,7 +64,7 @@ fn unary_traversals_do_not_allocate_temporary_child_lists() {
 fn seeks_within_each_concat_child_reuse_mix_buffers() {
     use dataorder::Sampling;
     let part = |k, len, scheduled| {
-        Seq::mix_with((0..k).map(|i| {
+        Seq::mix((0..k).map(|i| {
             (Seq::source(len).shuffle(i as u64 + 1), if scheduled && i % 5 == 0 { Sampling::ramp(0.1, 0.6) } else { Sampling::Uniform })
         }))
     };
