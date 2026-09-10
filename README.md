@@ -253,6 +253,11 @@ precomputed. Both seek measurements include the first item; fresh seek also
 includes cursor construction and destruction. Walk timing includes its initial
 seek and reports throughput in elements per second.
 
+The `selection` workloads measure slices over shuffles, repeats and mixes; strides
+over sources, shuffles, repeats and mixes; and a mix whose parts combine these
+selections. Each uses the same construction, lookup, seek and walk measurements.
+Run them with `cargo bench --bench ordering -- selection`.
+
 The `cursor_state` group measures cloning after entering a smaller concat child,
 seeking the clone back, repeated seeks between children, and walking across children
 and epochs. Clone setup is excluded from `cloned_seek_back`; that measurement includes

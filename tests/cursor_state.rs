@@ -266,3 +266,27 @@ fn concat_children_keep_their_own_transform_parameters() {
         }
     }
 }
+
+#[test]
+fn selections_resume_after_skips_and_exhaustion() {
+    // Keep the slice around a repeat so the contiguous selection's cursor is exercised.
+    let seq = Seq::source(7).shuffle(13).repeat(5);
+    let base = Order::new(seq.clone()).unwrap();
+    let all: Vec<_> = base.iter(..).unwrap().map(|item| item.record_index).collect();
+    for step in [1, 2, 8, usize::MAX] {
+        let order = Order::new(seq.clone().skip(5).take(23).step_by(step)).unwrap();
+        let expected: Vec<_> = all[5..28].iter().copied().step_by(step).collect();
+        for n in 0..=expected.len() {
+            let mut cursor = order.iter(..).unwrap();
+            assert_eq!(cursor.nth(n).map(|item| item.record_index), expected.get(n).copied());
+            cursor.seek(0).unwrap();
+            assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);
+            cursor.set_range(order.len()..).unwrap();
+            assert_eq!(cursor.next(), None);
+            cursor.set_range(..).unwrap();
+            let mut copy = cursor.clone();
+            assert_eq!(copy.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);
+            assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);
+        }
+    }
+}

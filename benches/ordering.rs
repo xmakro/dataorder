@@ -16,6 +16,17 @@ fn ordering(c: &mut Criterion) {
                 (Seq::source(100_000).shuffle(i + 1), sampling)
             })),
         ),
+        ("selection/slice_shuffle", Seq::source(1_000_000_000).shuffle(1).skip(12_345).take(750_000_000)),
+        ("selection/slice_repeat", Seq::source(1024).repeat(1_000_000).skip(17).take(900_000_000)),
+        ("selection/slice_mix", Seq::mix((0..100).map(|i| Seq::source(1_000_000).shuffle(i + 1))).skip(12_345).take(75_000_000)),
+        ("selection/stride_source", Seq::source(1_000_000_000).skip(11).step_by(8)),
+        ("selection/stride_shuffle", Seq::source(1_000_000_000).shuffle(1).skip(11).step_by(8)),
+        ("selection/stride_repeat", Seq::source(1024).repeat(1_000_000).skip(17).step_by(7)),
+        ("selection/stride_mix", Seq::mix((0..100).map(|i| Seq::source(1_000_000).shuffle(i + 1))).skip(11).step_by(8)),
+        (
+            "selection/mix_selected_parts",
+            Seq::mix((0..100).map(|i| Seq::source(1_000_000).shuffle(i + 1).skip(11).take(900_000).step_by(1 + i as usize % 4))),
+        ),
     ];
 
     for (name, seq) in workloads {
