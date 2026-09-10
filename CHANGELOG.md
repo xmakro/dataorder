@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** rename `ORDERING_VERSION` to `CRATE_VERSION`. Its value remains
+  the linked crate's package version, including patches that preserve ordering.
+  Use the renamed constant for conservative exact-version checkpoint checks.
+
 - **Breaking:** split full-order iteration from ranged cursor construction.
   `Order::iter()` now returns a `Cursor` directly; replace `iter(..)?` or
   `iter(..).unwrap()` with `iter()`. Use `Order::cursor(range)` for checked ranges;

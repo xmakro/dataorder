@@ -244,7 +244,7 @@
 //! The same configuration, source lengths and salts, and seed produce the same order
 //! on supported platforms. A release that changes an order or the serialized
 //! configuration format is a breaking change: a new minor version while the crate is 0.x.
-//! Save [`ORDERING_VERSION`] in checkpoints for a conservative exact-version check.
+//! Save [`CRATE_VERSION`] in checkpoints for a conservative exact-version check.
 //!
 //! Calculations use IEEE 754 binary64 with separate multiply/add expressions.
 //! Targets with hardware or software binary64 agree; x87-only `i586`
@@ -317,7 +317,7 @@ pub const MAX_DEPTH: u32 = 16;
 /// ```
 pub const MAX_MIX_LEN: u64 = interleave::MAX_TOTAL_LEN;
 
-/// Version identifier for conservatively validating saved orders and checkpoints.
+/// Version of the linked `dataorder` crate.
 ///
 /// This is the version of the linked `dataorder` crate, including its patch version,
 /// rather than the calling application's `CARGO_PKG_VERSION`. Save it alongside the
@@ -325,7 +325,7 @@ pub const MAX_MIX_LEN: u64 = interleave::MAX_TOTAL_LEN;
 /// on restore unless the application has explicitly verified a compatible migration.
 /// A difference does not necessarily mean that the ordering changed; see the crate's
 /// [stability policy](crate#stability).
-pub const ORDERING_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The README's code blocks, compiled as doctests.
 #[cfg(doctest)]
