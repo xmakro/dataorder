@@ -34,7 +34,7 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
         }
         2 => {
             let k = if r.below(3) == 0 { usize::MAX } else { r.below(100) };
-            if n > 0 { (s.cycle(k), k) } else { (s, n) }
+            if n > 0 { (s.cycle_to(k), k) } else { (s, n) }
         }
         3 => {
             let k = if n == 0 { 0 } else { r.below(n) };
@@ -73,7 +73,7 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
             }
             let total = r.below(300);
             let first = total / 4;
-            (Seq::mix([s.cycle(first), Seq::source(7).shuffle(r.next()).cycle(total - first)]), total)
+            (Seq::mix([s.cycle_to(first), Seq::source(7).shuffle(r.next()).cycle_to(total - first)]), total)
         }
     }
 }

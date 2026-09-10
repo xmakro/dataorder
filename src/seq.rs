@@ -78,7 +78,7 @@ pub enum Seq<T> {
     /// does. The entire first pass keeps its order, including nested epochs; increasing
     /// `len` preserves the existing prefix.
     /// When `len` fits within `inner`, this is equivalent to `inner.take(len)`.
-    /// A positive `len` requires a non-empty child. `cycle(usize::MAX)` creates the
+    /// A positive `len` requires a non-empty child. `cycle_to(usize::MAX)` creates the
     /// longest supported order; it is still finite.
     Cycle {
         /// Length of the sequence.
@@ -232,21 +232,21 @@ impl<T> Seq<T> {
 
     /// Repeats or truncates this sequence to exactly `len` positions.
     /// Existing shuffles are reseeded for each additional epoch; see [`Cycle`](Seq::Cycle).
-    /// Even `cycle(usize::MAX)` is finite.
+    /// Even `cycle_to(usize::MAX)` is finite.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(1000).shuffle(1).cycle(2500))?;
+    /// let order = Order::new(Seq::source(1000).shuffle(1).cycle_to(2500))?;
     /// assert_eq!(order.len(), 2500);
     /// let epochs = Order::new(Seq::source(1000).shuffle(1).repeat(3))?;
     /// assert!(order.iter().eq(epochs.cursor(..2500)?));
-    /// let longest = Order::new(Seq::source(1000).shuffle(1).cycle(usize::MAX))?;
+    /// let longest = Order::new(Seq::source(1000).shuffle(1).cycle_to(usize::MAX))?;
     /// assert_eq!(longest.len(), usize::MAX);
     /// assert!(longest.get(usize::MAX - 1).unwrap().record_index < 1000);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn cycle(self, len: usize) -> Self {
+    pub fn cycle_to(self, len: usize) -> Self {
         Self::Cycle { len, inner: Box::new(self) }
     }
 
@@ -372,7 +372,7 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         ),
         Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
         Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),
-        Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle(len),
+        Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle_to(len),
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
         Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
         Seq::StepBy { step, inner } => map_sources(*inner, f)?.step_by(step),

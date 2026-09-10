@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** rename `Seq::cycle(len)` to `Seq::cycle_to(len)` to make its
+  exact finite target length explicit. Replace `.cycle(len)` calls with
+  `.cycle_to(len)`. The `Seq::Cycle` variant, serialized configurations and
+  ordering behavior are unchanged.
+
 - **Breaking:** replace `Cursor::seek` and `Cursor::set_range` with
   `Cursor::reset(range)`. Each reset replaces the remaining range and moves to its
   start, using absolute order positions. Replace `set_range(range)` with
@@ -124,7 +129,7 @@
 
 - **Breaking:** remove `Seq::Weighted`, `Seq::weighted`, `Seq::weighted_with`,
   `WeightedPart`, and the `InvalidWeight`, `ZeroWeights` and `EmptyWeightedPart`
-  error kinds. Choose exact counts with `Seq::mix([a.cycle(a_count), b.cycle(b_count)])`
+  error kinds. Choose exact counts with `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count)])`
   or attach schedules with `Seq::mix`. Remove the exact floating-point quota
   allocator and its fixtures and benchmarks. Serialized `Weighted` configurations
   must be rewritten using explicit counts.

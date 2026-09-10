@@ -156,7 +156,8 @@ fn schedule_errors_describe_independent_profiles() {
         "mix part too long for the steepness of its schedule: length 1073741824 × peak rate 1000000 exceeds 70368744177664 (at node 0)"
     );
     assert_eq!(err.into_kind(), expected);
-    let mixed = Seq::mix([(Seq::source(10).cycle(3 << 28), Schedule::until(1e-6)), (Seq::source(10).cycle(1 << 28), Schedule::Uniform)]);
+    let mixed =
+        Seq::mix([(Seq::source(10).cycle_to(3 << 28), Schedule::until(1e-6)), (Seq::source(10).cycle_to(1 << 28), Schedule::Uniform)]);
     let err = Order::new(mixed).unwrap_err();
     let expected = ErrorKind::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN };
     assert_eq!(err.kind(), &expected);

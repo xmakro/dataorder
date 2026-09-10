@@ -321,7 +321,7 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         8 => {
             let inner = random_seq(rng, depth - 1, lens);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
-            inner.cycle(if n == 0 { 0 } else { rng.below(70) })
+            inner.cycle_to(if n == 0 { 0 } else { rng.below(70) })
         }
         7 => {
             // Empty parts in a mix, which must not affect the order (checked separately) and
@@ -497,14 +497,14 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     // A cycle that fits within its part is not repeated, so it is the part itself;
     // one that repeats also preserves the entire first pass, including nested epochs.
     let part = || src(7, 100).shuffle(3).repeat(2);
-    let fits = Order::new(Seq::mix([part().cycle(200), src(8, 1000).cycle(200)])).unwrap();
-    let repeats = Order::new(Seq::mix([part().cycle(250), src(8, 1000).cycle(250)])).unwrap();
+    let fits = Order::new(Seq::mix([part().cycle_to(200), src(8, 1000).cycle_to(200)])).unwrap();
+    let repeats = Order::new(Seq::mix([part().cycle_to(250), src(8, 1000).cycle_to(250)])).unwrap();
     let sevens = |o: &Order<Src>| ids(o.iter()).into_iter().filter(|e| e.0 == 7).collect::<Vec<_>>();
     let alone = ids(Order::new(part()).unwrap().iter());
     assert_eq!(sevens(&fits), alone);
     assert_eq!(sevens(&repeats)[..200], alone);
     // Adding a repeat preserves the nested prefix, including when a take removes it.
-    for extended in [part().repeat(2), part().cycle(201), part().repeat(2).take(200)] {
+    for extended in [part().repeat(2), part().cycle_to(201), part().repeat(2).take(200)] {
         let extended = Order::new(extended).unwrap();
         assert_eq!(ids(extended.cursor(..200).unwrap()), alone);
     }
@@ -551,7 +551,7 @@ fn repeat_levels_are_assigned_from_the_inside_out() {
         ("empty repeat", Seq::concat([deep().repeat(0), x()]), 0),
         ("empty take", Seq::mix([deep().take(0), x()]), 0),
         ("prefix", x().repeat(3).take(17).skip(1), 0),
-        ("short cycle", x().repeat(3).cycle(17), 0),
+        ("short cycle", x().repeat(3).cycle_to(17), 0),
         ("one strided position", x().repeat(3).step_by(51), 0),
         ("discard concat tail", Seq::concat([x(), deep()]).take(17), 0),
         ("discard concat head", Seq::concat([deep(), x()]).skip(66), 0),
@@ -564,8 +564,8 @@ fn repeat_levels_are_assigned_from_the_inside_out() {
         ("retained sliced child", Seq::concat([x(), deep().skip(1), x()]).take(82), 2),
         ("retained slice", x().repeat(3).skip(1).take(16), 1),
         ("retained stride", x().repeat(3).step_by(3), 1),
-        ("partial extra epoch", x().cycle(18), 1),
-        ("cycle of repeat", x().repeat(2).cycle(35), 2),
+        ("partial extra epoch", x().cycle_to(18), 1),
+        ("cycle of repeat", x().repeat(2).cycle_to(35), 2),
     ];
     for (name, seq, inner_level) in cases {
         // A shuffle above the child makes the outer context observable even when a
@@ -600,7 +600,7 @@ fn extending_nested_repetitions_preserves_every_existing_position() {
         let all = ids(long.iter());
         assert_eq!(ids(once.iter()), all[..n]);
         for len in [0, 1, 17, n - 1, n, n + 1, 2 * n, 2 * n + 1, 3 * n] {
-            for selected in [seq.clone().cycle(len), seq.clone().repeat(3).take(len)] {
+            for selected in [seq.clone().cycle_to(len), seq.clone().repeat(3).take(len)] {
                 let order = Order::with_seed(selected, seed).unwrap();
                 assert_eq!(ids(order.iter()), all[..len], "prefix length {len}");
             }
@@ -689,10 +689,10 @@ fn errors() {
     assert_eq!(err.to_string(), "cannot take 11 of 10 positions (at node 0/1/1/0)");
     assert_eq!(root(ErrorKind::ZeroStep).to_string(), "step is zero (at the root)");
     assert_eq!(err.into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
-    assert_eq!(Order::new(src(0, 0).cycle(5)).unwrap_err(), root(ErrorKind::EmptyCycle));
-    assert_eq!(Order::new(Seq::concat([src(0, 3), src(1, 0).cycle(5)])).unwrap_err(), at(ErrorKind::EmptyCycle, &[1]));
-    assert_eq!(Order::new(src(0, 5).take(6).cycle(5)).unwrap_err(), at(ErrorKind::TakeOutOfRange { n: 6, len: 5 }, &[0]));
-    assert_eq!(Order::new(src(0, 0).cycle(0)).unwrap().len(), 0);
+    assert_eq!(Order::new(src(0, 0).cycle_to(5)).unwrap_err(), root(ErrorKind::EmptyCycle));
+    assert_eq!(Order::new(Seq::concat([src(0, 3), src(1, 0).cycle_to(5)])).unwrap_err(), at(ErrorKind::EmptyCycle, &[1]));
+    assert_eq!(Order::new(src(0, 5).take(6).cycle_to(5)).unwrap_err(), at(ErrorKind::TakeOutOfRange { n: 6, len: 5 }, &[0]));
+    assert_eq!(Order::new(src(0, 0).cycle_to(0)).unwrap().len(), 0);
     assert_eq!(root(ErrorKind::EmptyCycle).to_string(), "cannot cycle a sequence without elements (at the root)");
 }
 
@@ -703,30 +703,30 @@ fn cycles() {
     let x = || src(0, 100).shuffle(3);
     let all = ids(Order::new(x().repeat(4)).unwrap().iter());
     for len in [0, 1, 99, 100, 101, 250, 400] {
-        let order = Order::new(x().cycle(len)).unwrap();
+        let order = Order::new(x().cycle_to(len)).unwrap();
         assert_eq!(order.len(), len);
-        assert_eq!(ids(order.iter()), all[..len], "cycle({len})");
+        assert_eq!(ids(order.iter()), all[..len], "cycle_to({len})");
         assert_eq!(ids(Order::new(x().repeat(4).take(len)).unwrap().iter()), all[..len]);
     }
-    assert_eq!(ids(Order::new(x().cycle(99)).unwrap().iter()), ids(Order::new(x().take(99)).unwrap().iter()));
+    assert_eq!(ids(Order::new(x().cycle_to(99)).unwrap().iter()), ids(Order::new(x().take(99)).unwrap().iter()));
     // Inner repeat levels stay unchanged when a cycle extends to another pass.
     let y = || src(0, 10).shuffle(3).repeat(2);
-    assert_eq!(ids(Order::new(y().cycle(15)).unwrap().iter()), ids(Order::new(y()).unwrap().cursor(..15).unwrap()));
-    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter()), ids(Order::new(y().repeat(3)).unwrap().cursor(..45).unwrap()));
-    assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter())[..20], ids(Order::new(y()).unwrap().iter())[..]);
+    assert_eq!(ids(Order::new(y().cycle_to(15)).unwrap().iter()), ids(Order::new(y()).unwrap().cursor(..15).unwrap()));
+    assert_eq!(ids(Order::new(y().cycle_to(45)).unwrap().iter()), ids(Order::new(y().repeat(3)).unwrap().cursor(..45).unwrap()));
+    assert_eq!(ids(Order::new(y().cycle_to(45)).unwrap().iter())[..20], ids(Order::new(y()).unwrap().iter())[..]);
     // Node shapes: no slice above a repeat, a short cycle is a slice or the child.
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
-    assert!(matches!(root(x().cycle(250)), Node::Repeat { child_len: 100, len: 250, .. }));
+    assert!(matches!(root(x().cycle_to(250)), Node::Repeat { child_len: 100, len: 250, .. }));
     assert!(matches!(root(x().repeat(4).take(250)), Node::Repeat { child_len: 100, len: 250, .. }));
     assert!(matches!(root(x().repeat(4).take(100)), Node::Shuffle { .. }));
-    assert!(matches!(root(x().cycle(7)), Node::Slice { start: 0, len: 7, .. }));
-    assert!(matches!(root(src(0, 100).cycle(7)), Node::Source { offset: 0, len: 7, .. }));
+    assert!(matches!(root(x().cycle_to(7)), Node::Slice { start: 0, len: 7, .. }));
+    assert!(matches!(root(src(0, 100).cycle_to(7)), Node::Source { offset: 0, len: 7, .. }));
     assert!(matches!(root(x().repeat(4).skip(1).take(250)), Node::Slice { start: 1, len: 250, .. }));
-    let Node::Mix { children, .. } = root(Seq::mix([x().cycle(200), src(1, 1000).shuffle(4).cycle(100)])) else { panic!() };
+    let Node::Mix { children, .. } = root(Seq::mix([x().cycle_to(200), src(1, 1000).shuffle(4).cycle_to(100)])) else { panic!() };
     assert!(matches!(children[0], Node::Repeat { child_len: 100, len: 200, .. }));
     assert!(matches!(children[1], Node::Slice { start: 0, len: 100, .. }));
     // The longest order representable by the public API; still finite.
-    let endless = Order::new(x().cycle(usize::MAX)).unwrap();
+    let endless = Order::new(x().cycle_to(usize::MAX)).unwrap();
     assert_eq!(endless.len(), usize::MAX);
     let last = usize::MAX - 1;
     assert_eq!(ids(endless.cursor(last..).unwrap()), vec![(0, endless.get(last).unwrap().record_index)]);
@@ -734,11 +734,11 @@ fn cycles() {
     // A cycle over a concatenation narrows it like a take, beyond one repetition it counts
     // every part.
     let base = ids(Order::new(src(0, 100).shuffle(1)).unwrap().iter());
-    assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(100).shuffle(1)).unwrap().iter()), base);
-    assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(200).shuffle(1)).unwrap().iter())[..100], base[..]);
+    assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle_to(100).shuffle(1)).unwrap().iter()), base);
+    assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle_to(200).shuffle(1)).unwrap().iter())[..100], base[..]);
     // A cycled concat part is narrowed to the requested count before mixing.
     let part = || Seq::concat([src(0, 100), src(1, 50)]);
-    let narrowed = Order::new(Seq::mix([part().cycle(75), src(2, 75)]).shuffle(1)).unwrap();
+    let narrowed = Order::new(Seq::mix([part().cycle_to(75), src(2, 75)]).shuffle(1)).unwrap();
     let plain = Order::new(Seq::mix([src(0, 100).take(75), src(2, 75)]).shuffle(1)).unwrap();
     assert_eq!(ids(narrowed.iter()), ids(plain.iter()));
 }
@@ -999,8 +999,8 @@ fn sequence_lengths_must_fit_usize() {
             seq.clone().take(0),
             seq.clone().skip(usize::MAX),
             seq.clone().step_by(2),
-            seq.clone().cycle(10),
-            seq.clone().cycle(0),
+            seq.clone().cycle_to(10),
+            seq.clone().cycle_to(0),
             seq.repeat(0),
         ] {
             assert_eq!(Order::new(shortened.clone()).unwrap_err(), at(ErrorKind::LengthOverflow, &[0]));
@@ -1016,7 +1016,7 @@ fn sequence_lengths_must_fit_usize() {
         src(0, usize::MAX).shuffle(7),
         Seq::concat([src(0, usize::MAX - 1), src(1, 1)]),
         src(0, 1).repeat(usize::MAX),
-        src(0, 3).shuffle(7).cycle(usize::MAX),
+        src(0, 3).shuffle(7).cycle_to(usize::MAX),
     ];
     #[cfg(target_pointer_width = "32")]
     let at_limit = at_limit.into_iter().chain([Seq::mix([src(0, usize::MAX - 1), src(1, 1)])]);
@@ -1093,7 +1093,7 @@ fn steep_schedule_at_scale() {
 /// Explicit counts repeat short parts (reshuffled) and truncate long ones before mixing.
 #[test]
 fn mix_with_explicit_counts() {
-    let seq = Seq::mix([src(0, 100).shuffle(1).cycle(1800), src(1, 5000).shuffle(2).cycle(1200)]);
+    let seq = Seq::mix([src(0, 100).shuffle(1).cycle_to(1800), src(1, 5000).shuffle(2).cycle_to(1200)]);
     let order = Order::new(seq).unwrap();
     assert_eq!(order.len(), 3000);
     let all = ids(order.cursor(0..3000).unwrap());
@@ -1113,6 +1113,6 @@ fn mix_with_explicit_counts() {
     ones.dedup();
     assert_eq!(ones.len(), 1200);
     // A part is compiled once: its sources appear once.
-    let once = Order::new(Seq::mix([Seq::concat([src(0, 4), src(1, 4)]).cycle(10), src(2, 10).cycle(20)])).unwrap();
+    let once = Order::new(Seq::mix([Seq::concat([src(0, 4), src(1, 4)]).cycle_to(10), src(2, 10).cycle_to(20)])).unwrap();
     assert_eq!(once.sources().len(), 3);
 }

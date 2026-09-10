@@ -109,17 +109,17 @@ so you can nest mixes and concatenations.
 | --- | --- |
 | Read sequences one after another | `Seq::concat(sequences)` |
 | Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
-| Choose exact counts for each dataset | `Seq::mix([a.cycle(a_count), b.cycle(b_count), …])` |
+| Choose exact counts for each dataset | `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count), …])` |
 | Control when a sequence contributes records | `Seq::mix`, with a `Schedule` for each part |
 | Shuffle positions | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
-| Repeat or truncate to an exact length | `.cycle(len)` |
+| Repeat or truncate to an exact length | `.cycle_to(len)` |
 | Keep a range of positions | `.skip(start).take(len)` |
 | Keep every nth position from an offset | `.skip(offset).step_by(step)` |
 | Assign every nth position to a worker | `.skip(worker_index).step_by(worker_count)` |
 
 A mix uses every input element once, drawing more often from longer sequences.
-Choose each dataset's count with `.cycle(count)`, which repeats or truncates the
+Choose each dataset's count with `.cycle_to(count)`, which repeats or truncates the
 sequence as needed. This gives a 75/25 mixture of one million records:
 
 ```rust
@@ -128,8 +128,8 @@ use dataorder::{Order, Seq};
 let web = Seq::source(100_000);
 let code = Seq::source(500_000);
 let seq = Seq::mix([
-    web.shuffle(1).cycle(750_000),
-    code.shuffle(2).cycle(250_000),
+    web.shuffle(1).cycle_to(750_000),
+    code.shuffle(2).cycle_to(250_000),
 ]);
 assert_eq!(Order::new(seq)?.len(), 1_000_000);
 # Ok::<(), dataorder::Error>(())
@@ -152,8 +152,8 @@ use dataorder::{Order, Schedule, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq = Seq::mix([
-        (Seq::source(300).shuffle(1).cycle(750), Schedule::Uniform),
-        (Seq::source(100).shuffle(2).cycle(250), Schedule::delayed(0.5)),
+        (Seq::source(300).shuffle(1).cycle_to(750), Schedule::Uniform),
+        (Seq::source(100).shuffle(2).cycle_to(250), Schedule::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
@@ -212,7 +212,7 @@ resume existing checkpoints with their original crate version.
   `Result` for range operations. `step_by(0)` is an error when the order is built.
   Failed cursor operations leave their state unchanged.
 - **Lengths must fit `usize`.** Every intermediate sequence must fit, even when a
-  later `take`, `cycle`, or `step_by` would shorten it. Overflow is reported at the
+  later `take`, `cycle_to`, or `step_by` would shorten it. Overflow is reported at the
   offending node.
 - **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range.
   Use `reset(range)?` to replace the remaining range and reuse allocated buffers.

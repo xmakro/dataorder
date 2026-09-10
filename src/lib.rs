@@ -72,7 +72,7 @@
 //! | [`StepBy`](Seq::StepBy) | `⌈n / step⌉` | Child position `p × step` |
 //!
 //! A mix uses every element of every part once. Set each part's exact count with
-//! [`Seq::cycle`] before mixing. A mix preserves the order within each part;
+//! [`Seq::cycle_to`] before mixing. A mix preserves the order within each part;
 //! add a shuffle to a part to change that order.
 //!
 //! [`Schedule`] assigns each part's elements keys on a shared virtual clock.
@@ -114,7 +114,7 @@
 //! even when their selected positions do not reach them, just as with source salts below.
 //! Adding an outer repeat leaves inner levels unchanged, so its entire first pass keeps
 //! the child's order, including all nested epochs. Later outer passes reseed the shuffles
-//! inside it. Increasing `repeat(times)` or `cycle(len)` preserves the existing prefix.
+//! inside it. Increasing `repeat(times)` or `cycle_to(len)` preserves the existing prefix.
 //! A single repetition, or a cycle within the existing length, introduces no repeat level.
 //!
 //! Empty sources and subtrees do not contribute to a shuffle's salt. A skip or take

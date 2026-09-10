@@ -34,7 +34,7 @@ fn builders_accept_unresolved_sources() {
         Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix([(Seq::source(second), Schedule::Uniform)])])
             .shuffle(7)
             .repeat(2)
-            .cycle(50)
+            .cycle_to(50)
             .skip(2)
             .take(40)
             .skip(1)
@@ -137,9 +137,9 @@ fn unresolved_position_operations_round_trip() {
 #[test]
 fn hand_built_configuration() {
     let seq = Seq::Mix(vec![
-        MixPart { seq: shard("a", 10).shuffle(1).cycle(75), schedule: Schedule::Uniform },
+        MixPart { seq: shard("a", 10).shuffle(1).cycle_to(75), schedule: Schedule::Uniform },
         MixPart::from(
-            Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), schedule: Schedule::delayed(0.5) }]).cycle(25),
+            Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), schedule: Schedule::delayed(0.5) }]).cycle_to(25),
         ),
     ]);
     // The mix builder takes parts, pairs or bare sequences alike.
@@ -302,14 +302,14 @@ fn serde_round_trip() {
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
     assert!(a.iter().eq(b.iter()));
     // The wire format is part of the API.
-    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle(9), Schedule::ramp(0.1, 0.2))]);
+    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle_to(9), Schedule::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
         r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
     );
     assert_eq!(serde_json::to_string(&Schedule::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
     assert_eq!(serde_json::to_string(&Schedule::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
-    assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
+    assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle_to(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
     // Unknown fields are rejected in every variant.
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
