@@ -4,12 +4,11 @@
 //! with lengths, concat offsets, interleave profiles and shuffle shapes. [`get`]
 //! follows that tree to resolve a position without keeping iteration state.
 
-use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, Sampling};
 use crate::perm::{self, Shape};
 use crate::seq::MixPart;
-use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
+use crate::{BoundsError, Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
 use std::ops::RangeBounds;
 
@@ -263,7 +262,7 @@ impl<T> Order<T> {
     /// # Errors
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
     pub fn iter(&self, range: impl RangeBounds<usize>) -> Result<Cursor<'_, T>, BoundsError> {
-        Ok(Cursor::new(self, resolve(range, self.len())?))
+        Cursor::new(self, range)
     }
 }
 
@@ -286,9 +285,9 @@ impl<'a, T> IntoIterator for &'a Order<T> {
     type Item = Item<'a, T>;
     type IntoIter = Cursor<'a, T>;
 
-    /// The whole order, without fallible range validation.
+    /// The whole order.
     fn into_iter(self) -> Cursor<'a, T> {
-        Cursor::new(self, 0..self.len())
+        self.iter(..).expect("dataorder: full order range is valid")
     }
 }
 

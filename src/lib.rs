@@ -250,7 +250,6 @@
 #![allow(clippy::suboptimal_flops)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-mod bounds;
 mod cursor;
 mod error;
 mod interleave;
@@ -261,9 +260,8 @@ mod source;
 #[cfg(test)]
 mod tests;
 
-pub use bounds::BoundsError;
 pub use cursor::Cursor;
-pub use error::{Error, ErrorKind, SamplingDetail};
+pub use error::{BoundsError, Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};

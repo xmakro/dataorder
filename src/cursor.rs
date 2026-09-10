@@ -8,13 +8,13 @@
 //! the small mix step is inlined into dispatch, while the larger shuffle step stays
 //! out of line to avoid adding overhead to other node kinds.
 
-use crate::bounds::{BoundsError, resolve};
+use crate::error::BoundsError;
 use crate::interleave::{Interleave, Iter};
 use crate::order::{Item, Node, Order, get_with};
 use crate::perm::{self, Key, Shape};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::ops::{Range, RangeBounds};
+use std::ops::{Bound, Range, RangeBounds};
 
 /// A seekable iterator over a range of an [`Order`].
 ///
@@ -42,7 +42,8 @@ pub struct Cursor<'a, T> {
 }
 
 impl<'a, T> Cursor<'a, T> {
-    pub(crate) fn new(order: &'a Order<T>, range: Range<usize>) -> Self {
+    pub(crate) fn new(order: &'a Order<T>, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
+        let range = resolve_range(range, order.len())?;
         let (start, end) = (range.start as u64, range.end as u64);
         // Prepare allocation-free roots immediately. Composite roots defer their
         // buffers and seeks until the first draw.
@@ -61,7 +62,7 @@ impl<'a, T> Cursor<'a, T> {
             }),
             node => NodeCursor::Uninitialized { node, pos: start, ctx: order.ctx },
         };
-        Cursor { order, root, pos: start, end, deferred_from: None }
+        Ok(Self { order, root, pos: start, end, deferred_from: None })
     }
 
     /// Absolute order position of the next element, or the range end if exhausted.
@@ -146,7 +147,7 @@ impl<'a, T> Cursor<'a, T> {
     /// # Errors
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
     pub fn set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
-        let range = resolve(range, self.order.len())?;
+        let range = resolve_range(range, self.order.len())?;
         self.end = range.end as u64;
         self.seek(range.start)
     }
@@ -168,6 +169,27 @@ impl<'a, T> Cursor<'a, T> {
         }
         true
     }
+}
+
+/// Normalize and validate against the order length.
+fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usize>, BoundsError> {
+    let start = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).ok_or(BoundsError::StartOverflow)?,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&e) => e.checked_add(1).ok_or(BoundsError::EndOverflow)?,
+        Bound::Excluded(&e) => e,
+        Bound::Unbounded => len,
+    };
+    if start > end {
+        return Err(BoundsError::Reversed { start, end });
+    }
+    if end > len {
+        return Err(BoundsError::OutOfBounds { end, len });
+    }
+    Ok(start..end)
 }
 
 impl<T> fmt::Debug for Cursor<'_, T> {

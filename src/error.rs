@@ -1,4 +1,4 @@
-//! Configuration errors, including their location in the sequence tree.
+//! Configuration errors with sequence-tree locations, and order/cursor bounds errors.
 
 use crate::Sampling;
 use crate::interleave::{MAX_TOTAL_LEN, SamplingError};
@@ -216,3 +216,49 @@ impl SamplingError {
         }
     }
 }
+
+/// An invalid range or cursor position. Failed cursor operations leave the
+/// cursor unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BoundsError {
+    /// An exclusive start at `usize::MAX` cannot be advanced by one.
+    StartOverflow,
+    /// An inclusive end at `usize::MAX` cannot be advanced by one.
+    EndOverflow,
+    /// The exclusive end precedes the start.
+    Reversed {
+        /// Inclusive start.
+        start: usize,
+        /// Exclusive end.
+        end: usize,
+    },
+    /// A range extends beyond the order.
+    OutOfBounds {
+        /// Requested exclusive end.
+        end: usize,
+        /// Order length.
+        len: usize,
+    },
+    /// A seek extends beyond the cursor's current range end.
+    SeekOutOfBounds {
+        /// Requested absolute position.
+        pos: usize,
+        /// Cursor's exclusive range end.
+        end: usize,
+    },
+}
+
+impl fmt::Display for BoundsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StartOverflow => write!(f, "range start overflows usize"),
+            Self::EndOverflow => write!(f, "range end overflows usize"),
+            Self::Reversed { start, end } => write!(f, "range {start}..{end} ends before it starts"),
+            Self::OutOfBounds { end, len } => write!(f, "range end {end} out of range for {len} positions"),
+            Self::SeekOutOfBounds { pos, end } => write!(f, "seek to {pos} beyond the end {end}"),
+        }
+    }
+}
+
+impl std::error::Error for BoundsError {}
