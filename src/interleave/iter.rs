@@ -14,13 +14,13 @@ pub(crate) struct Iter<'a> {
     il: &'a Interleave,
     tree: TournamentTree<Slot>,
     /// Scratch for the seek's per-sequence counts, kept so that a seek allocates nothing.
-    counts: Vec<u64>,
-    remaining: u64,
+    counts: Vec<usize>,
+    remaining: usize,
 }
 
 impl<'a> Iter<'a> {
     /// Seeks to `range.start` (the range is already validated) and builds the tree of heads.
-    pub(crate) fn new(il: &'a Interleave, range: Range<u64>) -> Self {
+    pub(crate) fn new(il: &'a Interleave, range: Range<usize>) -> Self {
         let mut iter = Iter { il, tree: TournamentTree::empty(), counts: Vec::new(), remaining: 0 };
         iter.seek(range);
         iter
@@ -29,7 +29,7 @@ impl<'a> Iter<'a> {
     /// Repositions at an already validated range, reusing allocated buffers.
     /// Counts elements before the start, rebuilds the tournament over the remaining
     /// heads, then replays the small gap left by the counts.
-    pub(crate) fn seek(&mut self, range: Range<u64>) {
+    pub(crate) fn seek(&mut self, range: Range<usize>) {
         let (a, remaining) = (range.start, range.end - range.start);
         self.remaining = remaining;
         if remaining == 0 {
@@ -52,7 +52,7 @@ impl<'a> Iter<'a> {
     /// The next element of an iterator that is not exhausted (checked in debug builds
     /// only): the walk without the `Option`.
     #[inline(always)]
-    pub(crate) fn step(&mut self) -> (usize, u64) {
+    pub(crate) fn step(&mut self) -> (usize, usize) {
         debug_assert!(self.remaining > 0, "interleave: iterator exhausted");
         self.remaining -= 1;
         advance(self.il, &mut self.tree)
@@ -60,10 +60,10 @@ impl<'a> Iter<'a> {
 }
 
 impl Iterator for Iter<'_> {
-    type Item = (usize, u64);
+    type Item = (usize, usize);
 
     #[inline(always)]
-    fn next(&mut self) -> Option<(usize, u64)> {
+    fn next(&mut self) -> Option<(usize, usize)> {
         if self.remaining == 0 {
             return None;
         }
@@ -72,7 +72,7 @@ impl Iterator for Iter<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        usize::try_from(self.remaining).map_or((usize::MAX, None), |n| (n, Some(n)))
+        (self.remaining, Some(self.remaining))
     }
 }
 
@@ -84,14 +84,14 @@ struct Slot {
     /// The sequence.
     seq: u32,
     /// Index of the element within the sequence.
-    j: u64,
+    j: usize,
     /// Cached profile segment for locating the next key; see
     /// [`Profile::quantile`](super::profile::Profile::quantile).
-    /// Stored as `u32` to keep the slot at 24 bytes and widened to `usize` for lookup.
+    /// Stored as `u32` to avoid padding on 64-bit targets and widened to `usize` for lookup.
     seg: u32,
     /// Key of the element after this one, computed ahead of time so that replacing this
     /// element in the tree does not wait for the arithmetic; NaN for the last element
-    /// (keys are finite), which keeps the slot at 24 bytes.
+    /// (keys are finite), avoiding a separate exhaustion flag.
     next_key: f64,
 }
 
@@ -103,17 +103,17 @@ struct Slot {
 /// `a / N`. Then bisect virtual-time bits, which takes at most 63 further probes.
 /// Neither path assumes virtual time equals output progress. All rank sums are
 /// integer counts; never replay more than twice the number of parts.
-fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
+fn counts_below(il: &Interleave, a: usize, counts: &mut Vec<usize>) -> usize {
     if a == 0 {
         counts.clear();
         counts.resize(il.seqs.len(), 0);
         return 0;
     }
-    let k = il.seqs.len() as u64;
-    let count = |t, counts: &mut Vec<u64>| {
+    let k = il.seqs.len();
+    let count = |t, counts: &mut Vec<usize>| {
         counts.clear();
         counts.extend((0..il.seqs.len()).map(|s| count_below(il, s, t)));
-        counts.iter().sum::<u64>()
+        counts.iter().sum::<usize>()
     };
     let mut t = a as f64 / il.total as f64;
     let (mut lo, mut hi) = (0.0f64, 1.0f64.next_up());
@@ -159,11 +159,11 @@ fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
 }
 
 /// Number of elements of `seq` whose key is below virtual time `t`.
-fn count_below(il: &Interleave, seq: usize, t: f64) -> u64 {
+fn count_below(il: &Interleave, seq: usize, t: f64) -> usize {
     let s = &il.seqs[seq];
     // Guess from the share function, then make it exact against the real keys.
     let guess = s.n as f64 * il.profile(seq).share(t) - s.phi;
-    let mut c = (guess.ceil().max(0.0) as u64).min(s.n);
+    let mut c = (guess.ceil().max(0.0) as usize).min(s.n);
     let mut seg = 0;
     for _ in 0..4 {
         if c < s.n && il.key(seq, c, &mut seg) < t {
@@ -186,7 +186,7 @@ fn count_below(il: &Interleave, seq: usize, t: f64) -> u64 {
 /// The slot for element `j` of `seq` (whose key is `key`), with the following element's
 /// key already computed.
 #[inline(always)]
-fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: usize) -> Slot {
+fn slot(il: &Interleave, seq: usize, j: usize, key: f64, mut seg: usize) -> Slot {
     let next_key = if j + 1 < il.seqs[seq].n {
         let next = il.key(seq, j + 1, &mut seg);
         debug_assert!(next >= key, "interleave: keys of sequence {seq} not monotone at {j}");
@@ -203,7 +203,7 @@ fn slot(il: &Interleave, seq: usize, j: u64, key: f64, mut seg: usize) -> Slot {
 /// without waiting for division or square root; computing the following key can
 /// overlap with the tree update.
 #[inline(always)]
-fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, u64) {
+fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, usize) {
     let (_, &Slot { seq, j, seg, next_key }) = tree.min().expect("interleave: iterator exhausted");
     if next_key.is_nan() {
         tree.remove_min();

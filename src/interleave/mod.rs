@@ -61,7 +61,7 @@ pub(crate) const MAX_TOTAL_LEN: u64 = 1 << 46;
 
 #[derive(Clone, Copy, Debug)]
 struct Seq {
-    n: u64,
+    n: usize,
     /// `1/n` (0 for an empty sequence): keys multiply by it instead of dividing (monotone
     /// in `j` all the same).
     inv_n: f64,
@@ -79,7 +79,7 @@ pub(crate) struct Interleave {
     seqs: Vec<Seq>,
     /// Rate profiles: `profiles[0]` for the uniform sequences, one more per scheduled one.
     profiles: Vec<Profile>,
-    total: u64,
+    total: usize,
 }
 
 impl Interleave {
@@ -88,7 +88,7 @@ impl Interleave {
     /// # Panics
     /// If the total length exceeds [`MAX_TOTAL_LEN`].
     #[cfg(test)]
-    pub(crate) fn new(lens: &[u64]) -> Self {
+    pub(crate) fn new(lens: &[usize]) -> Self {
         Self::with_sampling(lens, &vec![Sampling::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
     }
 
@@ -98,12 +98,15 @@ impl Interleave {
     ///
     /// # Panics
     /// If `lens` and `sampling` differ in length.
-    pub(crate) fn with_sampling(lens: &[u64], sampling: &[Sampling]) -> Result<Self, SamplingError> {
+    pub(crate) fn with_sampling(lens: &[usize], sampling: &[Sampling]) -> Result<Self, SamplingError> {
         assert_eq!(lens.len(), sampling.len(), "interleave: one schedule per sequence");
         let k = lens.len();
-        let mut total: u64 = 0;
+        let mut total: usize = 0;
         for &n in lens {
-            total = total.checked_add(n).filter(|&t| t <= MAX_TOTAL_LEN).ok_or(SamplingError::TooLong)?;
+            total = total.checked_add(n).ok_or(SamplingError::LengthOverflow)?;
+            if total as u64 > MAX_TOTAL_LEN {
+                return Err(SamplingError::TooLong);
+            }
         }
         let live = lens.iter().filter(|&&n| n > 0).count();
         let mut rank = 0usize;
@@ -162,7 +165,7 @@ impl Interleave {
     }
 
     /// Length of the merged sequence (sum of all sequence lengths).
-    pub(crate) fn len(&self) -> u64 {
+    pub(crate) fn len(&self) -> usize {
         self.total
     }
 
@@ -186,7 +189,7 @@ impl Interleave {
 
     /// Virtual time of element `j` of `seq`. `seg` caches the profile segment.
     #[inline(always)]
-    fn key(&self, seq: usize, j: u64, seg: &mut usize) -> f64 {
+    fn key(&self, seq: usize, j: usize, seg: &mut usize) -> f64 {
         let s = &self.seqs[seq];
         self.profile(seq).quantile((j as f64 + s.phi) * s.inv_n, seg)
     }
@@ -195,7 +198,7 @@ impl Interleave {
     ///
     /// # Panics
     /// If `range.end > len()` or `range.start > range.end`.
-    pub(crate) fn iter(&self, range: Range<u64>) -> Iter<'_> {
+    pub(crate) fn iter(&self, range: Range<usize>) -> Iter<'_> {
         assert!(range.start <= range.end, "interleave: invalid range");
         assert!(range.end <= self.total, "interleave: range end {} out of range", range.end);
         Iter::new(self, range)

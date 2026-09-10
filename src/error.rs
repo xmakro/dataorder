@@ -112,14 +112,14 @@ pub enum ErrorKind {
         /// Positions to skip.
         n: usize,
         /// Length of the sequence.
-        len: u64,
+        len: usize,
     },
     /// A `Take` of `n` positions from a sequence of `len < n`.
     TakeOutOfRange {
         /// Positions to take.
         n: usize,
         /// Length of the sequence.
-        len: u64,
+        len: usize,
     },
     /// A `StepBy` with `step == 0`.
     ZeroStep,
@@ -145,7 +145,7 @@ pub enum ErrorKind {
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep {
         /// Compiled part length.
-        len: u64,
+        len: usize,
         /// Highest normalized rate in the part's profile.
         peak_rate: f64,
         /// Maximum supported length times rate.
@@ -179,6 +179,7 @@ impl SamplingError {
     /// The kind and, for a problem with one part, the part's index.
     pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
         match self {
+            Self::LengthOverflow => (ErrorKind::LengthOverflow, None),
             Self::TooLong => (ErrorKind::MixTooLong, None),
             Self::InvalidParameter { seq, sampling, reason } => (ErrorKind::InvalidSampling { sampling, reason }, Some(seq)),
             Self::TooSteep { seq, len, peak_rate } => (ErrorKind::TooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),

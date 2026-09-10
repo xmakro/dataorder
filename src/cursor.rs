@@ -33,14 +33,14 @@ pub struct Cursor<'a, T> {
     order: &'a Order<T>,
     /// Positioned at `pos` whenever it is before the end of the order.
     root: NodeCursor<'a>,
-    pos: u64,
-    end: u64,
+    pos: usize,
+    end: usize,
 }
 
 impl<'a, T> Cursor<'a, T> {
     pub(crate) fn new(order: &'a Order<T>, range: impl RangeBounds<usize>) -> Result<Self, BoundsError> {
         let range = resolve_range(range, order.len())?;
-        let (start, end) = (range.start as u64, range.end as u64);
+        let (start, end) = (range.start, range.end);
         let mut root = NodeCursor::new(&order.root);
         if start < order.root.len() {
             root.seek(start, order.ctx);
@@ -52,7 +52,7 @@ impl<'a, T> Cursor<'a, T> {
     /// Unlike [`Iterator::position`], this does not consume any elements.
     #[must_use]
     pub fn offset(&self) -> usize {
-        self.pos as usize
+        self.pos
     }
 
     /// Moves to absolute order position `pos`, keeping the current range end.
@@ -81,10 +81,10 @@ impl<'a, T> Cursor<'a, T> {
     /// # Errors
     /// [`BoundsError::SeekOutOfBounds`] when `pos` exceeds the current range end.
     pub fn seek(&mut self, pos: usize) -> Result<(), BoundsError> {
-        if pos as u64 > self.end {
-            return Err(BoundsError::SeekOutOfBounds { pos, end: self.end as usize });
+        if pos > self.end {
+            return Err(BoundsError::SeekOutOfBounds { pos, end: self.end });
         }
-        self.reposition(pos as u64);
+        self.reposition(pos);
         Ok(())
     }
 
@@ -113,13 +113,13 @@ impl<'a, T> Cursor<'a, T> {
     /// A reversed, overflowing or out-of-bounds range; see [`BoundsError`].
     pub fn set_range(&mut self, range: impl RangeBounds<usize>) -> Result<(), BoundsError> {
         let range = resolve_range(range, self.order.len())?;
-        self.end = range.end as u64;
-        self.reposition(range.start as u64);
+        self.end = range.end;
+        self.reposition(range.start);
         Ok(())
     }
 
     /// Moves to a validated position, including positions in an empty range.
-    fn reposition(&mut self, pos: u64) {
+    fn reposition(&mut self, pos: usize) {
         // At the order's end there is no element to position the tree at. Any
         // subsequent move into the order is backward and seeks the tree anew.
         if pos < self.order.root.len() {
@@ -156,7 +156,7 @@ fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usi
 
 impl<T> fmt::Debug for Cursor<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Cursor").field("position", &self.offset()).field("end", &(self.end as usize)).finish()
+        f.debug_struct("Cursor").field("position", &self.offset()).field("end", &self.end).finish()
     }
 }
 
@@ -180,12 +180,12 @@ impl<'a, T> Iterator for Cursor<'a, T> {
         }
         self.pos += 1;
         let (s, i) = self.root.next();
-        Some(Item { source_ordinal: s as usize, source: &self.order.sources[s as usize], record_index: i as usize })
+        Some(Item { source_ordinal: s as usize, source: &self.order.sources[s as usize], record_index: i })
     }
 
     /// Skips `n` elements without visiting them, then yields the next.
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        let skip = (n as u64).min(self.end - self.pos);
+        let skip = n.min(self.end - self.pos);
         self.reposition(self.pos + skip);
         self.next()
     }
@@ -202,21 +202,21 @@ impl<'a, T> Iterator for Cursor<'a, T> {
 
     /// The last element of the range, by random access without walking there.
     fn last(self) -> Option<Self::Item> {
-        if self.pos == self.end { None } else { self.order.get(self.end as usize - 1) }
+        if self.pos == self.end { None } else { self.order.get(self.end - 1) }
     }
 }
 
 impl<T> ExactSizeIterator for Cursor<'_, T> {
     /// Elements left until the end of the range.
     fn len(&self) -> usize {
-        (self.end - self.pos) as usize
+        self.end - self.pos
     }
 }
 
 impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 
 /// Marks a child whose position is unknown after a mix seek or before its first draw.
-const UNSEEKED: u64 = u64::MAX;
+const UNSEEKED: usize = usize::MAX;
 
 /// Per-node iteration state. An explicit tag avoids decoding a tag stored in a
 /// field's unused bit patterns on every dispatch.
@@ -229,15 +229,15 @@ pub(crate) enum NodeCursor<'a> {
     Empty,
     Source {
         src: u32,
-        offset: u64,
-        next: u64,
+        offset: usize,
+        next: usize,
     },
     /// Only the current child has a cursor. Changing children replaces its state.
     Concat {
         children: &'a [Node],
-        offsets: &'a [u64],
+        offsets: &'a [usize],
         idx: usize,
-        left: u64,
+        left: usize,
         ctx: u64,
         child: Box<Self>,
     },
@@ -247,22 +247,22 @@ pub(crate) enum NodeCursor<'a> {
     Shuffle(ShuffleCursor<'a>),
     /// `level` is this repeat's inside-out level; it salts the epoch contexts.
     Repeat {
-        child_len: u64,
+        child_len: usize,
         level: u8,
-        epoch: u64,
-        left: u64,
+        epoch: usize,
+        left: usize,
         ctx: u64,
         child: Box<Self>,
     },
     Slice {
-        start: u64,
+        start: usize,
         child: Box<Self>,
     },
     Stride {
-        step: u64,
-        offset: u64,
-        len: u64,
-        left: u64,
+        step: usize,
+        offset: usize,
+        len: usize,
+        left: usize,
         child: Box<Self>,
     },
 }
@@ -303,7 +303,7 @@ impl<'a> NodeCursor<'a> {
     }
 
     /// Positions the cursor so that `next` yields element `pos` (`pos < len`) in context `ctx`.
-    fn seek(&mut self, pos: u64, ctx: u64) {
+    fn seek(&mut self, pos: usize, ctx: u64) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: seek in an empty sequence"),
             NodeCursor::Source { offset, next, .. } => *next = *offset + pos,
@@ -341,7 +341,7 @@ impl<'a> NodeCursor<'a> {
 
     /// The next element. Must not be called past the end.
     #[inline]
-    fn next(&mut self) -> (u32, u64) {
+    fn next(&mut self) -> (u32, usize) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
             NodeCursor::Source { src, next, .. } => {
@@ -386,7 +386,7 @@ impl<'a> NodeCursor<'a> {
     /// child skips; beyond it the cursor lands in the target one directly, or, exactly on a
     /// boundary, stays there and lets the next [`next`](NodeCursor::next) enter the following
     /// one, as the walk does.
-    fn skip(&mut self, m: u64) {
+    fn skip(&mut self, m: usize) {
         if m == 0 {
             return;
         }
@@ -453,8 +453,8 @@ pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
     children: &'a [Node],
     iter: Iter<'a>,
-    pos: u64,
-    next_j: Vec<u64>,
+    pos: usize,
+    next_j: Vec<usize>,
     cursors: Vec<NodeCursor<'a>>,
     ctx: u64,
 }
@@ -472,7 +472,7 @@ impl<'a> MixCursor<'a> {
         }
     }
 
-    fn seek(&mut self, pos: u64, ctx: u64) {
+    fn seek(&mut self, pos: usize, ctx: u64) {
         self.iter.seek(pos..self.il.len());
         self.pos = pos;
         self.next_j.fill(UNSEEKED);
@@ -481,7 +481,7 @@ impl<'a> MixCursor<'a> {
 
     /// Inlined into dispatch to avoid a function call for each element.
     #[inline(always)]
-    fn next(&mut self) -> (u32, u64) {
+    fn next(&mut self) -> (u32, usize) {
         let (s, j) = self.iter.step();
         self.pos += 1;
         if self.next_j[s] != j {
@@ -497,7 +497,7 @@ impl<'a> MixCursor<'a> {
     /// path out of line reduces overhead in the ordinary mix step.
     #[cold]
     #[inline(never)]
-    fn seek_child(&mut self, s: usize, j: u64) {
+    fn seek_child(&mut self, s: usize, j: usize) {
         let at = self.next_j[s];
         if at != UNSEEKED && at < j {
             self.cursors[s].skip(j - at);
@@ -514,9 +514,9 @@ impl<'a> MixCursor<'a> {
     /// scheduled mixes. These thresholds were chosen from Ryzen 9 9950X3D timings;
     /// scheduled seeks cost more because their profiles have more segments.
     /// Child cursors stay in place until their next draw; see [`Self::seek_child`].
-    fn skip(&mut self, m: u64) {
+    fn skip(&mut self, m: usize) {
         self.pos += m;
-        let hop = self.cursors.len() as u64 * if self.il.is_scheduled() { 4 } else { 2 };
+        let hop = self.cursors.len().saturating_mul(if self.il.is_scheduled() { 4 } else { 2 });
         if m >= hop {
             self.iter.seek(self.pos..self.il.len());
         } else {
@@ -535,7 +535,7 @@ pub(crate) struct ShuffleCursor<'a> {
     shape: Shape,
     child: &'a Node,
     key: Key,
-    pos: u64,
+    pos: usize,
     ctx: u64,
     /// Sparse buffers for mixes reached by random traversal. Pointer keys identify
     /// immutable interleaves borrowed for this cursor's lifetime; they are never dereferenced.
@@ -549,7 +549,7 @@ impl ShuffleCursor<'_> {
     /// Not inlined into the dispatcher: the permutation and the descent are the bulk of
     /// the code, and every other node kind would pay their prologue at each level.
     #[inline(never)]
-    fn next(&mut self) -> (u32, u64) {
+    fn next(&mut self) -> (u32, usize) {
         let p = perm::permute(self.shape, self.key, self.pos);
         self.pos += 1;
         match self.child {
@@ -560,7 +560,7 @@ impl ShuffleCursor<'_> {
 
     /// Keep the map traversal's stack frame out of the common shuffled-source path.
     #[inline(never)]
-    fn get_composite(&mut self, p: u64) -> (u32, u64) {
+    fn get_composite(&mut self, p: usize) -> (u32, usize) {
         get_with(self.child, p, self.ctx, |il, pos| {
             let key = std::ptr::from_ref(il) as usize;
             let mixes = self.mixes.get_or_insert_with(Box::default);

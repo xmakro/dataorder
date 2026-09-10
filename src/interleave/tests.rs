@@ -5,12 +5,12 @@ use super::*;
 use crate::tests::Rng;
 use Sampling::*;
 
-fn full(il: &Interleave) -> Vec<(usize, u64)> {
+fn full(il: &Interleave) -> Vec<(usize, usize)> {
     il.iter(0..il.len()).collect()
 }
 
 /// Brute force: sort every element by (key, sequence, index).
-fn reference(il: &Interleave) -> Vec<(usize, u64)> {
+fn reference(il: &Interleave) -> Vec<(usize, usize)> {
     let mut all = Vec::new();
     for (s, seq) in il.seqs.iter().enumerate() {
         for j in 0..seq.n {
@@ -27,10 +27,10 @@ fn share(il: &Interleave, s: usize, t: f64) -> f64 {
 }
 
 /// Largest `|count_s(t) − n_s·F_s(t/N)|` over all `t`, per sequence (in elements of `s`).
-fn worst_deviation(il: &Interleave, all: &[(usize, u64)]) -> Vec<f64> {
+fn worst_deviation(il: &Interleave, all: &[(usize, usize)]) -> Vec<f64> {
     let k = il.seqs.len();
     let n = il.len() as f64;
-    let mut counts = vec![0u64; k];
+    let mut counts = vec![0usize; k];
     let mut worst = vec![0.0f64; k];
     for t in 0..=all.len() {
         for s in 0..k {
@@ -47,19 +47,19 @@ fn worst_deviation(il: &Interleave, all: &[(usize, u64)]) -> Vec<f64> {
     worst
 }
 
-fn random_lens(rng: &mut Rng) -> Vec<u64> {
-    let k = rng.below64(9) as usize;
+fn random_lens(rng: &mut Rng) -> Vec<usize> {
+    let k = rng.below(9);
     (0..k)
-        .map(|_| match rng.below64(4) {
+        .map(|_| match rng.below(4) {
             0 => 0,
-            1 => rng.below64(4),
-            2 => rng.below64(30),
-            _ => rng.below64(300),
+            1 => rng.below(4),
+            2 => rng.below(30),
+            _ => rng.below(300),
         })
         .collect()
 }
 
-fn uniform_cases() -> Vec<Vec<u64>> {
+fn uniform_cases() -> Vec<Vec<usize>> {
     let mut v = vec![
         vec![],
         vec![0],
@@ -84,7 +84,7 @@ fn uniform_cases() -> Vec<Vec<u64>> {
     v
 }
 
-fn scheduled_cases() -> Vec<(Vec<u64>, Vec<Sampling>)> {
+fn scheduled_cases() -> Vec<(Vec<usize>, Vec<Sampling>)> {
     vec![
         (vec![1000, 300], vec![Uniform, Sampling::delayed(0.4)]),
         (vec![2000, 500], vec![Uniform, Sampling::ramp(0.2, 0.6)]),
@@ -115,7 +115,7 @@ fn independent_constant_profiles_resolve_an_exact_tie() {
     let expected = [(0, 0), (1, 0), (1, 1), (1, 2)];
     assert_eq!(full(&il), expected);
     for start in 0..=il.len() {
-        assert_eq!(il.iter(start..il.len()).collect::<Vec<_>>(), expected[start as usize..]);
+        assert_eq!(il.iter(start..il.len()).collect::<Vec<_>>(), expected[start..]);
     }
 }
 
@@ -123,7 +123,7 @@ fn independent_constant_profiles_resolve_an_exact_tie() {
 fn matches_brute_force_sort() {
     for il in all_cases() {
         let expect = reference(&il);
-        assert_eq!(expect.len() as u64, il.len());
+        assert_eq!(expect.len(), il.len());
         assert_eq!(full(&il), expect, "{il:?}");
     }
 }
@@ -131,12 +131,12 @@ fn matches_brute_force_sort() {
 #[test]
 fn is_a_permutation_preserving_order() {
     for il in all_cases() {
-        let mut next = vec![0u64; il.seqs.len()];
+        let mut next = vec![0usize; il.seqs.len()];
         for (t, (s, j)) in full(&il).into_iter().enumerate() {
             assert_eq!(j, next[s], "pos {t}");
             next[s] += 1;
         }
-        let lens: Vec<u64> = il.seqs.iter().map(|s| s.n).collect();
+        let lens: Vec<usize> = il.seqs.iter().map(|s| s.n).collect();
         assert_eq!(next, lens);
     }
 }
@@ -148,14 +148,14 @@ fn subranges_and_seams() {
         let n = il.len();
         let all = full(&il);
         for _ in 0..30 {
-            let a = rng.below64(n + 1);
-            let b = a + rng.below64(n + 1 - a);
+            let a = rng.below(n + 1);
+            let b = a + rng.below(n + 1 - a);
             let got: Vec<_> = il.iter(a..b).collect();
-            assert_eq!(got, &all[a as usize..b as usize], "range {a}..{b}");
-            assert_eq!(il.iter(a..b).size_hint(), ((b - a) as usize, Some((b - a) as usize)));
+            assert_eq!(got, &all[a..b], "range {a}..{b}");
+            assert_eq!(il.iter(a..b).size_hint(), (b - a, Some(b - a)));
         }
         // Random partitions tile the full sequence exactly.
-        let mut cuts: Vec<u64> = (0..5).map(|_| rng.below64(n + 1)).collect();
+        let mut cuts: Vec<usize> = (0..5).map(|_| rng.below(n + 1)).collect();
         cuts.push(0);
         cuts.push(n);
         cuts.sort_unstable();
@@ -172,11 +172,11 @@ fn every_seek_matches_the_slice() {
     for il in all_cases() {
         let n = il.len();
         let all = full(&il);
-        let starts: Vec<u64> = if n <= 3000 { (0..=n).collect() } else { (0..300).map(|_| rng.below64(n + 1)).collect() };
+        let starts: Vec<usize> = if n <= 3000 { (0..=n).collect() } else { (0..300).map(|_| rng.below(n + 1)).collect() };
         for a in starts {
-            let b = (a + 1 + rng.below64(40)).min(n);
+            let b = (a + 1 + rng.below(40)).min(n);
             let got: Vec<_> = il.iter(a..b).collect();
-            assert_eq!(got, &all[a as usize..b as usize], "seek to {a}");
+            assert_eq!(got, &all[a..b], "seek to {a}");
         }
     }
 }
@@ -204,23 +204,23 @@ fn random_configurations() {
     let mut rng = Rng(0xC0FF_EE00_1234_5678);
     let mut checked = 0;
     while checked < 2000 {
-        let k = 1 + rng.below64(12) as usize;
-        let lens: Vec<u64> = (0..k)
-            .map(|_| match rng.below64(3) {
-                0 => rng.below64(3),
-                1 => rng.below64(50),
-                _ => rng.below64(400),
+        let k = 1 + rng.below(12);
+        let lens: Vec<usize> = (0..k)
+            .map(|_| match rng.below(3) {
+                0 => rng.below(3),
+                1 => rng.below(50),
+                _ => rng.below(400),
             })
             .collect();
         let sampling: Vec<Sampling> = (0..k)
             .map(|_| {
-                let d0 = rng.below64(999);
-                let d1 = if rng.below64(2) == 0 { d0 } else { d0 + rng.below64(1001 - d0) };
-                match rng.below64(4) {
+                let d0 = rng.below(999);
+                let d1 = if rng.below(2) == 0 { d0 } else { d0 + rng.below(1001 - d0) };
+                match rng.below(4) {
                     0 => Uniform,
                     1 => {
-                        let d2 = d1 + rng.below64(1001 - d1);
-                        let d3 = if rng.below64(2) == 0 { d2 } else { d2 + rng.below64(1001 - d2) };
+                        let d2 = d1 + rng.below(1001 - d1);
+                        let d3 = if rng.below(2) == 0 { d2 } else { d2 + rng.below(1001 - d2) };
                         if d0 + d1 < d2 + d3 {
                             Sampling::trapezoid(d0 as f64 / 1000.0, d1 as f64 / 1000.0, d2 as f64 / 1000.0, d3 as f64 / 1000.0)
                         } else {
@@ -239,7 +239,7 @@ fn random_configurations() {
         let n = il.len();
         let all = full(&il);
         assert_eq!(all, reference(&il), "{lens:?} {sampling:?}");
-        let mut next = vec![0u64; k];
+        let mut next = vec![0usize; k];
         for &(s, j) in &all {
             assert_eq!(j, next[s]);
             next[s] += 1;
@@ -255,9 +255,9 @@ fn random_configurations() {
             }
         }
         for _ in 0..20 {
-            let a = rng.below64(n + 1);
-            let b = (a + rng.below64(60)).min(n);
-            assert_eq!(il.iter(a..b).collect::<Vec<_>>(), &all[a as usize..b as usize], "{lens:?} {sampling:?} seek {a}");
+            let a = rng.below(n + 1);
+            let b = (a + rng.below(60)).min(n);
+            assert_eq!(il.iter(a..b).collect::<Vec<_>>(), &all[a..b], "{lens:?} {sampling:?} seek {a}");
         }
         for (s, samp) in sampling.iter().enumerate() {
             let (start, off) = match *samp {
@@ -288,10 +288,10 @@ fn uniform_balance() {
 #[test]
 fn equal_lengths_round_robin_in_input_order() {
     for k in 1..=17usize {
-        let il = Interleave::new(&vec![6u64; k]);
+        let il = Interleave::new(&vec![6usize; k]);
         for (t, (s, j)) in full(&il).into_iter().enumerate() {
             assert_eq!(s, t % k);
-            assert_eq!(j as usize, t / k);
+            assert_eq!(j, t / k);
         }
     }
 }
@@ -361,11 +361,17 @@ fn rejects_bad_configurations() {
     assert!(Interleave::with_sampling(&[600, 400], &[Sampling::until(0.5), Uniform]).is_ok());
     assert!(Interleave::with_sampling(&[500, 500], &[Sampling::until(0.5), Uniform]).is_ok());
     assert!(matches!(
-        Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, Sampling::trapezoid(0.0, 0.0, 0.001, 0.001)]),
+        Interleave::with_sampling(&[1 << 30, 1 << 30], &[Uniform, Sampling::trapezoid(0.0, 0.0, 1e-6, 1e-6)]),
         Err(TooSteep { seq: 1, .. })
     ));
-    assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN, 1], &[Uniform, Uniform]).err(), Some(TooLong));
-    assert!(matches!(Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, Sampling::delayed(0.999)]), Err(TooSteep { seq: 1, .. })));
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(Interleave::with_sampling(&[MAX_TOTAL_LEN as usize, 1], &[Uniform, Uniform]).err(), Some(TooLong));
+    #[cfg(target_pointer_width = "32")]
+    assert_eq!(Interleave::with_sampling(&[usize::MAX, 1], &[Uniform, Uniform]).err(), Some(LengthOverflow));
+    assert!(matches!(
+        Interleave::with_sampling(&[1 << 30, 1 << 30], &[Uniform, Sampling::delayed(0.999999)]),
+        Err(TooSteep { seq: 1, .. })
+    ));
     // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
     assert!(Interleave::with_sampling(&[10, 0], &[Uniform, Sampling::delayed(0.999)]).is_ok());
     let il = Interleave::with_sampling(&[100, 100], &[Sampling::delayed(0.0), Sampling::delayed(0.0)]).unwrap();
@@ -380,7 +386,7 @@ fn rejects_bad_configurations() {
 fn empty_sequences_do_not_affect_the_order() {
     let mut rng = Rng(0xE0E0_1234);
     for lens in uniform_cases() {
-        let live: Vec<u64> = lens.iter().copied().filter(|&n| n > 0).collect();
+        let live: Vec<usize> = lens.iter().copied().filter(|&n| n > 0).collect();
         let mut map = Vec::new(); // index in `lens` -> index in `live`
         let mut next = 0;
         for &n in &lens {
@@ -389,18 +395,18 @@ fn empty_sequences_do_not_affect_the_order() {
                 next += 1;
             }
         }
-        let got: Vec<(usize, u64)> = full(&Interleave::new(&lens)).into_iter().map(|(s, j)| (map[s], j)).collect();
+        let got: Vec<(usize, usize)> = full(&Interleave::new(&lens)).into_iter().map(|(s, j)| (map[s], j)).collect();
         assert_eq!(got, full(&Interleave::new(&live)), "{lens:?}");
     }
     for (lens, sampling) in scheduled_cases() {
         let il = Interleave::with_sampling(&lens, &sampling).unwrap();
         let mut lens2 = lens.clone();
         let mut sampling2 = sampling.clone();
-        let at = rng.below64(lens.len() as u64 + 1) as usize;
+        let at = rng.below(lens.len() + 1);
         lens2.insert(at, 0);
         sampling2.insert(at, if at.is_multiple_of(2) { Sampling::delayed(0.99) } else { Sampling::until(0.01) });
         let il2 = Interleave::with_sampling(&lens2, &sampling2).unwrap();
-        let got: Vec<(usize, u64)> = full(&il2).into_iter().map(|(s, j)| (if s > at { s - 1 } else { s }, j)).collect();
+        let got: Vec<(usize, usize)> = full(&il2).into_iter().map(|(s, j)| (if s > at { s - 1 } else { s }, j)).collect();
         assert_eq!(got, full(&il), "{lens:?} {sampling:?} with an empty part at {at}");
     }
 }
@@ -414,10 +420,10 @@ fn reseeking_matches_fresh_iterators() {
         let all = full(&il);
         let mut it = il.iter(0..0);
         for _ in 0..20 {
-            let a = rng.below64(n + 1);
-            let b = (a + rng.below64(30)).min(n);
+            let a = rng.below(n + 1);
+            let b = (a + rng.below(30)).min(n);
             it.seek(a..b);
-            assert_eq!(it.by_ref().collect::<Vec<_>>(), &all[a as usize..b as usize], "reseek {a}..{b}");
+            assert_eq!(it.by_ref().collect::<Vec<_>>(), &all[a..b], "reseek {a}..{b}");
         }
     }
 }
@@ -438,15 +444,16 @@ fn empty_and_trivial() {
 
 #[test]
 fn huge_lengths_seek_consistently() {
-    let lens = [MAX_TOTAL_LEN / 2, MAX_TOTAL_LEN / 2 - (1 << 41), 7, 1, 1 << 40];
+    let max_len = usize::try_from(MAX_TOTAL_LEN).unwrap_or(usize::MAX);
+    let lens = [max_len / 2, max_len / 2 - max_len / 32, 7, 1, max_len / 64];
     let sampling = [Uniform, Uniform, Sampling::delayed(0.5), Uniform, Sampling::ramp(0.3, 0.7)];
     let il = Interleave::with_sampling(&lens, &sampling).unwrap();
     let n = il.len();
     let mut rng = Rng(777);
     for _ in 0..40 {
-        let a = rng.below64(n - 30_000);
-        let b = a + rng.below64(10_000);
-        let c = b + rng.below64(10_000);
+        let a = rng.below(n - 30_000);
+        let b = a + rng.below(10_000);
+        let c = b + rng.below(10_000);
         let whole: Vec<_> = il.iter(a..c).collect();
         let mut parts: Vec<_> = il.iter(a..b).collect();
         parts.extend(il.iter(b..c));
@@ -462,7 +469,7 @@ fn huge_lengths_seek_consistently() {
     // Nothing from the delayed sequences early on.
     assert!(il.iter(0..1000).all(|(s, _)| s != 2 && s != 4));
     // Project the singleton's virtual key through the whole mixture's CDF.
-    let expect = joint_count(&il, il.key(3, 0, &mut 0)) as u64;
+    let expect = joint_count(&il, il.key(3, 0, &mut 0)) as usize;
     let found = il.iter(expect - 100..expect + 100).any(|(s, _)| s == 3);
     assert!(found, "singleton not near {expect}");
 }

@@ -134,8 +134,9 @@
 //! have valid parameters and satisfy their individual numerical limits; see
 //! [`Sampling`] and [`ErrorKind`] for the full rules.
 //!
-//! Lengths and positions use `usize` in the public API and `u64` internally. Every
-//! sequence node must fit in `usize`, even if a parent truncates or discards it.
+//! Lengths and positions use `usize` throughout. Every sequence node must fit in
+//! `usize`, even if a parent truncates or discards it. Seeds, salts and shuffle
+//! arithmetic use fixed-width `u64` values for reproducibility across platforms.
 //! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
 //! [`MAX_DEPTH`]. [`Seq`] documents stack use; its builders work with any source type.
 //!

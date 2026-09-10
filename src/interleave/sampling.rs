@@ -186,17 +186,20 @@ impl Hash for Sampling {
 /// Why a sampling configuration was rejected.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SamplingError {
+    /// The total length exceeds `usize::MAX`.
+    LengthOverflow,
     /// The total length exceeds [`MAX_TOTAL_LEN`].
     TooLong,
     /// A breakpoint or derived profile coefficient is invalid.
     InvalidParameter { seq: usize, sampling: Sampling, reason: crate::SamplingReason },
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
-    TooSteep { seq: usize, len: u64, peak_rate: f64 },
+    TooSteep { seq: usize, len: usize, peak_rate: f64 },
 }
 
 impl fmt::Display for SamplingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::LengthOverflow => write!(f, "total length exceeds usize::MAX"),
             Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
             Self::InvalidParameter { seq, sampling, .. } => write!(f, "sequence {seq}: invalid {sampling:?}"),
             Self::TooSteep { seq, .. } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),

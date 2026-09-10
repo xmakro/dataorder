@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** use `usize` for lengths, positions, offsets, strides and element
+  counts throughout compilation and iteration. The `len` fields in
+  `ErrorKind::SkipOutOfRange`, `TakeOutOfRange` and `TooSteep` now use `usize`.
+  Length growth uses checked `usize` arithmetic. Seeds, salts, shuffle arithmetic
+  and the numerical mix limit remain `u64`; supported orders are unchanged.
+
 - **Breaking:** remove `Sampling::DelayedLinear`. `delayed(at)` and
   `ramp(start, full)` now return `Trapezoid` with `fade: 1.0` and `off: 1.0`.
   Replace serialized `DelayedLinear` variants with `Trapezoid`, preserving `start`

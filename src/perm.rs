@@ -30,7 +30,7 @@
 /// Shape of the domain: `n` and the widths and masks of the two Feistel halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Shape {
-    pub(crate) n: u64,
+    pub(crate) n: usize,
     /// Width of the right half, which is at least as wide as the left half.
     rb: u32,
     lmask: u64,
@@ -38,8 +38,8 @@ pub(crate) struct Shape {
 }
 
 impl Shape {
-    pub(crate) fn new(n: u64) -> Self {
-        let bits = 64 - n.saturating_sub(1).leading_zeros();
+    pub(crate) fn new(n: usize) -> Self {
+        let bits = usize::BITS - n.saturating_sub(1).leading_zeros();
         let lb = bits / 2;
         let rb = bits - lb;
         Self { n, rb, lmask: (1u64 << lb) - 1, rmask: (1u64 << rb) - 1 }
@@ -86,8 +86,8 @@ pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
 /// The compiler removes empty subtrees and excluded concat parts before collecting
 /// these inputs. Equal input lists produce equal salts; other lists are hashed to
 /// distinguish shuffles over different datasets.
-pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64 {
-    sources.into_iter().fold(0, |h, (salt, len)| mix64(h ^ mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ len.wrapping_mul(PHI)))
+pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, usize)>) -> u64 {
+    sources.into_iter().fold(0, |h, (salt, len)| mix64(h ^ mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ (len as u64).wrapping_mul(PHI)))
 }
 
 /// Derives a shuffle context from the enclosing context, epoch and inside-out repeat level.
@@ -96,12 +96,12 @@ pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, u64)>) -> u64
 /// so adding it preserves the child's first pass while distinguishing later outer epochs
 /// from inner epochs. A single-level repeat keeps the historical depth-0 arithmetic.
 #[inline]
-pub(crate) fn epoch_ctx(ctx: u64, epoch: u64, level: u8) -> u64 {
+pub(crate) fn epoch_ctx(ctx: u64, epoch: usize, level: u8) -> u64 {
     debug_assert!(level > 0);
     if epoch == 0 {
         return ctx;
     }
-    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add(epoch.wrapping_mul(PHI)) ^ u64::from(level).wrapping_mul(PHI))
+    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add((epoch as u64).wrapping_mul(PHI)) ^ u64::from(level).wrapping_mul(PHI))
 }
 
 /// One Feistel round: `(l, r)` becomes `(r, l ^ F(r))`, restricted to the left half's
@@ -127,16 +127,16 @@ fn mix(s: Shape, k: Key, x: u64) -> u64 {
 
 /// Image of `i` (`i < shape.n`) under the permutation of `0..n` selected by `key`.
 #[inline(always)]
-pub(crate) fn permute(shape: Shape, key: Key, i: u64) -> u64 {
+pub(crate) fn permute(shape: Shape, key: Key, i: usize) -> usize {
     debug_assert!(i < shape.n);
     if shape.n <= 1 {
         return i;
     }
-    let mut x = i;
+    let mut x = i as u64;
     loop {
         x = mix(shape, key, x);
-        if x < shape.n {
-            return x;
+        if x < shape.n as u64 {
+            return x as usize;
         }
     }
 }
@@ -146,20 +146,20 @@ mod tests {
     use super::*;
     use crate::{Order, Seq};
 
-    fn perm(n: u64, seed: u64) -> Vec<u64> {
+    fn perm(n: usize, seed: u64) -> Vec<usize> {
         let (shape, key) = (Shape::new(n), key(seed, 0, 0));
         (0..n).map(|i| permute(shape, key, i)).collect()
     }
 
     #[test]
     fn bijection() {
-        for n in [0u64, 1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 100, 255, 256, 257, 1000, 4097, 65_536, 100_003] {
+        for n in [0usize, 1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 100, 255, 256, 257, 1000, 4097, 65_536, 100_003] {
             for seed in 0..4 {
                 let p = perm(n, seed);
-                let mut seen = vec![false; n as usize];
+                let mut seen = vec![false; n];
                 for &v in &p {
-                    assert!(!seen[v as usize], "n={n} seed={seed}: {v} twice");
-                    seen[v as usize] = true;
+                    assert!(!seen[v], "n={n} seed={seed}: {v} twice");
+                    seen[v] = true;
                 }
             }
         }
@@ -167,10 +167,10 @@ mod tests {
 
     #[test]
     fn huge_domain_is_a_bijection_locally() {
-        // n near 2^64: the forward map must still be invertible; check distinct images of a
+        // n near usize::MAX: the forward map must still be invertible; check distinct images of a
         // window and that the walk terminates.
-        let (shape, key) = (Shape::new(u64::MAX - 5), key(9, 0, 0));
-        let mut images: Vec<u64> = (0..10_000).map(|i| permute(shape, key, i)).collect();
+        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, 0, 0));
+        let mut images: Vec<usize> = (0..10_000).map(|i| permute(shape, key, i)).collect();
         images.sort_unstable();
         images.dedup();
         assert_eq!(images.len(), 10_000);
@@ -183,11 +183,11 @@ mod tests {
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
         let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 1), 0));
-        let c: Vec<u64> = (0..n).map(|i| permute(shape, k, i)).collect();
+        let c: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
         let k = key(1, 0, shuffle_salt([(7, n)]));
-        let d: Vec<u64> = (0..n).map(|i| permute(shape, k, i)).collect();
+        let d: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
         assert_ne!(shuffle_salt([(0, 1000)]), shuffle_salt([(0, 999)]));
         assert_ne!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt([(2, 10), (1, 10)]));
@@ -199,8 +199,8 @@ mod tests {
     }
 
     /// Chi-square of `values` against a uniform expectation over `cells` cells.
-    fn chi2(values: impl Iterator<Item = usize>, cells: usize, total: u64) -> f64 {
-        let mut counts = vec![0u64; cells];
+    fn chi2(values: impl Iterator<Item = usize>, cells: usize, total: usize) -> f64 {
+        let mut counts = vec![0usize; cells];
         for v in values {
             counts[v] += 1;
         }
@@ -226,24 +226,24 @@ mod tests {
         dof as f64 + sigmas * (2.0 * dof as f64).sqrt()
     }
 
-    fn assert_statistics(p: &[u64], seed: u64, sigmas: f64) {
-        let n = p.len() as u64;
-        let grid = chi2(p.iter().enumerate().map(|(i, &v)| (i as u64 * 32 / n) as usize * 32 + (v * 32 / n) as usize), 1024, n);
+    fn assert_statistics(p: &[usize], seed: u64, sigmas: f64) {
+        let n = p.len();
+        let grid = chi2(p.iter().enumerate().map(|(i, &v)| (i * 32 / n) * 32 + (v * 32 / n)), 1024, n);
         // A permutation fixes both marginals of each joint table.
         assert!(grid < chi2_bound(31 * 31, sigmas), "n={n} seed={seed}: grid chi2 {grid}");
-        let low = chi2(p.iter().enumerate().map(|(i, &v)| (i & 15) * 16 + (v & 15) as usize), 256, n);
+        let low = chi2(p.iter().enumerate().map(|(i, &v)| (i & 15) * 16 + (v & 15)), 256, n);
         assert!(low < chi2_bound(15 * 15, sigmas), "n={n} seed={seed}: low-bit chi2 {low}");
-        let fixed = p.iter().enumerate().filter(|&(ref i, &v)| *i as u64 == v).count();
+        let fixed = p.iter().enumerate().filter(|&(ref i, &v)| *i == v).count();
         assert!(fixed < 16, "n={n} seed={seed}: {fixed} fixed points");
         let bound = sigmas / (n as f64).sqrt();
-        let f = |v: &u64| *v as f64;
+        let f = |v: &usize| *v as f64;
         let positional = pearson((0..n).map(|i| i as f64), p.iter().map(f));
         assert!(positional.abs() < bound, "n={n} seed={seed}: positional correlation {positional}");
         let serial = pearson(p[..p.len() - 1].iter().map(f), p[1..].iter().map(f));
         assert!(serial.abs() < bound, "n={n} seed={seed}: serial correlation {serial}");
         let lag7 = pearson(p[..p.len() - 7].iter().map(f), p[7..].iter().map(f));
         assert!(lag7.abs() < bound, "n={n} seed={seed}: lag-7 correlation {lag7}");
-        let difference = chi2(p.windows(2).map(|pair| ((pair[1] + n - pair[0]) % n * 64 / n) as usize), 64, n - 1);
+        let difference = chi2(p.windows(2).map(|pair| (pair[1] + n - pair[0]) % n * 64 / n), 64, n - 1);
         // With only 63 degrees of freedom, a normal 5σ approximation still has a
         // roughly 1-in-40,000 upper tail. This bound reduces it to about 1-in-500-million.
         assert!(difference < chi2_bound(63, 8.0), "n={n} seed={seed}: difference chi2 {difference}");
@@ -251,16 +251,16 @@ mod tests {
 
     #[test]
     fn statistics() {
-        for n in [100_000u64, 1 << 17, (1 << 17) + 1, 1_000_003] {
+        for n in [100_000usize, 1 << 17, (1 << 17) + 1, 1_000_003] {
             for seed in 0..8u64 {
                 assert_statistics(&perm(n, seed), seed, 5.0);
             }
         }
     }
 
-    fn public_perm(n: usize, seed: u64) -> Vec<u64> {
+    fn public_perm(n: usize, seed: u64) -> Vec<usize> {
         let order = Order::new(Seq::source(n).shuffle(seed)).unwrap();
-        order.iter(..).unwrap().map(|item| item.record_index as u64).collect()
+        order.iter(..).unwrap().map(|item| item.record_index).collect()
     }
 
     #[test]
@@ -300,12 +300,12 @@ mod tests {
     /// which is about 5σ for the smallest expectations here).
     #[test]
     fn small_domains_mix_over_seeds() {
-        for n in [2u64, 3, 5, 8, 13, 32, 100] {
+        for n in [2usize, 3, 5, 8, 13, 32, 100] {
             let seeds = 20_000u64;
-            let mut counts = vec![0u64; (n * n) as usize];
+            let mut counts = vec![0usize; n * n];
             for seed in 0..seeds {
                 for (i, v) in perm(n, seed).into_iter().enumerate() {
-                    counts[i * n as usize + v as usize] += 1;
+                    counts[i * n + v] += 1;
                 }
             }
             let expected = seeds as f64 / n as f64;

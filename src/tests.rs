@@ -32,7 +32,7 @@ impl Source for Src {
 /// Salts and lengths of the sources under `seq` that can contribute elements, in order of
 /// appearance: a subtree without elements counts for nothing, whatever is under it, nor
 /// does a part of a concatenation that skips and takes above it cut away entirely. `seq` is valid.
-fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, u64)>) {
+fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, usize)>) {
     let n = eval(seq, 0).unwrap().len();
     reachable(seq, 0..n, out);
 }
@@ -40,13 +40,13 @@ fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, u64)>) {
 /// [`salts`] of the sources that positions `range` of `seq` can reach. Skips and takes narrow
 /// the range, concatenations hand each part its share of it, and a mix with one nonempty
 /// part passes it through. Other nodes keep their children's whole range.
-fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, u64)>) {
+fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, usize)>) {
     if range.is_empty() {
         return;
     }
-    let whole = |s: &Seq<Src>, out: &mut Vec<(u64, u64)>| salts(s, out);
+    let whole = |s: &Seq<Src>, out: &mut Vec<(u64, usize)>| salts(s, out);
     match seq {
-        Seq::Source(s) => out.push((s.salt(), s.len as u64)),
+        Seq::Source(s) => out.push((s.salt(), s.len)),
         Seq::Concat(parts) => {
             let mut offset = 0;
             for p in parts {
@@ -76,7 +76,7 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
 
 /// [`salts`] of `seq` cycled to `len` positions: within one repetition a take, beyond it the
 /// whole sequence.
-fn cycled(seq: &Seq<Src>, len: usize, out: &mut Vec<(u64, u64)>) {
+fn cycled(seq: &Seq<Src>, len: usize, out: &mut Vec<(u64, usize)>) {
     let n = eval(seq, 0).unwrap().len();
     if len <= n { reachable(seq, 0..len, out) } else { salts(seq, out) }
 }
@@ -121,11 +121,6 @@ impl Rng {
     /// Uniform below `n`.
     pub(crate) fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
-    }
-
-    /// Uniform below `n`.
-    pub(crate) fn below64(&mut self, n: u64) -> u64 {
-        self.next() % n
     }
 }
 
@@ -253,13 +248,13 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
         }
         Seq::Mix(parts) => {
             let evs = parts.iter().map(|p| eval(&p.seq, ctx)).collect::<Result<Vec<_>, _>>()?;
-            let lens: Vec<u64> = evs.iter().map(|v| v.len() as u64).collect();
+            let lens: Vec<usize> = evs.iter().map(|v| v.len()).collect();
             let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
             let il = Interleave::with_sampling(&lens, &sampling).map_err(|e| {
                 let (kind, part) = e.into_kind();
                 at(kind, part.as_slice())
             })?;
-            il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
+            il.iter(0..il.len()).map(|(s, j)| evs[s][j]).collect()
         }
         Seq::Cycle { len, inner } => {
             let n = eval(inner, ctx)?.len();
@@ -272,8 +267,8 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
             let v = eval(inner, ctx)?;
             let mut under = Vec::new();
             salts(inner, &mut under);
-            let (shape, key) = (Shape::new(v.len() as u64), perm::key(*seed, ctx, perm::shuffle_salt(under)));
-            (0..v.len() as u64).map(|i| v[perm::permute(shape, key, i) as usize]).collect()
+            let (shape, key) = (Shape::new(v.len()), perm::key(*seed, ctx, perm::shuffle_salt(under)));
+            (0..v.len()).map(|i| v[perm::permute(shape, key, i)]).collect()
         }
         Seq::Repeat { times, inner } => {
             // Validate even when empty; derive levels independently of the compiler.
@@ -281,21 +276,21 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
             let level = LevelView::of(inner).level() + 1;
             out.clear();
             for e in 0..*times {
-                out.extend(eval(inner, perm::epoch_ctx(ctx, e as u64, level))?);
+                out.extend(eval(inner, perm::epoch_ctx(ctx, e, level))?);
             }
             out
         }
         Seq::Skip { n, inner } => {
             let v = eval(inner, ctx)?;
             if *n > v.len() {
-                return Err(root(ErrorKind::SkipOutOfRange { n: *n, len: v.len() as u64 }));
+                return Err(root(ErrorKind::SkipOutOfRange { n: *n, len: v.len() }));
             }
             v[*n..].to_vec()
         }
         Seq::Take { n, inner } => {
             let v = eval(inner, ctx)?;
             if *n > v.len() {
-                return Err(root(ErrorKind::TakeOutOfRange { n: *n, len: v.len() as u64 }));
+                return Err(root(ErrorKind::TakeOutOfRange { n: *n, len: v.len() }));
             }
             v[..*n].to_vec()
         }
@@ -582,7 +577,7 @@ fn repeat_levels_are_assigned_from_the_inside_out() {
             assert!(matches!(repeated.root, crate::order::Node::Repeat { level, .. } if level == inner_level + 1), "{name}");
             let n = repeated.len() / 3;
             for epoch in 0..3 {
-                let context = perm::epoch_ctx(seed, epoch as u64, inner_level + 1);
+                let context = perm::epoch_ctx(seed, epoch, inner_level + 1);
                 let expected = ids(Order::with_seed(seq.clone(), context).unwrap().iter(..).unwrap());
                 let start = epoch * n;
                 assert_eq!(ids(repeated.iter(start..start + n).unwrap()), expected, "{name}: epoch {epoch}");
@@ -1016,9 +1011,16 @@ fn sequence_lengths_must_fit_usize() {
     assert_eq!(root(ErrorKind::LengthOverflow).to_string(), "sequence length exceeds usize::MAX (at the root)");
 
     // The inclusive length limit remains usable without materializing any elements.
-    for seq in
-        [src(0, usize::MAX), Seq::concat([src(0, usize::MAX - 1), src(1, 1)]), src(0, 1).repeat(usize::MAX), src(0, 3).cycle(usize::MAX)]
-    {
+    let at_limit = [
+        src(0, usize::MAX),
+        src(0, usize::MAX).shuffle(7),
+        Seq::concat([src(0, usize::MAX - 1), src(1, 1)]),
+        src(0, 1).repeat(usize::MAX),
+        src(0, 3).shuffle(7).cycle(usize::MAX),
+    ];
+    #[cfg(target_pointer_width = "32")]
+    let at_limit = at_limit.into_iter().chain([Seq::mix([src(0, usize::MAX - 1), src(1, 1)])]);
+    for seq in at_limit {
         let order = Order::new(seq).unwrap();
         assert_eq!(order.len(), usize::MAX);
         let last = usize::MAX - 1;
