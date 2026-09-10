@@ -20,28 +20,10 @@ def profile(points):
              (c, d, peak, 0), (d, F(1), 0, 0)] if e > s]
 
 
-def rate(segments, t, before):
-    for a, b, r0, r1 in segments:
-        if (a < t <= b) if before else (a <= t < b):
-            return r0 + (r1 - r0) * (t - a) / (b - a)
-    raise AssertionError((segments, t, before))
-
-
 def profiles(lens, schedules):
-    parts = [None if p is None else profile(p) for p in schedules]
-    total = sum(lens)
-    uniform = sum(n for n, p in zip(lens, parts) if p is None)
-    points = sorted({F(0), F(1)} | {v for p in parts if p for s in p for v in s[:2]})
-    rest = []
-    for a, b in zip(points, points[1:]):
-        r0 = total - sum(n * rate(p, a, False) for n, p in zip(lens, parts) if p)
-        r1 = total - sum(n * rate(p, b, True) for n, p in zip(lens, parts) if p)
-        assert min(r0, r1) >= 0, "oracle case is overcommitted"
-        if uniform:
-            rest.append((a, b, r0 / uniform, r1 / uniform))
-        else:
-            assert r0 == r1 == 0, "scheduled-only parts must exactly fill capacity"
-    result = [p if p is not None else rest for p in parts]
+    # Each part has its own normalized CDF on the same virtual clock. No capacity
+    # constraint or complement is involved, including when all parts are scheduled.
+    result = [profile([0, 0, 1, 1] if p is None else p) for p in schedules]
     for p in result:
         assert sum((b - a) * (r0 + r1) / 2 for a, b, r0, r1 in p) == 1
     return result
@@ -133,9 +115,14 @@ def fixtures():
         cases.append(small_case([101, 17, 13], [None, [0, 0, .5, .5], [.5, .75, 1, 1]]))
         cases.append(small_case([173, 19, 11], [None, [.125, .25, .5, .875], [0, .25, 1, 1]]))
         for name, lens, schedules in [
+            ("equal lengths delayed past halfway", [100, 100], [None, [.6, .6, 1, 1]]),
+            ("all delayed across a shared gap", [31, 31, 31], [[.8, .8, 1, 1]] * 3),
+            ("independent overlapping ramps without uniform", [11, 23, 17], [[0, 1, 1, 1], [.2, .7, 1, 1], [0, 0, .4, .8]]),
+            ("unequal separated supports", [11, 29], [[0, 0, .2, .2], [.8, .8, 1, 1]]),
+            ("constant stops during a ramp", [100, 100], [[0, 0, .8, .8], [0, 1, 1, 1]]),
             ("complementary abrupt halves", [19, 19], [[0, 0, .5, .5], [.5, .5, 1, 1]]),
             ("complementary ramps with an exact tie", [5, 5], [[0, 1, 1, 1], [0, 0, 0, 1]]),
-            ("overlapping ramps at capacity", [20, 20, 14], [[0, .5, 1, 1], [0, 0, .5, 1], None]),
+            ("overlapping ramps with uniform", [20, 20, 14], [[0, .5, 1, 1], [0, 0, .5, 1], None]),
             ("multiple scheduled minorities", [97, 3, 5, 7, 11], [None, [0, 0, .125, .125], [.25, .5, .75, 1], [0, .125, .375, .5], [.5, .5, 1, 1]]),
             ("nearly coincident boundaries", [101, 3, 5, 7], [None, [0, 0, .5, .5], [.5, .5 + 2**-30, .875, 1], [0, .25, .5 - 2**-30, .75]]),
             ("constant quantile ties", [1, 3, 0], [None, [0, 0, 1, 1], [0, 0, .5, .5]]),
@@ -150,6 +137,7 @@ def fixtures():
             ("MAX_MIX_LEN scheduled halves", [maximum // 2, maximum // 2], [[0, 0, .5, .5], [.5, .5, 1, 1]]),
             ("MAX_MIX_LEN complementary ramps", [maximum // 2, maximum // 2], [[0, 1, 1, 1], [0, 0, 0, 1]]),
             ("MAX_MIX_LEN uniform minorities", [1, 3, 7, maximum - 11], [None, None, None, [0, 0, 1, 1]]),
+            ("large late virtual clocks", [2**40, 2**40, 3], [[.9, .9, 1, 1], [.95, .97, 1, 1], [0, 0, .1, .1]]),
             ("large interacting ramps", [2**42, 2**42, 13, 7], [[0, 1, 1, 1], [0, 0, 0, 1], None, None]),
         ]:
             cases.append(sparse_case(name, lens, schedules))

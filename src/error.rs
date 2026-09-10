@@ -50,7 +50,7 @@ impl Error {
     /// Each index selects a part of a `Concat`, `Mix` or `Weighted` node, or is 0
     /// for a node with one child. An empty path means the root. Invalid schedule
     /// parameters and weights point to their part; errors for the mix as a whole,
-    /// such as overcommitment, point to the mix.
+    /// such as excessive total length, point to the mix.
     #[must_use]
     pub fn path(&self) -> &[usize] {
         &self.path
@@ -170,23 +170,9 @@ pub enum ErrorKind {
         /// The schedule.
         sampling: Sampling,
     },
-    /// The combined uniform profile's coefficients exceed floating-point range, even
-    /// though the individual schedules can be represented.
-    SamplingOverflow,
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep,
-    /// Scheduled parts require more than the mix's available draw rate at some progress.
-    /// `demand` is their combined rate as a fraction of the whole: 1.2 means 120%.
-    /// Excess demand up to 10⁻⁹ is accepted to allow for numerical rounding.
-    Overcommitted {
-        /// Peak combined rate of the scheduled parts, relative to the mix's draw rate.
-        demand: f64,
-        /// Start of a progress segment attaining the peak (normalized to 0..1).
-        start: f64,
-        /// End of that segment; the peak may occur at either endpoint.
-        end: f64,
-    },
     /// The weight of a weighted mix part is negative or not finite.
     InvalidWeight {
         /// The weight.
@@ -214,11 +200,7 @@ impl fmt::Display for ErrorKind {
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),
-            Self::SamplingOverflow => write!(f, "combined sampling profile exceeds floating-point range"),
             Self::TooSteep => write!(f, "mix part too long for the steepness of its schedule"),
-            Self::Overcommitted { demand, start, end } => {
-                write!(f, "scheduled mix parts need {}% of the draw rate at their peak (progress {start}..{end})", demand * 100.0)
-            }
             Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
             Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
             Self::EmptyWeightedPart => write!(f, "weighted mix part has a share but no elements"),
@@ -243,9 +225,7 @@ impl SamplingError {
         match self {
             Self::TooLong => (ErrorKind::MixTooLong, None),
             Self::InvalidParameter { seq, sampling, .. } => (ErrorKind::InvalidSampling { sampling }, Some(seq)),
-            Self::Overflow => (ErrorKind::SamplingOverflow, None),
             Self::TooSteep { seq, .. } => (ErrorKind::TooSteep, Some(seq)),
-            Self::Overcommitted { demand, start, end } => (ErrorKind::Overcommitted { demand, start, end }, None),
         }
     }
 }

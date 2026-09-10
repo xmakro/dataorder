@@ -73,7 +73,13 @@
 //! they sum to `total`; see [`Seq::Weighted`]. Neither mix changes the order *within*
 //! a part unless that part contains a shuffle.
 //!
-//! [`Sampling`] controls when a part's elements appear. Schedules belong to their mix:
+//! [`Sampling`] assigns each part's elements keys on a shared virtual clock.
+//! Curves are independent: `Uniform` is constant in virtual time, and all parts
+//! adapt equally when their keys are merged. Clock values are not fractions of
+//! final output progress; a delay of 0.5 need not start halfway through the output,
+//! and a linear ramp generally becomes nonlinear against output positions. See
+//! [`Sampling`] for the conversion and an example. Overlaps and gaps are allowed.
+//! Schedules belong to their mix:
 //! repeating a mix restarts its schedules each epoch. To schedule over several epochs,
 //! repeat the parts and mix them once. [`Seq::shard`] partitions the resulting positions
 //! among workers; its documentation explains the cost and the difference between
@@ -121,8 +127,8 @@
 //!
 //! Skips and takes must stay within the child sequence. Strides must have a nonzero
 //! step, and an empty sequence cannot be cycled to a positive length. Weights must be
-//! finite and nonnegative. Schedules must have valid parameters and fit within the
-//! mix's available draw rate; see [`Sampling`] and [`ErrorKind`] for the full rules.
+//! finite and nonnegative. Schedules must have valid parameters and satisfy their
+//! individual numerical limits; see [`Sampling`] and [`ErrorKind`] for the full rules.
 //!
 //! Lengths and positions use `usize` in the public API and `u64` internally. The final
 //! order must fit in `usize`; on a 32-bit target, intermediate nodes may be longer.
@@ -151,8 +157,8 @@
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
 //! elements. Compilation can revisit subtrees when flattening concatenations, deriving
-//! shuffle salts or adjusting repeat depths. Scheduled mixes sort breakpoints; weighted
-//! mixes sort remainders.
+//! shuffle salts or adjusting repeat depths. Each mix builds independent profiles
+//! in `O(k)` time for `k` parts; weighted mixes also sort quota remainders.
 //!
 //! For random access, [`Order::get`] follows the path from the root to a source:
 //!
@@ -163,12 +169,15 @@
 //! | Mix | A seek over its parts, with the cost described below |
 //! | Repeat, slice, stride | Position arithmetic |
 //!
-//! For a mix with `k` non-empty parts and `S` distinct schedule breakpoints, a seek
-//! normally costs `O(k log(S + 1) + k log(k + 1))`. It counts elements before a target
-//! progress, then replays at most `2k` tournament steps. Poor numerical estimates use
-//! bounded searches: at most 63 progress bisections, with at most 46 index bisections
-//! per part for each count. Equal keys are handled by counts, so even long ties do
-//! not require a linear walk.
+//! For a mix with `k` non-empty parts, seeking counts elements below a trial virtual
+//! time, then replays at most `2k` tournament steps. It tries `position / N` first,
+//! which is a good estimate for uniform mixes. Scheduled mixes generally require
+//! rank interpolation or bisection because virtual time differs from output progress.
+//! After at most eight interpolation probes, there are at most 63 virtual-time
+//! bisections, each counting all `k` parts. Each count starts with
+//! a constant-time CDF estimate; correcting it against actual keys takes at most
+//! 46 index bisections. Profiles have at most five segments. Building and replaying
+//! the tournament costs `O(k log(k + 1))`; long equal-key runs are handled by counts.
 //!
 //! Sequential iteration keeps cursor state. A mix uses `⌈log2 k⌉` tournament comparisons
 //! per element plus one key computation, with no comparisons once one part remains.
@@ -233,16 +242,15 @@
 //! configuration format is a breaking change: a new minor version while the crate is 0.x.
 //! Save [`ORDERING_VERSION`] in checkpoints for a conservative exact-version check.
 //!
-//! Calculations use IEEE 754 binary64, with explicit fused multiply-adds to retain
-//! rounding residuals during construction. Other multiply/add expressions remain
-//! separate. Targets with hardware or software binary64 agree; x87-only `i586`
+//! Calculations use IEEE 754 binary64 with separate multiply/add expressions.
+//! Targets with hardware or software binary64 agree; x87-only `i586`
 //! targets using extended precision are excluded. Golden tests pin order fingerprints
 //! through the public API, and CI checks 64-bit and 32-bit x86 and 64-bit ARM.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, unreachable_pub, clippy::doc_markdown, clippy::redundant_clone, clippy::use_self)]
-// Only explicitly written `mul_add` operations are fused. Fusing other expressions
-// changes rounding and can change the order; Clippy must not suggest doing so.
+// Fusing multiply/add expressions changes rounding and can change the order;
+// Clippy must not suggest doing so.
 #![allow(clippy::suboptimal_flops)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -255,7 +263,6 @@ mod perm;
 mod preparation;
 mod seq;
 mod source;
-mod sum;
 #[cfg(test)]
 mod tests;
 mod weight;
@@ -265,9 +272,7 @@ pub use cursor::{Cursor, IndexedCursor};
 pub use error::{Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
 pub use order::Order;
-pub use preparation::{
-    Preparation, PreparedKind, PreparedMix, PreparedNode, PreparedParameters, PreparedSource, SamplingDiagnostics, WeightedAllocation,
-};
+pub use preparation::{Preparation, PreparedKind, PreparedMix, PreparedNode, PreparedParameters, PreparedSource, WeightedAllocation};
 pub use seq::{MixPart, Seq, WeightedPart};
 pub use source::{Source, salt, salt_path};
 

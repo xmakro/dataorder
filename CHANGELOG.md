@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.4.0)
+
+- **Breaking:** schedules now use independent curves on a shared virtual clock.
+  `Uniform` is constant in virtual time, like `delayed(0.0)` or `until(1.0)`.
+  Start/full/fade/off values no longer denote fractions of the final output;
+  all curves adapt when merged, so linear ramps generally become nonlinear in
+  output progress. Overlaps and gaps work without a uniform filler.
+- Remove the uniform-remainder sweep, compensated sum/expansion arithmetic,
+  combined capacity checks and tolerance/clamping policy. Profiles now have at
+  most five segments and compile independently in linear time in the part count.
+  Individual parameter, coefficient and numerical-resolution checks remain.
+- Remove `ErrorKind::Overcommitted`, `ErrorKind::SamplingOverflow`,
+  `SamplingDiagnostics` and `PreparedMix::diagnostics`. Preparation still reports
+  each original mix's counts and independent schedules.
+- Seek by summing integer counts below virtual-time keys and bounded bisection.
+  Counts, source-local order and seek/walk agreement remain exact; weighted
+  allocation and shuffle arithmetic are unchanged. Scheduled order fingerprints
+  change: resume existing checkpoints with their original crate version.
+
+## 0.3.0
 
 - **Breaking (0.3.0):** simplify the rising-rate inverse using remaining area from
   the segment endpoint. This removes numerical repair searches and changes some

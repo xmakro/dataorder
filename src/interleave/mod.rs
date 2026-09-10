@@ -1,32 +1,13 @@
-//! Balanced interleaving from source lengths and sampling schedules.
+//! Independent virtual-clock schedules merged into one seekable order.
 //!
-//! An [`Interleave`] merges ordered parts without storing their elements. It defines
-//! one order for the whole mix; both sequential iteration and random seeks recover
-//! positions in that same order.
-//!
-//! # Rate profiles
-//!
-//! A schedule describes a part's draw rate over progress `t` from 0 to 1. Integrating
-//! that rate gives a share function `F(t)`: the fraction of the part drawn by `t`.
-//! Scheduled profiles are normalized so `F(1) = 1`. A constant rate produces a linear
-//! share function; a linear ramp produces a quadratic one.
-//!
-//! Uniform parts fill the remaining capacity. Let `N` be the total length, `rho_i` the
-//! fraction `n_i / N` for scheduled part `i`, and `u` the fraction of uniform elements.
-//! All uniform parts use the same share function:
-//!
-//! ```text
-//! F_uniform(t) = (t - sum(rho_i * F_i(t))) / u
-//! ```
-//!
-//! This is nondecreasing when the scheduled rates never exceed the total draw rate.
-//! Rates are piecewise linear, so checking their segment boundaries suffices. If the
-//! peak exceeds the permitted rounding tolerance, construction rejects the mix.
-//! With no uniform elements, the uniform profile is an unused placeholder.
+//! Each part has a nonnegative draw rate over virtual time `t` in `[0, 1]`.
+//! Its normalized integral `F_i(t)` describes how much of that part has been drawn.
+//! Uniform parts have `F_i(t) = t`; every other profile is also built independently.
+//! No profile fills a remainder or adjusts another profile's rate.
 //!
 //! # Defining the order
 //!
-//! Each element receives an ideal progress key:
+//! Each element receives a virtual-time key:
 //!
 //! ```text
 //! key(i, j) = inverse_F_i((j + phi_i) / n_i)
@@ -34,35 +15,30 @@
 //! ```
 //!
 //! Here `j` is the index within part `i`, `n_i` is its length, `k` is the number of
-//! non-empty parts, and `r` is the part's zero-based rank among them. The stagger
-//! `phi_i` makes equal uniform parts round-robin. Empty parts do not affect it.
+//! non-empty parts, and `r` is its rank among them. The stagger makes equal uniform
+//! parts round-robin. Empty parts do not affect it. The merge sorts by
+//! `(key, part index, element index)` and preserves every part's local order.
 //!
-//! The merged order sorts by `(key, part index, element index)`. Keys are nondecreasing
-//! within each part, including under floating-point rounding, so a merge can preserve
-//! each part's order without materializing the sort.
-//!
-//! In exact arithmetic, rounding each part's count contributes less than one element
-//! of error. For a feasible schedule, an element's actual rank therefore differs from
-//! `key * N` by at most `k`. Accepted overcommitment and clamping of negative uniform
-//! rates can add drift proportional to `N` times the tolerance; the bound does not
-//! hold for every accepted configuration.
+//! Virtual time is not output progress. In the continuous model, output progress
+//! at time `t` is `sum(n_i * F_i(t)) / N`. A part's local output fraction is
+//! `n_i * rate_i(t) / sum(n_j * rate_j(t))` wherever the combined rate is positive.
+//! All curves undergo the same time transformation; linear virtual-time ramps
+//! need not remain linear against output positions. Intervals where all rates are
+//! zero produce no elements. Any combination of individually valid schedules works.
 //!
 //! # Seeking and iteration
 //!
-//! A seek first estimates the target progress as `position / N`. For each part, it
-//! counts elements below that progress, then checks the count against the actual keys.
-//! If the estimates are poor, bounded binary searches find counts that do not pass
-//! the target and leave at most `2k` elements to replay. Long runs of equal keys are
-//! handled by counts, in part order.
+//! Count each part's keys below a trial virtual time and sum those integer counts.
+//! A seek tries `position / N`, then interpolates between observed integer ranks
+//! before falling back to bounded bisection. It locates a prefix at
+//! most `2k` elements before its target. Per-part CDF estimates are checked against
+//! the actual keys; bounded index searches correct rounding differences. Equal-key
+//! runs are consumed by counts in part order, without walking through the run.
 //!
-//! The cursor builds a [tournament tree](tournament::TournamentTree) over the remaining
-//! heads and replays to the exact position. Each subsequent step emits the smallest
-//! head and replaces it with that part's next element. This takes `ceil(log2 k)`
-//! comparisons per element, dropping to none when one part remains.
-//!
-//! The sorted keys define the order, not the cursor's history. Reconstructing the same
-//! heads at a seek therefore gives the same elements as walking from the beginning.
-//! Monotone keys ensure rounding cannot duplicate or drop an element.
+//! A tournament tree merges the remaining heads and replays to the exact target.
+//! Each subsequent step uses `ceil(log2 k)` comparisons, dropping to none when one
+//! part remains. Monotone keys and deterministic ties make seeks agree with walks,
+//! independent of cursor history or how virtual time maps to output progress.
 
 mod iter;
 mod profile;
@@ -78,15 +54,10 @@ pub(crate) use sampling::SamplingError;
 use profile::Profile;
 use std::ops::Range;
 
-/// Largest supported total length. Keeps the gap between consecutive keys of one sequence
-/// (at least `1/N`) far above floating-point rounding, and keeps every length and count
-/// exact when converted to `f64` (which holds integers up to 2⁵³). A scheduled sequence
-/// must likewise satisfy `length × max_rate ≤ MAX_TOTAL_LEN`.
+/// Largest supported total length. Counts convert exactly to binary64. The additional
+/// per-part limit `length × max_rate ≤ MAX_TOTAL_LEN` keeps nominal consecutive-key
+/// spacing at least `1/MAX_TOTAL_LEN`, leaving room for virtual-time rounding.
 pub(crate) const MAX_TOTAL_LEN: u64 = 1 << 46;
-
-/// Slack on the overcommitment check: the summed rates are rounded, and a mix whose
-/// scheduled parts need exactly the whole draw rate somewhere is valid.
-const OVERCOMMIT_TOLERANCE: f64 = 1e-9;
 
 #[derive(Clone, Copy, Debug)]
 struct Seq {
@@ -123,20 +94,11 @@ impl Interleave {
 
     /// Builds a mix from lengths and schedules, one schedule per part.
     /// Empty parts still have their parameters validated but do not affect the
-    /// resulting order. Costs `O(k + s log s)` for `k` parts and `s` scheduled parts,
-    /// independent of the number of elements.
+    /// resulting order. Costs `O(k)` for `k` parts, independent of their lengths.
     ///
     /// # Panics
     /// If `lens` and `sampling` differ in length.
     pub(crate) fn with_sampling(lens: &[u64], sampling: &[Sampling]) -> Result<Self, SamplingError> {
-        Self::with_diagnostics(lens, sampling, None)
-    }
-
-    pub(crate) fn with_diagnostics(
-        lens: &[u64],
-        sampling: &[Sampling],
-        diagnostics: Option<&mut crate::SamplingDiagnostics>,
-    ) -> Result<Self, SamplingError> {
         assert_eq!(lens.len(), sampling.len(), "interleave: one schedule per sequence");
         let k = lens.len();
         let mut total: u64 = 0;
@@ -146,8 +108,7 @@ impl Interleave {
         let live = lens.iter().filter(|&&n| n > 0).count();
         let mut rank = 0usize;
         let mut seqs = Vec::with_capacity(k);
-        let mut scheduled: Vec<(f64, Profile)> = Vec::new();
-        let mut uniform_len = 0u64;
+        let mut profiles = vec![Profile::delayed_linear(0.0, 0.0)];
         for (i, (&n, &s)) in lens.iter().zip(sampling).enumerate() {
             let profile = match s {
                 Sampling::Uniform => None,
@@ -167,7 +128,7 @@ impl Interleave {
                     Some(Profile::delayed_linear(d0, d1))
                 }
                 Sampling::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
-                    let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 + d1 < d2 + d3;
+                    let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 < d3;
                     if !([d0, d1, d2, d3].iter().all(|d| d.is_finite()) && ordered) {
                         return Err(SamplingError::InvalidParameter {
                             seq: i,
@@ -199,14 +160,11 @@ impl Interleave {
                     if n == 0 {
                         0
                     } else {
-                        scheduled.push((n as f64, p));
-                        scheduled.len() as u32
+                        profiles.push(p);
+                        (profiles.len() - 1) as u32
                     }
                 }
             };
-            if profile == 0 {
-                uniform_len += n;
-            }
             let (inv_n, phi) = if n > 0 {
                 rank += 1;
                 (1.0 / n as f64, (2 * rank - 1) as f64 / (2 * live) as f64)
@@ -215,21 +173,6 @@ impl Interleave {
             };
             seqs.push(Seq { n, inv_n, phi, profile });
         }
-        // Without uniform elements the shared profile is a placeholder that nothing reads.
-        let mut clamped_uniform = false;
-        let (uniform, demand, (start, end)) =
-            Profile::uniform_with_clamping(&scheduled, uniform_len as f64, total.max(1) as f64, &mut clamped_uniform);
-        if !uniform.is_finite() || !demand.is_finite() {
-            return Err(SamplingError::Overflow);
-        }
-        if demand > 1.0 + OVERCOMMIT_TOLERANCE {
-            return Err(SamplingError::Overcommitted { demand, start, end });
-        }
-        if let Some(diagnostics) = diagnostics {
-            *diagnostics = crate::SamplingDiagnostics { demand, start, end, used_tolerance: demand > 1.0, clamped_uniform };
-        }
-        let mut profiles = vec![uniform];
-        profiles.extend(scheduled.into_iter().map(|(_, p)| p));
         Ok(Self { seqs, profiles, total })
     }
 
@@ -256,7 +199,7 @@ impl Interleave {
         &self.profiles[self.seqs[seq].profile as usize]
     }
 
-    /// Ideal progress of element `j` of `seq`. `seg` caches the profile segment.
+    /// Virtual time of element `j` of `seq`. `seg` caches the profile segment.
     #[inline(always)]
     fn key(&self, seq: usize, j: u64, seg: &mut usize) -> f64 {
         let s = &self.seqs[seq];

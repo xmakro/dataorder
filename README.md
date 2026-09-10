@@ -126,9 +126,13 @@ Largest-remainder rounding can reduce a part's count when `total` grows: weights
 total or weights need not preserve the prefix. Keep the original configuration and
 concatenate additional data when the existing prefix must stay fixed.
 
-Schedules control **when** elements appear, while lengths or weights control **how
-many** appear. For example, this order draws 75% from one dataset and introduces
-the other around halfway through the run:
+Schedules assign each part's elements positions on a **shared virtual clock** from
+0 to 1. Lengths or weights still control **how many** elements each part contributes.
+Each curve is normalized independently, and the mix merges its virtual-time keys.
+`Sampling::Uniform` has a constant rate on that clock, just like `delayed(0.0)`.
+
+For example, this order draws 75% from one dataset and introduces the other at
+virtual time 0.5:
 
 ```rust
 use dataorder::{Order, Sampling, Seq};
@@ -140,14 +144,33 @@ fn main() -> Result<(), dataorder::Error> {
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
+    let first_delayed = order.iter(..).position(|(s, _)| order.source_index(s) == 1).unwrap();
+    // Half of the 750 uniform items have appeared by virtual time 0.5.
+    // The delayed source starts around output position 375, not 500.
+    assert!((374..=377).contains(&first_delayed));
     Ok(())
 }
 ```
 
-`Sampling::Uniform` spreads a sequence's records across the space left by the other
-schedules. A schedule that requires more records than can fit in an interval is rejected. See
-[`Sampling`](https://docs.rs/dataorder/latest/dataorder/enum.Sampling.html) for ramps,
-fade-outs and rounding at schedule boundaries.
+**Virtual time is not output progress.** With normalized cumulative curves `F_i`,
+part counts `n_i` and total count `N`, the continuous model reaches output progress
+`sum(n_i * F_i(t)) / N` at virtual time `t`. A part's fraction of the output rate is
+`n_i * rate_i(t) / sum(n_j * rate_j(t))` when the combined rate is positive.
+Changing another part's count or schedule can therefore move its actual start or
+end position. Linear ramps remain smooth in virtual time but generally become
+nonlinear against output progress; constant curves adapt in the same way.
+Discrete items approximate the curves, while counts and source-local order remain exact.
+
+Schedules can overlap or leave gaps, including mixes with no uniform parts. Clock
+intervals with no active parts produce no output. There is no shared capacity check
+or special filler source. Individual breakpoint and numerical-resolution limits still
+apply. See [`Sampling`](https://docs.rs/dataorder/latest/dataorder/enum.Sampling.html)
+for ramps, fade-outs, limits and the virtual-clock model.
+
+**Migration from 0.3:** scheduled orders change in 0.4. `Uniform` no longer fills
+other schedules' unused capacity, and start/full/fade/off values now refer to
+virtual time. Revisit schedules that relied on output-percentage deadlines, and
+resume existing checkpoints with their original crate version.
 
 ## Things to know
 
@@ -160,8 +183,8 @@ fade-outs and rounding at schedule boundaries.
   interleaved datasets split across two workers send one dataset to each worker,
   even when both inputs are shuffled. Shuffling the completed mix breaks that pattern
   but scatters its scheduled phases and adds a mix seek per element. Sharding the input sequences
-  before mixing produces a different order and can make an otherwise valid schedule
-  infeasible. Shard lengths can differ by one; callers needing equal worker lengths
+  before mixing produces a different order and can change how virtual time maps
+  to output positions. Shard lengths can differ by one; callers needing equal worker lengths
   must choose their truncation or padding policy.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
@@ -189,9 +212,8 @@ order together with a report without enumerating records:
   A compiled source node's `source_ordinal` indexes this vector, connecting a folded
   range back to its original source. Transform parameters use child coordinates;
   add a source's own offset when resolving its record indices.
-- `weighted` records quotas at original configuration paths. `mixes` records counts,
-  schedules, peak demand and its progress segment, plus whether validation used
-  rounding tolerance or clamped a negative uniform remainder.
+- `weighted` records quotas at original configuration paths. `mixes` records counts
+  and independent virtual-clock schedules at those original paths.
 
 Ordinary constructors do not collect this report. Invalid schedules expose further
 context through `Error::sampling_detail()`: non-finite parameters, invalid breakpoints,
@@ -220,7 +242,9 @@ Applications should persist committed work rather than prefetched positions.
 
 ## Performance
 
-Measured on macOS ARM64 with Rust 1.98.1, release build, on 2026-09-05.
+Historical measurements below predate the 0.4 virtual-clock change; scheduled-mix
+construction and seek timings do not describe the new engine. They were measured
+on macOS ARM64 with Rust 1.98.1, release build, on 2026-09-05.
 Each cell is the median [minimum..maximum] of five samples after warmup and batch
 calibration to at least 20 ms. Timings exclude record I/O.
 
@@ -235,8 +259,8 @@ Random lookup measures `get(pos)`. Seek measures `iter(pos..).next()`, including
 cursor construction and destruction. Walk measures batches of five million items,
 including the initial seek. Random positions are precomputed outside timing; reading
 the positions, loop control and optimization barriers remain inside. Phase mode uses
-positions within each named phase window. The benchmark runs on one thread without
-CPU affinity. Run it locally with:
+positions within each named output-progress window. The benchmark runs on one
+thread without CPU affinity. Run it locally with:
 
 ```sh
 cargo run --release --example bench
@@ -269,7 +293,8 @@ exclude the shared order and allocator overhead, and are not RSS. Peak live byte
 Rust allocation layouts; they cannot measure a system allocator's internal realloc copy.
 `bench --lifecycle` reports cumulative requests, retained bytes and peak live bytes.
 It also covers wide weight exponents, tiny positive weights, equal remainder ties and
-near-capacity schedules. Exact quota construction can take longer for wide exponents:
+large scheduled mixes with minority sources. Exact quota construction can take
+longer for wide exponents:
 in this campaign, 10,000 parts took about 0.63 ms with weights 1–13 and 2.25 ms with
 one weight changed to `1e-300`.
 
@@ -297,8 +322,8 @@ The fixture generators use Python's standard library and fixed seeds. Weight quo
 use exact integer ratios; schedule expectations use rational CDFs and 96-digit
 inverse calculations independent of the Rust implementation. Omit `--check` to
 regenerate the fixtures after changing a generator. The schedule fixtures include
-complementary schedules without uniform parts, interacting ramps, reordered minorities,
-nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`. CI checks both generated
+independent overlapping schedules without uniform parts, gaps, interacting ramps,
+reordered minorities, nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`. CI checks both generated
 files. Small oracle fixtures check complete continuous walks; large fixtures include
 independently computed contiguous windows. Stateful cursor tests combine seeks, range
 changes, clones, skips, exhaustion and failed operations; failures print a reproducible

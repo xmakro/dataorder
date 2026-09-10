@@ -250,7 +250,8 @@ impl<T> Seq<T> {
         Self::Mix(parts.into_iter().map(MixPart::from).collect())
     }
 
-    /// Interleaves parts with individual schedules.
+    /// Interleaves parts with independent schedules on a shared virtual clock.
+    /// See [`Sampling`] for how virtual time maps to output progress.
     /// Accepts `(seq, sampling)` pairs or other values that convert into [`MixPart`].
     ///
     /// ```
@@ -260,8 +261,10 @@ impl<T> Seq<T> {
     ///     (Seq::source(300), Sampling::delayed(0.5)),
     /// ]);
     /// let order = Order::new(seq)?;
-    /// // This order draws only from the uniform source in its first half.
-    /// assert!(order.iter(..500).all(|(&source, _)| source == 700));
+    /// // At virtual time 0.5, half of the 700 uniform elements have appeared.
+    /// // The delayed source begins around output position 350, not 500.
+    /// let first = order.iter(..).position(|(&source, _)| source == 300).unwrap();
+    /// assert!((349..=351).contains(&first));
     /// # Ok::<(), dataorder::Error>(())
     /// ```
     #[must_use]
@@ -302,7 +305,9 @@ impl<T> Seq<T> {
     /// ]);
     /// let order = Order::new(seq)?;
     /// assert_eq!(order.iter(..).filter(|&(&s, _)| s == 100).count(), 250);
-    /// assert!(order.iter(..490).all(|(&s, _)| s == 300));
+    /// // Virtual time 0.5 is around output position 375 for these counts.
+    /// let first = order.iter(..).position(|(&s, _)| s == 100).unwrap();
+    /// assert!((374..=377).contains(&first));
     /// # Ok::<(), dataorder::Error>(())
     /// ```
     #[must_use]
@@ -462,19 +467,16 @@ impl<T> Seq<T> {
     /// Shuffling the completed mix before sharding breaks this pattern, but scatters
     /// scheduled phases and pays a mix seek per element. Sharding each part before
     /// mixing can give each worker both datasets, but changes the global order and
-    /// requires each worker's schedules to be feasible, as described below.
+    /// the mapping from virtual time to output progress.
     ///
     /// Sharding a mix keeps one in `count` interleaved positions. The mix advances
     /// past unselected positions, or seeks for long skips. Across `count` workers,
     /// this can cost up to `count` times the global mix's interleaving work.
     ///
     /// Sharding each part before mixing can reduce that work, but produces a
-    /// different order. Rounding each part's length can also make a worker's
-    /// schedule infeasible. For example, 3 uniform elements and 1 delayed until
-    /// progress 0.75 fit globally. Splitting each part two ways gives worker 0
-    /// lengths 2 and 1: its delayed element needs more than the available last
-    /// quarter of its 3-position order. Shard the completed mix to preserve its
-    /// global position partition and schedule.
+    /// different order. Rounding each part's length changes its contribution and
+    /// can move virtual-clock breakpoints to different output positions on each
+    /// worker. Shard the completed mix to preserve its global position partition.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

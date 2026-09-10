@@ -5,74 +5,70 @@ use crate::float_bits;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-/// Controls when a part's elements appear in a mix.
+/// Spreads a part's elements along a shared virtual clock from 0 to 1.
 ///
-/// A part's length determines how many elements it contributes; its schedule
-/// spreads those elements over the mix. Progress runs from 0 at the start to 1 at
-/// the end. For example, `delayed(0.5)` places a part around the second half.
-/// Schedules describe ideal progress: rounding to individual positions can move
-/// elements slightly across a breakpoint.
+/// Lengths or weights determine how many elements each part contributes. Each
+/// schedule independently assigns those elements virtual-time keys; the mix emits
+/// them in increasing key order. `Uniform` is constant on this clock, with the
+/// same meaning as `delayed(0.0)` or `until(1.0)`.
 ///
-/// | Schedule | Draw rate |
+/// **Virtual time is not the fraction of the output already consumed.** A delay
+/// of 0.6 does not promise a start 60% through the output. Changing another part's
+/// count or schedule can change that position. Linear ramps are linear in virtual
+/// time; the final mixture generally transforms both ramps and constant rates.
+///
+/// | Schedule | Rate in virtual time |
 /// | --- | --- |
-/// | [`Uniform`](Self::Uniform) (default) | Fills the space left by scheduled parts |
+/// | [`Uniform`](Self::Uniform) (default) | Constant over `[0, 1]` |
 /// | [`delayed(at)`](Self::delayed) | Starts at `at`, then stays constant |
 /// | [`ramp(start, full)`](Self::ramp) | Rises from zero, then stays constant |
 /// | [`until(at)`](Self::until) | Starts constant, then stops at `at` |
 /// | [`fading(fade, off)`](Self::fading) | Starts constant, then falls to zero |
 /// | [`trapezoid(start, full, fade, off)`](Self::trapezoid) | Rises, stays constant, then falls |
 ///
-/// Uniform parts keep a constant rate relative to each other, in proportion to
-/// their lengths. Their combined rate changes to fill the space left by scheduled
-/// parts. A schedule belongs to its mix: repeating that mix restarts the schedule.
+/// Each curve is normalized to an integral of one. If `F_i(t)` is its cumulative
+/// share, `r_i(t)` its rate, `n_i` its count and `N` the total count, the continuous
+/// model gives output progress `sum(n_i * F_i(t)) / N`. Its local mixture fraction
+/// is `n_i * r_i(t) / sum(n_j * r_j(t))` wherever the denominator is positive.
+/// Discrete items approximate these curves; exact counts and source-local order
+/// are preserved. Gaps with no active parts produce no output positions.
 ///
 /// ```
 /// use dataorder::{Order, Sampling, Seq};
-/// let seq = Seq::mix_with([
-///     (Seq::source(600), Sampling::Uniform),
-///     (Seq::source(200), Sampling::until(0.5)),   // Phase out around halfway.
-///     (Seq::source(100), Sampling::delayed(0.5)), // Introduce around halfway.
-/// ]);
-/// let order = Order::new(seq)?;
-/// let positions = |source: usize| {
-///     order.iter(..)
-///         .enumerate()
-///         .filter(|&(_, (&s, _))| s == source)
-///         .map(|(p, _)| p)
-///         .collect::<Vec<_>>()
-/// };
-/// // Halfway is position 450. Allow a few positions for discrete rounding.
-/// assert!(positions(200).iter().all(|&p| p < 455));
-/// assert!(positions(100).iter().all(|&p| p >= 445));
-/// assert_eq!(positions(600).len(), 600);
+/// let order = Order::new(Seq::mix_with([
+///     (Seq::source(100), Sampling::Uniform),
+///     (Seq::source(100), Sampling::delayed(0.6)),
+/// ]))?;
+/// // At virtual time 0.6, about 60 of the first part's 100 items have appeared.
+/// // The second part therefore starts around 30% through the 200-item output.
+/// let first_delayed = order.iter(..).position(|(s, _)| order.source_index(s) == 1).unwrap();
+/// assert!((59..=61).contains(&first_delayed));
+/// assert_eq!(order.iter(..).filter(|(s, _)| order.source_index(s) == 1).count(), 100);
 /// # Ok::<(), dataorder::Error>(())
 /// ```
+///
+/// A schedule belongs to its mix: repeating the mix restarts its virtual clock.
+/// To span multiple epochs, repeat its parts before mixing them.
 ///
 /// # Validation and rounding
 ///
 /// Constructors store parameters; [`Order::new`](crate::Order::new) validates them.
 /// Parameters must be finite and satisfy the ranges documented on each variant.
-/// The combined scheduled rate must fit the mix's capacity. For example, placing
-/// 75% of the elements in the last half would require 150% of its available rate
-/// and returns [`Overcommitted`](crate::ErrorKind::Overcommitted).
+/// Schedules can overlap or leave gaps; they do not compete for fixed output-time
+/// capacity, and no uniform filler is required.
 ///
-/// Excess demand up to 10⁻⁹ is accepted for numerical rounding. In exact arithmetic,
-/// a feasible schedule places each element within `k` positions of its ideal rank,
-/// where `k` is the number of non-empty parts. Accepted excess demand can add drift
-/// proportional to the mix length, so that bound is not a guarantee for every
-/// accepted configuration, especially near [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
-///
-/// A scheduled part must satisfy `length × peak rate ≤ MAX_MIX_LEN`, where the rate
-/// is normalized so the part's total share is 1. Very narrow transitions can also
-/// overflow derived coefficients. Use equal adjacent breakpoints for an abrupt change.
+/// For numerical resolution, a part must satisfy
+/// `length × peak normalized rate ≤ MAX_MIX_LEN`. Very narrow transitions can
+/// overflow derived coefficients. Use equal adjacent breakpoints for an abrupt
+/// change. These individual numerical limits are separate from schedule overlap.
 ///
 /// Equality and hashing compare parameter bits, treating `-0.0` as `0.0`.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub enum Sampling {
-    /// Fills the space left by scheduled parts, in proportion to this part's length
-    /// relative to the other uniform parts.
+    /// A constant rate over the full virtual clock `[0, 1]`.
+    /// Its fraction of the actual output changes as other parts start, ramp or stop.
     #[default]
     Uniform,
     /// A rate that rises from zero at `start` to its final value at `full`, then
@@ -82,9 +78,9 @@ pub enum Sampling {
     /// with `0 ≤ start ≤ full ≤ 1` and `start < 1`. Build it with
     /// [`Sampling::delayed`] or [`Sampling::ramp`].
     DelayedLinear {
-        /// Progress at which the rate starts rising from zero.
+        /// Virtual time at which the rate starts rising from zero.
         start: f64,
-        /// Progress at which it reaches its final value.
+        /// Virtual time at which it reaches its final value.
         full: f64,
     },
     /// A rate that rises, stays constant, then falls back to zero.
@@ -94,22 +90,22 @@ pub enum Sampling {
     /// breakpoints make a transition abrupt.
     ///
     /// Requires finite parameters with `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and
-    /// `start + full < fade + off`, ensuring some time at a positive rate.
+    /// `start < off`, ensuring some time at a positive rate.
     /// Build it with [`Sampling::until`], [`Sampling::fading`] or [`Sampling::trapezoid`].
     Trapezoid {
-        /// Progress at which the rate starts rising from zero.
+        /// Virtual time at which the rate starts rising from zero.
         start: f64,
-        /// Progress at which it reaches its full value.
+        /// Virtual time at which it reaches its full value.
         full: f64,
-        /// Progress at which it starts falling.
+        /// Virtual time at which it starts falling.
         fade: f64,
-        /// Progress at which it reaches zero.
+        /// Virtual time at which it reaches zero.
         off: f64,
     },
 }
 
 impl Sampling {
-    /// Creates a schedule whose rate is zero before `at`, then constant.
+    /// Creates a schedule whose rate is zero before virtual time `at`, then constant.
     /// Requires `0 ≤ at < 1`; validated when the order is built.
     ///
     /// ```
@@ -121,7 +117,7 @@ impl Sampling {
         Self::DelayedLinear { start: at, full: at }
     }
 
-    /// Creates a schedule whose rate rises from zero at `start` to full at `full`.
+    /// Creates a rate that rises linearly from zero at virtual time `start` to `full`.
     /// The rate stays constant afterward. Requires `0 ≤ start ≤ full ≤ 1` and
     /// `start < 1`; validated when the order is built.
     ///
@@ -134,7 +130,7 @@ impl Sampling {
         Self::DelayedLinear { start, full }
     }
 
-    /// Creates a schedule with a constant rate until `at`, then zero.
+    /// Creates a schedule with a constant rate until virtual time `at`, then zero.
     /// Requires `0 < at ≤ 1`; validated when the order is built.
     ///
     /// ```
@@ -146,7 +142,7 @@ impl Sampling {
         Self::Trapezoid { start: 0.0, full: 0.0, fade: at, off: at }
     }
 
-    /// Creates a schedule with a constant rate that falls to zero from `fade` to `off`.
+    /// Creates a rate that is constant, then falls to zero from virtual time `fade` to `off`.
     /// Requires `0 ≤ fade ≤ off ≤ 1` and `off > 0`; validated when the order is built.
     ///
     /// ```
@@ -202,13 +198,8 @@ pub(crate) enum SamplingError {
     TooLong,
     /// A breakpoint or derived profile coefficient is invalid.
     InvalidParameter { seq: usize, sampling: Sampling, detail: crate::SamplingDetail },
-    /// The combined profile cannot be represented by finite coefficients.
-    Overflow,
     /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
     TooSteep { seq: usize, len: u64, peak_rate: f64 },
-    /// The scheduled sequences' rates sum to `demand` (> 1) times the total draw rate at
-    /// some progress, leaving nothing for the uniform sequences there.
-    Overcommitted { demand: f64, start: f64, end: f64 },
 }
 
 impl fmt::Display for SamplingError {
@@ -216,11 +207,7 @@ impl fmt::Display for SamplingError {
         match self {
             Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
             Self::InvalidParameter { seq, sampling, .. } => write!(f, "sequence {seq}: invalid {sampling:?}"),
-            Self::Overflow => write!(f, "combined sampling profile exceeds floating-point range"),
             Self::TooSteep { seq, .. } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
-            Self::Overcommitted { demand, start, end } => {
-                write!(f, "scheduled sequences need {}% of the draw rate at their peak (progress {start}..{end})", demand * 100.0)
-            }
         }
     }
 }

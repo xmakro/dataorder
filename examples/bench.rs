@@ -185,10 +185,10 @@ fn phases() {
     let scheduled = |sampling| {
         Seq::mix_with((0..1000).map(|i| (Seq::source(10_000).shuffle(i + 1), if i % 5 == 0 { sampling } else { Sampling::Uniform })))
     };
-    for (phase, start) in [("early", 0), ("rising", 3_000_000), ("late rise", 6_000_000), ("full", 8_000_000)] {
+    for (phase, start) in [("output 0%", 0), ("output 30%", 3_000_000), ("output 60%", 6_000_000), ("output 80%", 8_000_000)] {
         measure_at(&format!("phase ramp: {phase}"), scheduled(Sampling::ramp(0.2, 0.7)), 200_000, Some(start), false);
     }
-    for (phase, start) in [("full", 1_000_000), ("falling", 5_000_000), ("finished", 9_000_000)] {
+    for (phase, start) in [("output 10%", 1_000_000), ("output 50%", 5_000_000), ("output 90%", 9_000_000)] {
         measure_at(&format!("phase fading: {phase}"), scheduled(Sampling::fading(0.3, 0.8)), 200_000, Some(start), false);
     }
     for k in [100, 1000, 10_000] {
@@ -323,11 +323,11 @@ fn lifecycles() {
             );
         }
     }
-    // Accepted demand within the rounding tolerance leaves a tiny uniform remainder.
-    // On 64-bit hosts this also exercises rank recovery close to MAX_MIX_LEN.
+    // A minority uniform source beside a large independent scheduled source.
+    // On 64-bit hosts this exercises rank recovery close to MAX_MIX_LEN.
     let n = (dataorder::MAX_MIX_LEN / 2).min(usize::MAX as u64) as usize;
     lifecycle_at(
-        "near-capacity schedule, numerical tail seeks",
+        "large virtual-clock schedule, tail seeks",
         Seq::mix_with([(Seq::source(1), Sampling::Uniform), (Seq::source(n - 1), Sampling::until(1.0 - 5e-10))]),
         100,
         1,

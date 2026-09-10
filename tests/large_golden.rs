@@ -1,4 +1,6 @@
-//! Pin large-domain outputs from commit 837f3b4, independent of current get/iteration agreement.
+//! Pin large-domain outputs across shuffles, epochs and virtual-clock schedules.
+//! Fixture headers identify the ordering versions; these checks are independent of
+//! current get/iteration agreement.
 use dataorder::{Order, Sampling, Seq, Source};
 #[derive(Clone)]
 struct Src {

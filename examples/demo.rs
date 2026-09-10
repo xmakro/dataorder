@@ -22,12 +22,13 @@ impl Source for Src {
 fn main() {
     let seq = Seq::mix_with([
         (Seq::source(Src { name: 'A', len: 60 }).shuffle(1).repeat(2), Sampling::Uniform),
-        (Seq::source(Src { name: 'B', len: 20 }).shuffle(2).repeat(2), Sampling::delayed(0.5)), // B: second half of the run only
-        (Seq::source(Src { name: 'C', len: 40 }).shuffle(3).repeat(2), Sampling::ramp(0.2, 0.6)), // C: ramps up from 20% to 60%
+        (Seq::source(Src { name: 'B', len: 20 }).shuffle(2).repeat(2), Sampling::delayed(0.5)), // B: starts at virtual time 0.5
+        (Seq::source(Src { name: 'C', len: 40 }).shuffle(3).repeat(2), Sampling::ramp(0.2, 0.6)), // C: ramps from virtual time 0.2 to 0.6
     ]);
     let order = Order::new(seq.clone()).unwrap();
     let sources: Vec<(char, usize)> = order.sources().iter().map(|s| (s.name, s.len)).collect();
     println!("length {} over sources {sources:?}", order.len());
+    println!("Schedules use a shared virtual clock; their breakpoints are not output percentages.");
 
     let line: String = order.iter(..).map(|(s, _)| s.name).collect();
     println!("order (two epochs):\n{line}");

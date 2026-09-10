@@ -124,9 +124,9 @@ fn all_cases() -> Vec<Interleave> {
 }
 
 #[test]
-fn a_quantile_on_a_flat_share_is_drawn_before_the_plateau() {
-    // The uniform singleton's target share is 1/4. Its profile first reaches that
-    // share at 1/16, then stays flat while all three scheduled elements are drawn.
+fn independent_constant_profiles_resolve_an_exact_tie() {
+    // The singleton key is 1/4. The other part's first key is also 1/4;
+    // the lower part index wins, independently of the other part's support.
     let il = Interleave::with_sampling(&[1, 3], &[Uniform, Sampling::trapezoid(0.0625, 0.0625, 0.8125, 0.8125)]).unwrap();
     let expected = [(0, 0), (1, 0), (1, 1), (1, 2)];
     assert_eq!(full(&il), expected);
@@ -249,7 +249,6 @@ fn random_configurations() {
             .collect();
         let il = match Interleave::with_sampling(&lens, &sampling) {
             Ok(il) => il,
-            Err(SamplingError::Overcommitted { .. }) => continue,
             Err(e) => panic!("{lens:?} {sampling:?}: {e}"),
         };
         checked += 1;
@@ -283,10 +282,10 @@ fn random_configurations() {
                 Uniform => continue,
             };
             if let Some(first) = all.iter().position(|&(x, _)| x == s) {
-                assert!(first as f64 >= start * n as f64 - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
+                assert!(first as f64 >= joint_count(&il, start) - k as f64 - 1.0, "{lens:?} {sampling:?} seq {s} first at {first}");
             }
             if let Some(last) = all.iter().rposition(|&(x, _)| x == s) {
-                assert!(last as f64 <= off * n as f64 + k as f64 + 1.0, "{lens:?} {sampling:?} seq {s} last at {last}");
+                assert!(last as f64 <= joint_count(&il, off) + k as f64 + 1.0, "{lens:?} {sampling:?} seq {s} last at {last}");
             }
         }
     }
@@ -314,106 +313,49 @@ fn equal_lengths_round_robin_in_input_order() {
     }
 }
 
+/// Expected prefix size on the shared virtual clock, before discrete rounding.
+fn joint_count(il: &Interleave, t: f64) -> f64 {
+    il.seqs.iter().enumerate().map(|(s, seq)| seq.n as f64 * share(il, s, t)).sum()
+}
+
 #[test]
-fn schedules_are_followed() {
+fn schedules_are_followed_on_the_virtual_clock() {
     for (lens, sampling) in scheduled_cases() {
         let il = Interleave::with_sampling(&lens, &sampling).unwrap();
         let all = full(&il);
-        let n = il.len() as f64;
-        let k = lens.len() as f64;
-        let worst = worst_deviation(&il, &all);
-        for (s, w) in worst.iter().enumerate() {
-            // one element of own rounding plus the joint time warp of at most k positions
-            let bound = 1.5 + k * lens[s] as f64 / n;
-            assert!(*w <= bound, "{lens:?} {sampling:?} seq {s}: deviation {w} > {bound}");
-        }
-        // Nothing from a delayed sequence before its start, nor from a fading one after its
-        // end (up to the k-position warp).
-        for (s, samp) in sampling.iter().enumerate() {
-            let (start, off) = match *samp {
-                DelayedLinear { start, .. } => (start, 1.0),
-                Trapezoid { start, off, .. } => (start, off),
-                Uniform => continue,
-            };
-            if lens[s] == 0 {
-                continue;
+        for step in 0..=100 {
+            let t = step as f64 / 100.0;
+            let prefix = all.partition_point(|&(s, j)| il.key(s, j, &mut 0) < t);
+            let mut counts = vec![0; lens.len()];
+            for &(s, _) in &all[..prefix] {
+                counts[s] += 1;
             }
-            let first = all.iter().position(|&(x, _)| x == s).unwrap() as f64;
-            assert!(first >= start * n - k - 1.0, "{lens:?} {sampling:?} seq {s}: first at {first}, start {}", start * n);
-            let last = all.iter().rposition(|&(x, _)| x == s).unwrap() as f64;
-            assert!(last <= off * n + k + 1.0, "{lens:?} {sampling:?} seq {s}: last at {last}, off {}", off * n);
+            for (s, &n) in lens.iter().enumerate() {
+                let expected = n as f64 * share(&il, s, t);
+                assert!((counts[s] as f64 - expected).abs() <= 1.0 + 1e-10, "{lens:?} {sampling:?} seq {s} at virtual time {t}");
+            }
         }
     }
 }
 
 #[test]
-fn fading_sequences_stop_and_free_the_rest() {
-    // Seq 0 (30% of the elements) runs at a constant rate until 0.5 and stops: it is done
-    // by the middle, and only seq 1 fills the second half.
-    let il = Interleave::with_sampling(&[300, 700], &[Sampling::until(0.5), Uniform]).unwrap();
-    let all = full(&il);
-    assert!(all[500..].iter().all(|&(s, _)| s == 1));
-    assert_eq!(all[..500].iter().filter(|&&(s, _)| s == 0).count(), 300);
-    for w in all[..500].windows(50) {
-        let c = w.iter().filter(|&&(s, _)| s == 0).count();
-        assert!((28..=32).contains(&c), "window has {c} fading elements");
-    }
-    // A hand-over: one sequence until the middle, another from it; no uniform ones at all.
-    let il = Interleave::with_sampling(&[500, 500], &[Sampling::until(0.5), Sampling::delayed(0.5)]).unwrap();
-    let all = full(&il);
-    assert!(all[..500].iter().all(|&(s, _)| s == 0) && all[500..].iter().all(|&(s, _)| s == 1));
-}
-
-#[test]
-fn uniform_sequences_absorb_the_slack() {
-    // Seq 1 (30% of the elements) is delayed to 0.5: in the first half only seq 0 appears,
-    // and seq 0 must be 5/7 consumed by then.
-    let il = Interleave::with_sampling(&[700, 300], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]).unwrap();
-    let all = full(&il);
-    let first_half = &all[..500];
-    assert!(first_half.iter().all(|&(s, _)| s == 0));
-    let after = &all[500..];
-    // In the second half both appear, seq 1 at 300/500 = 60% share.
-    let ones = after.iter().filter(|&&(s, _)| s == 1).count();
-    assert_eq!(ones, 300);
-    for w in after.windows(50) {
-        let c = w.iter().filter(|&&(s, _)| s == 1).count();
-        assert!((28..=32).contains(&c), "window has {c} delayed elements");
-    }
-}
-
-#[test]
-fn ramp_rate_rises_linearly() {
-    // Seq 1 ramps from 0.2 to 0.6 over a joint sequence of 10 000; rate in successive
-    // windows of the ramp must increase roughly linearly.
-    let il = Interleave::with_sampling(&[8000, 2000], &[Uniform, DelayedLinear { start: 0.2, full: 0.6 }]).unwrap();
-    let all = full(&il);
-    let counts: Vec<usize> = (0..10).map(|w| all[1000 * w..1000 * (w + 1)].iter().filter(|&&(s, _)| s == 1).count()).collect();
-    assert_eq!(&counts[..2], &[0, 0], "{counts:?}");
-    // Ramp windows 2..6 (0.2..0.6): rate r·(τ−d0)/(d1−d0) with r = 2/1.2, final windows constant.
-    let r = 2.0 / (2.0 - 0.2 - 0.6);
-    for w in 2..10 {
-        let tau0 = w as f64 / 10.0;
-        let expect: f64 = if w < 6 { 2000.0 * ((tau0 + 0.1 - 0.2).powi(2) - (tau0 - 0.2).powi(2)) / (0.4 * 1.2) } else { 2000.0 * r * 0.1 };
-        assert!((counts[w] as f64 - expect).abs() <= 3.0, "window {w}: {} vs {expect:.1} ({counts:?})", counts[w]);
+fn uniform_and_explicit_constant_schedules_are_interchangeable() {
+    for constant in [Uniform, Sampling::delayed(0.0), Sampling::until(1.0)] {
+        let lens = [300, 200, 100];
+        let a = Interleave::with_sampling(&lens, &[Uniform, Sampling::ramp(0.2, 0.6), Sampling::until(0.8)]).unwrap();
+        let b = Interleave::with_sampling(&lens, &[constant, Sampling::ramp(0.2, 0.6), Sampling::until(0.8)]).unwrap();
+        assert_eq!(full(&a), full(&b));
+        // Changing another source's schedule does not alter this source's keys.
+        let c = Interleave::with_sampling(&lens, &[constant, Sampling::until(0.1), Sampling::delayed(0.9)]).unwrap();
+        for j in 0..lens[0] {
+            assert_eq!(a.key(0, j, &mut 0), c.key(0, j, &mut 0));
+        }
     }
 }
 
 #[test]
 fn rejects_bad_configurations() {
     use SamplingError::*;
-    assert!(matches!(
-        Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]),
-        Err(Overcommitted { .. })
-    ));
-    assert!(matches!(
-        Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.5, full: 0.5 }, DelayedLinear { start: 0.5, full: 0.5 }]),
-        Err(Overcommitted { .. })
-    ));
-    assert!(matches!(
-        Interleave::with_sampling(&[100, 900], &[Uniform, DelayedLinear { start: 0.0, full: 0.9 }]),
-        Err(Overcommitted { .. })
-    ));
     for bad in [
         DelayedLinear { start: 1.0, full: 1.0 },
         DelayedLinear { start: -0.1, full: -0.1 },
@@ -432,8 +374,8 @@ fn rejects_bad_configurations() {
     ] {
         assert!(matches!(Interleave::with_sampling(&[10, 10], &[Uniform, bad]), Err(InvalidParameter { seq: 1, .. })), "{bad:?}");
     }
-    // Overcommitted in the middle, although nothing is scheduled at the end.
-    assert!(matches!(Interleave::with_sampling(&[600, 400], &[Sampling::until(0.5), Uniform]), Err(Overcommitted { .. })));
+    // Overlapping schedules and gaps impose no shared capacity constraint.
+    assert!(Interleave::with_sampling(&[600, 400], &[Sampling::until(0.5), Uniform]).is_ok());
     assert!(Interleave::with_sampling(&[500, 500], &[Sampling::until(0.5), Uniform]).is_ok());
     assert!(matches!(
         Interleave::with_sampling(&[1 << 40, 1 << 40], &[Uniform, Sampling::trapezoid(0.0, 0.0, 0.001, 0.001)]),
@@ -449,9 +391,9 @@ fn rejects_bad_configurations() {
     let il = Interleave::with_sampling(&[100, 100], &[DelayedLinear { start: 0.0, full: 0.0 }, DelayedLinear { start: 0.0, full: 0.0 }])
         .unwrap();
     assert_eq!(full(&il).len(), 200);
-    // Exactly at capacity is allowed: the delayed 50% fills the whole second half.
+    // A delay halfway along the virtual clock begins one quarter through this output.
     let il = Interleave::with_sampling(&[500, 500], &[Uniform, DelayedLinear { start: 0.5, full: 0.5 }]).unwrap();
-    assert!(full(&il)[..500].iter().all(|&(s, _)| s == 0));
+    assert_eq!(full(&il).iter().position(|&(s, _)| s == 1), Some(251));
 }
 
 /// Empty sequences take no part in the stagger: the order is that of the non-empty ones alone.
@@ -540,9 +482,8 @@ fn huge_lengths_seek_consistently() {
     }
     // Nothing from the delayed sequences early on.
     assert!(il.iter(0..1000).all(|(s, _)| s != 2 && s != 4));
-    // The singleton (sequence 3 of 5 non-empty ones, stagger offset 0.7) sits at
-    // F_U⁻¹(0.7)·N, within the k-position warp.
-    let expect = (il.key(3, 0, &mut 0) * n as f64) as u64;
+    // Project the singleton's virtual key through the whole mixture's CDF.
+    let expect = joint_count(&il, il.key(3, 0, &mut 0)) as u64;
     let found = il.iter(expect - 100..expect + 100).any(|(s, _)| s == 3);
     assert!(found, "singleton not near {expect}");
 }
@@ -564,7 +505,7 @@ fn bench_seek_and_walk() {
     for &k in &[3usize, 100, 1000, 10_000] {
         let lens: Vec<u64> = (0..k).map(|_| rnd(if k == 3 { 200 } else { 2_000_000 })).collect();
         // Uniform; a fifth scheduled with a few distinct starts; a fifth with distinct starts
-        // each (the uniform profile then has a segment per scheduled part).
+        // each. Every profile remains independent and has at most five segments.
         for schedules in ["uniform", "scheduled", "distinct"] {
             let sampling: Vec<Sampling> = (0..k)
                 .map(|i| match (schedules, i % 10) {
@@ -601,12 +542,4 @@ fn bench_seek_and_walk() {
             );
         }
     }
-}
-
-#[test]
-fn rising_remainder_resolves_a_midpoint_tie() {
-    let il = Interleave::with_sampling(&[15, 5], &[Uniform, Sampling::trapezoid(0.0, 0.0, 0.0, 1.0)]).unwrap();
-    // At t=1/2, the scheduled CDF is 3/4 and the uniform CDF is 5/12.
-    // These are exactly the quantiles of (1,3) and (0,6); part 0 wins the tie.
-    assert_eq!(il.iter(9..11).collect::<Vec<_>>(), [(0, 6), (1, 3)]);
 }

@@ -97,9 +97,7 @@ impl Error {
             self.kind(),
             ErrorKind::MixTooLong
                 | ErrorKind::InvalidSampling { .. }
-                | ErrorKind::SamplingOverflow
                 | ErrorKind::TooSteep
-                | ErrorKind::Overcommitted { .. }
                 | ErrorKind::ZeroWeights
                 | ErrorKind::EmptyWeightedPart
         )
@@ -366,7 +364,7 @@ fn random_configurations_match_reference() {
         assert_eq!(ids((&order).into_iter()), reference);
         checked += 1;
     }
-    assert!(checked > 400, "only {checked} configurations checked ({skipped} overcommitted)");
+    assert!(checked > 400, "only {checked} configurations checked ({skipped} invalid)");
 }
 
 /// Deeper, larger configurations exercise long strides over mixes (interleave re-seeks),
@@ -535,12 +533,6 @@ fn errors() {
     assert_eq!(Order::new(a.clone().repeat(usize::MAX).repeat(usize::MAX)).unwrap_err().kind(), &ErrorKind::LengthOverflow);
     let half = || src(0, 1 << 31).repeat(1 << 31).repeat(2);
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
-    let over = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 0.5, full: 0.5 }), (src(1, 1), Sampling::Uniform)]);
-    assert!(matches!(Order::new(over).unwrap_err().kind(), ErrorKind::Overcommitted { .. }));
-    let over_early = Seq::mix_with([(src(0, 10), Sampling::until(0.5)), (src(1, 1), Sampling::Uniform)]);
-    let err = Order::new(over_early).unwrap_err();
-    assert!(matches!(err.kind(), ErrorKind::Overcommitted { demand, .. } if (demand - 20.0 / 11.0).abs() < 1e-9), "{err}");
-    assert!(err.to_string().contains("% of the draw rate at their peak (progress"));
     // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix_with([(src(0, 10), Sampling::DelayedLinear { start: 2.0, full: 2.0 })]);
     assert_eq!(

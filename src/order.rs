@@ -8,7 +8,7 @@ use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
 use crate::perm::{self, Shape};
-use crate::preparation::{CompilationReport, Preparation, PreparedMix, PreparedSource, SamplingDiagnostics, WeightedAllocation};
+use crate::preparation::{CompilationReport, Preparation, PreparedMix, PreparedSource, WeightedAllocation};
 use crate::seq::{MixPart, Rebuild, WeightedPart};
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
@@ -137,7 +137,7 @@ impl<T: Source> Order<T> {
     }
 
     /// Compiles with `seed` and returns quotas, compiled parameters, original source
-    /// metadata and schedule capacity diagnostics.
+    /// metadata, part counts and independent virtual-clock schedules.
     /// The report is separate from the order and can be dropped after inspection.
     /// No records are enumerated. Unlike [`new`](Self::new), this collects diagnostic
     /// paths and metadata copies during compilation.
@@ -667,19 +667,13 @@ impl<T: Source> Compiler<'_, T> {
             return Err(self.err(ErrorKind::TooManyMixParts));
         }
         let lens: Vec<u64> = children.iter().map(Node::len).collect();
-        let mut diagnostics = SamplingDiagnostics::default();
-        let result = if self.report.is_some() {
-            Interleave::with_diagnostics(&lens, sampling, Some(&mut diagnostics))
-        } else {
-            Interleave::with_sampling(&lens, sampling)
-        };
-        let mut il = result.map_err(|e| {
+        let mut il = Interleave::with_sampling(&lens, sampling).map_err(|e| {
             let detail = e.detail();
             let (kind, part) = e.into_kind();
             self.err_at(kind, part).with_sampling_detail(detail)
         })?;
         if let Some(report) = &mut self.report {
-            report.mixes.push(PreparedMix { path: self.path.clone(), counts: lens, sampling: sampling.to_vec(), diagnostics });
+            report.mixes.push(PreparedMix { path: self.path.clone(), counts: lens, sampling: sampling.to_vec() });
         }
         children.retain(|c| c.len() > 0);
         children.shrink_to_fit();

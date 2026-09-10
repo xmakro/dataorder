@@ -1,7 +1,6 @@
 //! Optional diagnostics collected while preparing an order.
 
 use crate::Sampling;
-use crate::float_bits;
 use crate::order::Node;
 
 /// A report from [`Order::prepare`](crate::Order::prepare).
@@ -20,7 +19,7 @@ pub struct Preparation {
     /// Every source in original configuration order, including sources removed by
     /// simplification. Join a compiled node's `source_ordinal` to this vector.
     pub sources: Vec<PreparedSource>,
-    /// Schedule capacity checks for every original mix or weighted mix, including
+    /// Counts and virtual-clock schedules for every original mix or weighted mix, including
     /// nodes subsequently removed by simplification. Paths are original paths.
     pub mixes: Vec<PreparedMix>,
 }
@@ -119,7 +118,7 @@ pub struct PreparedSource {
     pub salt: u64,
 }
 
-/// A capacity check of an original mix, before any enclosing transformations.
+/// An original mix and its independent schedules, before enclosing transformations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PreparedMix {
@@ -129,36 +128,7 @@ pub struct PreparedMix {
     pub counts: Vec<u64>,
     /// Schedules in original part order.
     pub sampling: Vec<Sampling>,
-    /// Peak demand and the numerical tolerance used during validation.
-    pub diagnostics: SamplingDiagnostics,
 }
-
-/// Numerical details of a successful schedule capacity check.
-#[derive(Clone, Copy, Debug, Default)]
-#[non_exhaustive]
-pub struct SamplingDiagnostics {
-    /// Peak combined scheduled rate relative to the mix's available draw rate.
-    /// Zero for an all-uniform mix; excludes empty scheduled parts.
-    pub demand: f64,
-    /// Start of a segment attaining the peak, in normalized progress.
-    pub start: f64,
-    /// End of the segment; the peak may occur at either endpoint.
-    pub end: f64,
-    /// The rounded peak exceeded 1 but remained within the accepted tolerance.
-    pub used_tolerance: bool,
-    /// A negative uniform remainder was clamped to zero. This can be true even
-    /// when the rounded peak equals 1 because the remainder retains extra precision.
-    pub clamped_uniform: bool,
-}
-
-impl PartialEq for SamplingDiagnostics {
-    fn eq(&self, other: &Self) -> bool {
-        [self.demand, self.start, self.end].map(float_bits) == [other.demand, other.start, other.end].map(float_bits)
-            && self.used_tolerance == other.used_tolerance
-            && self.clamped_uniform == other.clamped_uniform
-    }
-}
-impl Eq for SamplingDiagnostics {}
 
 #[derive(Default)]
 pub(crate) struct CompilationReport {

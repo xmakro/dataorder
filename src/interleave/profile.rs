@@ -2,26 +2,17 @@
 //!
 //! A profile consists of linear rate segments over `[0, 1]`, with jumps allowed
 //! between segments. Integrating the rate gives the fraction of a part drawn by
-//! each progress value. `quantile` inverts that share to compute an element's key.
+//! each virtual time. `quantile` inverts that share to compute an element's key.
 //! Its result must stay monotone under rounding for exact seeks to work.
 //! It is explicitly inlined because every iteration step computes a key.
 //!
 //! Keep lookup's multiply and add operations separate to preserve reproducible
-//! rounding. Construction retains residuals through the arithmetic in `crate::sum`.
+//! rounding. Each independently normalized profile has at most five segments.
 
-use crate::sum::{Compensated, Expansion};
-
-/// A nonnegative, piecewise-linear draw rate over joint progress, with its running integral.
+/// A nonnegative, piecewise-linear draw rate over virtual time, with its running integral.
 #[derive(Clone, Debug)]
 pub(crate) struct Profile {
     segs: Vec<Segment>,
-    /// Contiguous copies of segment starts and shares for binary search.
-    /// A uniform profile can have thousands of segments; searching these arrays
-    /// touches fewer cache lines than searching full segment records.
-    starts: Vec<f64>,
-    shares: Vec<f64>,
-    /// Scheduled peak with its rounding residual, used only during construction.
-    peak: Compensated,
 }
 
 /// A linear rate from `r0` to `r1` over `[start, end]`.
@@ -47,20 +38,18 @@ impl Profile {
     /// Empty segments are dropped. Shares use the trapezoid rule, which integrates
     /// linear rates exactly apart from floating-point rounding.
     fn from_rates(rates: impl IntoIterator<Item = (f64, f64, f64, f64)>) -> Self {
-        let mut share = Compensated::default();
+        let mut share = 0.0;
         let mut segs = Vec::new();
         for (start, end, r0, r1) in rates {
             if end > start {
                 let inv_r0 = if r1 == r0 && r0 > 0.0 { 1.0 / r0 } else { 0.0 };
                 let c = (r1 - r0) / (2.0 * (end - start));
                 let inv_2c = if c > 0.0 && r0 == 0.0 { 1.0 / (2.0 * c) } else { 0.0 };
-                segs.push(Segment { start, end, r0, r1, share: share.value(), c, inv_r0, inv_2c, c4: 4.0 * c });
-                share.add((r0 + r1) / 2.0 * (end - start));
+                segs.push(Segment { start, end, r0, r1, share, c, inv_r0, inv_2c, c4: 4.0 * c });
+                share += (r0 + r1) / 2.0 * (end - start);
             }
         }
-        let starts = segs.iter().map(|s| s.start).collect();
-        let shares = segs.iter().map(|s| s.share).collect();
-        Self { segs, starts, shares, peak: Compensated::new(1.0) }
+        Self { segs }
     }
 
     /// `DelayedLinear { start: d0, full: d1 }`: zero until `d0`, rising linearly to the
@@ -75,95 +64,8 @@ impl Profile {
     /// `d3`, zero afterwards. The full rate `r = 2/((d2 − d1) + (d3 − d0))` makes the total
     /// share one. Subtract endpoints before adding widths to avoid cancellation.
     pub(crate) fn trapezoid(d0: f64, d1: f64, d2: f64, d3: f64) -> Self {
-        let mut width = Compensated::difference(d2, d1);
-        for term in Compensated::difference(d3, d0).terms() {
-            width.add(term);
-        }
-        let peak = Compensated::new(2.0).divided_by(width);
-        let r = peak.value();
-        let mut profile = Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)]);
-        profile.peak = peak;
-        profile
-    }
-
-    #[cfg(test)]
-    pub(crate) fn uniform(scheduled: &[(f64, Self)], u: f64, total_len: f64) -> (Self, f64, (f64, f64)) {
-        Self::uniform_with_clamping(scheduled, u, total_len, &mut false)
-    }
-
-    /// Returns the uniform profile, peak combined demand and a segment attaining that peak.
-    /// For scheduled lengths `n_i` and uniform length `u`, the uniform rate is
-    /// `(1 - sum(n_i / total * rate_i)) / (u / total)`, clamped to zero. With `u = 0`, no elements
-    /// use the returned profile. A peak demand above 1 indicates overcommitment.
-    ///
-    /// Sweep the scheduled segment boundaries in order. Between boundaries, the
-    /// total rate is linear, so only its current value and slope need updating.
-    /// Adding and removing slopes uses an expansion to retain contributions across
-    /// widely different magnitudes; fractions, products and the rate value retain
-    /// their rounding residuals until the uniform remainder has been subtracted.
-    /// Sorting the boundaries costs `O(s log s)` for `s` scheduled profiles, compared
-    /// with `O(s²)` when evaluating every profile at every boundary.
-    /// Also records whether a negative uniform remainder was clamped to zero.
-    pub(crate) fn uniform_with_clamping(scheduled: &[(f64, Self)], u: f64, total_len: f64, clamped: &mut bool) -> (Self, f64, (f64, f64)) {
-        // Remove the old contribution and add the new one separately: forming their
-        // difference first can round away a small new slope before compensation sees it.
-        let mut events = Vec::new();
-        for (n, p) in scheduled {
-            // Scheduled segments have endpoints at zero or their shared peak;
-            // use that peak directly instead of reconstructing it from a correction.
-            let peak = p.peak.scaled(*n).divided_by(Compensated::new(total_len));
-            let endpoint = |r| if r == 0.0 { Compensated::default() } else { peak };
-            let (mut prev_r1, mut prev_m) = (Compensated::default(), Compensated::default());
-            for seg in &p.segs {
-                let m = if seg.r0 == seg.r1 {
-                    Compensated::default()
-                } else {
-                    let (from, to) = if seg.r0 == 0.0 { (seg.start, seg.end) } else { (seg.end, seg.start) };
-                    peak.divided_by(Compensated::difference(to, from))
-                };
-                events.push((seg.start, prev_r1.scaled(-1.0), prev_m.scaled(-1.0)));
-                events.push((seg.start, endpoint(seg.r0), m));
-                (prev_r1, prev_m) = (endpoint(seg.r1), m);
-            }
-        }
-        events.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut rate = |total: Compensated| {
-            if u > 0.0 {
-                let remainder = total.remaining(1.0);
-                *clamped |= remainder < 0.0;
-                remainder.max(0.0) / (u / total_len)
-            } else {
-                0.0
-            }
-        };
-        let (mut total, mut slope) = (Compensated::default(), Expansion::default());
-        let (mut windows, mut peak, mut next, mut t) = (Vec::new(), 0.0f64, 0, 0.0);
-        let mut peak_interval = (0.0, 1.0);
-        while t < 1.0 {
-            while next < events.len() && events[next].0 <= t {
-                for term in events[next].1.terms() {
-                    total.add(term);
-                }
-                for term in events[next].2.terms() {
-                    slope.add(term);
-                }
-                next += 1;
-            }
-            let t1 = if next < events.len() { events[next].0.min(1.0) } else { 1.0 };
-            let r0 = rate(total);
-            if total.value() > peak {
-                peak_interval = (t, t1);
-            }
-            peak = peak.max(total.value());
-            slope.add_scaled(&mut total, Compensated::difference(t1, t));
-            if total.value() > peak {
-                peak_interval = (t, t1);
-            }
-            peak = peak.max(total.value());
-            windows.push((t, t1, r0, rate(total)));
-            t = t1;
-        }
-        (if u > 0.0 { Self::from_rates(windows) } else { Self::delayed_linear(0.0, 0.0) }, peak, peak_interval)
+        let r = 2.0 / ((d2 - d1) + (d3 - d0));
+        Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)])
     }
 
     /// The rate just after `t` (`before == false`) or just before it.
@@ -189,41 +91,29 @@ impl Profile {
         self.segs.iter().all(|s| [s.r0, s.r1, s.share, s.c, s.c4, s.inv_r0, s.inv_2c].iter().all(|x| x.is_finite()))
     }
 
-    /// The share drawn by progress `t`: the integral of the rate up to `t`.
+    /// The share drawn by virtual time `t`: the integral of the rate up to `t`.
     pub(crate) fn share(&self, t: f64) -> f64 {
-        let s = &self.segs[self.starts.partition_point(|&start| start <= t).saturating_sub(1)];
+        let s = &self.segs[self.segs.partition_point(|s| s.start <= t).saturating_sub(1)];
         let x = (t - s.start).clamp(0.0, s.end - s.start);
         s.share + x * (s.r0 + s.c * x)
     }
 
-    /// Inverts share `y` to progress `t`, using the left endpoint of a flat interval.
-    /// Updates `hint` to the selected segment. Consecutive elements usually stay in
-    /// the same segment or enter the next, so lookup first walks a few nearby
-    /// segments. A binary search handles larger jumps in `O(log S)` for `S` segments.
-    ///
-    /// Nondecreasing in `y` even under rounding: the segment index is monotone because
-    /// shares are and the result is clamped to its segment. Constant and falling segments
-    /// use monotone operations, as do zero-start ramps; other rising segments invert
-    /// the remaining area from the right endpoint with a decreasing quotient.
+    /// Inverts share `y` to virtual time, using the left endpoint of a flat interval.
+    /// The hint walks within at most five segments. Each segment's inverse uses
+    /// monotone operations; clamping to its endpoints preserves monotonicity across
+    /// segments too. Rising segments always start at rate zero.
     #[inline(always)]
     pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
         // The last segment whose starting share is strictly below `y` (or the first
         // segment at zero). Equality belongs to the preceding segment, so a flat share
         // interval is inverted at its left endpoint, including with a hint beyond it.
         let mut m = *hint;
-        // Bound the local walk so a stale hint cannot make a seek linear in segment count.
-        let mut budget = 16;
         loop {
             if m + 1 < self.segs.len() && y > self.segs[m + 1].share {
                 m += 1;
             } else if m > 0 && y <= self.segs[m].share {
                 m -= 1;
             } else {
-                break;
-            }
-            budget -= 1;
-            if budget == 0 {
-                m = self.shares.partition_point(|&share| share < y).saturating_sub(1);
                 break;
             }
         }
@@ -236,18 +126,7 @@ impl Profile {
         } else {
             let root = (s.r0 * s.r0 + s.c4 * z).max(0.0).sqrt();
             if s.c > 0.0 {
-                if s.r0 == 0.0 {
-                    root * s.inv_2c
-                } else {
-                    if z == 0.0 {
-                        return s.start;
-                    }
-                    // Invert the remaining area from the right endpoint. As z grows,
-                    // the numerator decreases and the denominator increases, so the
-                    // distance decreases monotonically even under rounding.
-                    let mass = (s.r0 + s.r1) / 2.0 * (s.end - s.start);
-                    return (s.end - 2.0 * (mass - z).max(0.0) / (s.r1 + root)).clamp(s.start, s.end);
-                }
+                root * s.inv_2c
             } else if s.r0 + root > 0.0 {
                 2.0 * z / (s.r0 + root)
             } else {
@@ -264,17 +143,6 @@ mod tests {
 
     fn grid() -> impl Iterator<Item = f64> {
         (0..=1000).map(|i| i as f64 / 1000.0)
-    }
-
-    /// The uniform profile by direct evaluation of every scheduled profile at every
-    /// breakpoint, the `O(s²)` way the sweep replaces.
-    fn uniform_direct(scheduled: &[(f64, Profile)], u: f64) -> Profile {
-        let mut points: Vec<f64> = scheduled.iter().flat_map(|(_, p)| p.segs.iter().map(|s| s.start)).collect();
-        points.extend([0.0, 1.0]);
-        points.sort_by(f64::total_cmp);
-        points.dedup();
-        let rate = |t: f64, before: bool| (1.0 - scheduled.iter().map(|(rho, p)| rho * p.rate_at(t, before)).sum::<f64>()).max(0.0) / u;
-        Profile::from_rates(points.windows(2).map(|w| (w[0], w[1], rate(w[0], false), rate(w[1], true))))
     }
 
     #[test]
@@ -351,128 +219,22 @@ mod tests {
     }
 
     #[test]
-    fn uniform_absorbs_exactly() {
-        // u·F_U(τ) + Σ ρ_i·F_i(τ) = τ for every τ, with rising and falling rates.
-        let scheduled = vec![
-            (0.2, Profile::delayed_linear(0.3, 0.3)),
-            (0.25, Profile::delayed_linear(0.1, 0.7)),
-            (0.05, Profile::delayed_linear(0.0, 0.4)),
-            (0.1, Profile::trapezoid(0.0, 0.0, 0.4, 0.8)),
-            (0.05, Profile::trapezoid(0.5, 0.6, 0.8, 0.9)),
-        ];
-        let u = 0.35;
-        let (fu, peak, _) = Profile::uniform(&scheduled, u, 1.0);
-        assert!((0.97..1.0).contains(&peak), "peak {peak}");
-        for t in grid() {
-            let total = u * fu.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
-            assert!((total - t).abs() < 1e-12, "τ = {t}: {total}");
-        }
-        // The uniform rate drops at the step and is lowest at the end.
-        assert!(fu.rate_at(0.3, true) > fu.rate_at(0.3, false));
-        let end = (1.0 - 0.2 / 0.7 - 0.25 * 2.0 / 1.2 - 0.05 * 2.0 / 1.6) / u;
-        assert!((fu.rate_at(1.0, true) - end).abs() < 1e-12);
-        // The peak is where the summed rate is highest, not at the end.
-        let (_, peak, _) =
-            Profile::uniform(&[(0.6, Profile::trapezoid(0.0, 0.0, 0.5, 0.5)), (0.2, Profile::delayed_linear(0.5, 0.5))], 0.2, 1.0);
-        assert!((peak - 1.2).abs() < 1e-12, "peak {peak}");
-    }
-
-    #[test]
-    fn a_tiny_uniform_remainder_stays_normalized() {
-        for n in [1e6, 1e9, 1e12, 1e13, (1u64 << 46) as f64] {
-            for end in [0.0, 1e-16] {
-                let scheduled = [(n - 1.0, Profile::delayed_linear(0.0, end))];
-                let (uniform, peak, _) = Profile::uniform(&scheduled, 1.0, n);
-                assert!(peak <= 1.0);
-                assert!((uniform.share(1.0) - 1.0).abs() < 8.0 * f64::EPSILON, "n={n}, ramp={end}: {}", uniform.share(1.0));
-                if end == 0.0 {
-                    assert!((uniform.quantile(0.25, &mut 0) - 0.25).abs() <= f64::EPSILON);
-                }
-            }
-        }
-    }
-
-    /// The sweep agrees with evaluating every profile at every breakpoint, also when the
-    /// profiles are many, distinct and steep.
-    #[test]
-    fn sweep_matches_direct_evaluation() {
-        let mut x = 0x9E37_79B9_7F4A_7C15u64;
-        let mut rnd = move || {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            (x >> 11) as f64 / (1u64 << 53) as f64
-        };
-        for &(s, steep) in &[(1usize, false), (3, false), (20, false), (300, true), (2000, true)] {
-            let mut scheduled = Vec::new();
-            for _ in 0..s {
-                let d0 = rnd() * 0.8;
-                let d1 = if steep && rnd() < 0.5 { d0 + 1e-9 * rnd() } else { d0 + rnd() * (1.0 - d0) };
-                let (d2, d3) = if rnd() < 0.5 {
-                    (1.0, 1.0)
-                } else {
-                    let d2 = d1 + rnd() * (1.0 - d1);
-                    (d2, d2 + rnd() * (1.0 - d2))
-                };
-                let p = Profile::trapezoid(d0, d1, d2, d3);
-                scheduled.push((0.3 / s as f64 / p.max_rate(), p));
-            }
-            let u = 0.5;
-            let (fu, peak, _) = Profile::uniform(&scheduled, u, 1.0);
-            let direct = uniform_direct(&scheduled, u);
-            assert!(peak <= 0.31, "peak {peak}");
-            assert_eq!(fu.segs.len(), direct.segs.len());
-            for (a, b) in fu.segs.iter().zip(&direct.segs) {
-                assert_eq!((a.start, a.end), (b.start, b.end));
-                let tol = 1e-12 * (1.0 + a.r0.abs().max(a.r1.abs()));
-                assert!(
-                    (a.r0 - b.r0).abs() <= tol && (a.r1 - b.r1).abs() <= tol,
-                    "s = {s}: [{}, {}] rates {} {} vs {} {}",
-                    a.start,
-                    a.end,
-                    a.r0,
-                    a.r1,
-                    b.r0,
-                    b.r1
-                );
-            }
-            for t in grid() {
-                let total = u * fu.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
-                assert!((total - t).abs() < 1e-11, "s = {s}, τ = {t}: {total}");
-            }
-        }
-    }
-
-    #[test]
-    fn narrow_triangles_preserve_mass_and_adjacent_quantiles() {
-        for d in [1e-8, 1e-12, 1e-16, 1e-20, 1e-300] {
-            let p = Profile::trapezoid(0.0, d, d, 1.0);
-            let (uniform, peak, _) = Profile::uniform(&[(0.25, p.clone())], 0.75, 1.0);
-            assert!(p.is_finite() && uniform.is_finite());
-            assert!((peak - 0.5).abs() < 1e-14);
-            for t in grid() {
-                let mass = 0.25 * p.share(t) + 0.75 * uniform.share(t);
-                assert!((mass - t).abs() < 2e-15, "d={d}, t={t}, mass={mass}");
-            }
-        }
-        // Three simultaneous slope scales require more than a two-float accumulator.
-        let profiles =
-            [Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0), Profile::delayed_linear(0.0, 1e-200), Profile::delayed_linear(0.0, 1.0)];
-        let scheduled: Vec<_> = profiles.into_iter().map(|p| (0.1, p)).collect();
-        let (uniform, _, _) = Profile::uniform(&scheduled, 0.7, 1.0);
-        for t in grid() {
-            let mass = 0.7 * uniform.share(t) + scheduled.iter().map(|(rho, p)| rho * p.share(t)).sum::<f64>();
-            assert!((mass - t).abs() < 2e-15, "t={t}, mass={mass}");
-        }
-        for n in [1e6, 1e9, 1e12, (1u64 << 46) as f64] {
-            let (p, _, _) = Profile::uniform(&[(1.0 / (n + 1.0), Profile::trapezoid(0.0, 0.0, 0.0, 1.0))], n / (n + 1.0), 1.0);
+    fn inverse_is_monotone_and_independent_of_hint() {
+        for p in [
+            Profile::delayed_linear(0.0, 0.0),
+            Profile::delayed_linear(0.2, 0.6),
+            Profile::trapezoid(0.1, 0.3, 0.5, 0.9),
+            Profile::trapezoid(0.25, 0.25, 0.75, 0.75),
+            Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0),
+        ] {
             for center in grid() {
                 let mut y = center;
                 let mut previous = p.quantile(y, &mut 0);
                 for _ in 0..32 {
                     y = y.next_up().min(1.0);
-                    let t = p.quantile(y, &mut 0);
-                    assert!(t >= previous, "n={n}, y={y}: {t} < {previous}");
+                    let t = p.quantile(y, &mut (p.segs.len() - 1));
+                    assert_eq!(t, p.quantile(y, &mut 0));
+                    assert!(t >= previous, "y={y}: {t} < {previous}");
                     assert!((p.share(t) - y).abs() < 8.0 * f64::EPSILON);
                     previous = t;
                 }
@@ -481,100 +243,11 @@ mod tests {
     }
 
     #[test]
-    fn quantile_uses_the_left_endpoint_of_flat_shares() {
-        // F(t) = 1/2 from 1/4 through 3/4. Split the plateau into enough segments to
-        // exercise both the short hint walk and its binary-search fallback.
-        let p = Profile::from_rates((0..128).map(|i| {
-            let r = if (32..96).contains(&i) { 0.0 } else { 2.0 };
-            (i as f64 / 128.0, (i + 1) as f64 / 128.0, r, r)
-        }));
-        assert_eq!(p.share(0.25), 0.5);
-        assert_eq!(p.share(0.75), 0.5);
-        for start in 0..p.segs.len() {
-            let mut hint = start;
-            assert_eq!(p.quantile(0.5, &mut hint), 0.25, "hint {start}");
-            let left = p.quantile(0.5f64.next_down(), &mut hint);
-            let right = p.quantile(0.5f64.next_up(), &mut hint);
-            assert!(left <= 0.25 && right >= 0.75);
-        }
-        // Initial and final plateaus have the same left-endpoint convention.
+    fn inverse_uses_left_endpoint_of_flat_shares() {
         let p = Profile::trapezoid(0.25, 0.25, 0.75, 0.75);
         for start in 0..p.segs.len() {
-            let mut hint = start;
-            assert_eq!(p.quantile(0.0, &mut hint), 0.0);
-            assert_eq!(p.quantile(1.0, &mut hint), 0.75);
-        }
-    }
-
-    #[test]
-    fn quantile_inverts_share_and_is_monotone() {
-        let scheduled = vec![
-            (0.3, Profile::delayed_linear(0.2, 0.6)),
-            (0.1, Profile::delayed_linear(0.5, 0.5)),
-            (0.1, Profile::trapezoid(0.1, 0.2, 0.3, 0.7)),
-        ];
-        let profiles = [
-            Profile::uniform(&scheduled, 0.5, 1.0).0,
-            Profile::delayed_linear(0.2, 0.6),
-            Profile::delayed_linear(0.5, 0.5),
-            Profile::trapezoid(0.1, 0.2, 0.3, 0.7),
-            Profile::trapezoid(0.0, 0.0, 0.5, 0.5),
-        ];
-        for p in &profiles {
-            let mut hint = 0;
-            let mut prev = -1.0;
-            for i in 0..=100_000 {
-                let y = i as f64 / 100_000.0;
-                let t = p.quantile(y, &mut hint);
-                assert!(t >= prev, "y = {y}: {t} < {prev}");
-                prev = t;
-                if y > 0.0 && y < 1.0 {
-                    let back = p.share(t);
-                    assert!((back - y).abs() < 1e-9 || back < y && p.share((t + 1e-9).min(1.0)) >= y, "y = {y}: F(F⁻¹(y)) = {back}");
-                }
-            }
-            // A hint far off still gives the same answer.
-            let mut far = p.segs.len() - 1;
-            let mut zero = 0;
-            for i in 0..=1000 {
-                let y = i as f64 / 1000.0;
-                assert_eq!(p.quantile(y, &mut far).to_bits(), p.quantile(y, &mut zero).to_bits());
-            }
-        }
-    }
-    #[test]
-    fn many_complementary_ramps_keep_a_single_uniform_item() {
-        let total = (1u64 << 46) - 1;
-        for pairs in [1u64, 7, 100, 1000] {
-            let half = (total - 1) / 2;
-            let mut scheduled = Vec::new();
-            for i in 0..pairs {
-                let n = half / pairs + u64::from(i < half % pairs);
-                scheduled.push((n as f64, Profile::delayed_linear(0.0, 1.0)));
-                scheduled.push((n as f64, Profile::trapezoid(0.0, 0.0, 0.0, 1.0)));
-            }
-            let (uniform, peak, _) = Profile::uniform(&scheduled, 1.0, total as f64);
-            assert!(peak <= 1.0);
-            assert!(uniform.is_finite());
-            for i in 0..=100 {
-                let t = i as f64 / 100.0;
-                assert!((uniform.share(t) - t).abs() < 8.0 * f64::EPSILON);
-            }
-        }
-    }
-
-    #[test]
-    fn large_counts_and_tiny_ramps_preserve_capacity() {
-        let total = (1u64 << 46) - 1;
-        let n = 1u64 << 40;
-        let scheduled = [(n as f64, Profile::trapezoid(0.0, 1e-300, 1e-300, 1.0)), (n as f64, Profile::delayed_linear(0.0, 1e-200))];
-        let u = (total - 2 * n) as f64;
-        let (uniform, peak, _) = Profile::uniform(&scheduled, u, total as f64);
-        assert!(uniform.is_finite() && peak < 1.0);
-        for i in 0..=100 {
-            let t = i as f64 / 100.0;
-            let mass = (u * uniform.share(t) + scheduled.iter().map(|(n, p)| n * p.share(t)).sum::<f64>()) / total as f64;
-            assert!((mass - t).abs() < 8.0 * f64::EPSILON);
+            assert_eq!(p.quantile(0.0, &mut { start }), 0.0);
+            assert_eq!(p.quantile(1.0, &mut { start }), 0.75);
         }
     }
 }

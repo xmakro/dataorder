@@ -116,9 +116,10 @@ struct Slot {
 /// The counts describe a prefix of the merged order and leave at most `2k`
 /// elements to replay, where `k` is the number of parts.
 ///
-/// Try the analytic progress and one correction first. If rounding of a profile makes
-/// those guesses poor, bisect progress instead; its nonnegative float bits are ordered,
-/// so at most 63 passes suffice. Never replay more than twice the number of parts.
+/// Interpolate between observed integer ranks for up to eight probes, starting at
+/// `a / N`. Then bisect virtual-time bits, which takes at most 63 further probes.
+/// Neither path assumes virtual time equals output progress. All rank sums are
+/// integer counts; never replay more than twice the number of parts.
 fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
     if a == 0 {
         counts.clear();
@@ -133,24 +134,21 @@ fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
     };
     let mut t = a as f64 / il.total as f64;
     let (mut lo, mut hi) = (0.0f64, 1.0f64.next_up());
-    for attempt in 0..2 {
+    let (mut previous_t, mut previous_count) = (0.0, 0);
+    let mut probes = 0;
+    loop {
         let base = count(t, counts);
         if base <= a && a - base <= 2 * k {
             return base;
         }
         if base > a {
-            hi = t
+            hi = t;
         } else {
-            lo = t
+            lo = t;
         }
-        if attempt == 0 {
-            t = ((a as f64 - (base as f64 - a as f64) - k as f64) / il.total as f64).clamp(lo, hi);
-        }
-    }
-    loop {
         if hi.to_bits() - lo.to_bits() <= 1 {
             // The remaining rank lies among equal keys at lo. Consume that tie in part
-            // order, by counts, even if clamping produced a long run of equal keys.
+            // order, by counts, even if rounding produced a long run of equal keys.
             let mut left = a - count(lo, counts);
             for (s, c) in counts.iter_mut().enumerate() {
                 let take = left.min(count_below(il, s, hi) - *c);
@@ -162,16 +160,22 @@ fn counts_below(il: &Interleave, a: u64, counts: &mut Vec<u64>) -> u64 {
             }
             unreachable!("interleave: rank not bracketed");
         }
-        t = f64::from_bits(lo.to_bits() + (hi.to_bits() - lo.to_bits()) / 2);
-        let base = count(t, counts);
-        if base <= a && a - base <= 2 * k {
-            return base;
-        }
-        if base > a { hi = t } else { lo = t }
+        probes += 1;
+        let next = if probes < 8 && base != previous_count {
+            // A secant through the last two integer ranks estimates the clock
+            // position of a short prefix before a. Clamp inside the proven bracket;
+            // flat ranks and unsuccessful probes fall back to bounded bisection.
+            let fraction = (a.saturating_sub(k) as f64 - base as f64) / (base as f64 - previous_count as f64);
+            (t + (t - previous_t) * fraction).clamp(lo.next_up(), hi.next_down())
+        } else {
+            f64::from_bits(lo.to_bits() + (hi.to_bits() - lo.to_bits()) / 2)
+        };
+        (previous_t, previous_count) = (t, base);
+        t = next;
     }
 }
 
-/// Number of elements of `seq` whose key is below progress `t`.
+/// Number of elements of `seq` whose key is below virtual time `t`.
 fn count_below(il: &Interleave, seq: usize, t: f64) -> u64 {
     let s = &il.seqs[seq];
     // Guess from the share function, then make it exact against the real keys.

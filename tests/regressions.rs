@@ -118,27 +118,24 @@ fn isolated_case() {
                         "d={d}, p={p}"
                     );
                     let drawn = all[..p].iter().filter(|&&(s, _)| s == 100).count();
-                    let t = p as f64 / order.len() as f64;
+                    // In the limiting fading shape: p = 300*t + 100*(2*t-t*t).
+                    let t = 2.0 * p as f64 / (500.0 + (250_000.0 - 400.0 * p as f64).sqrt());
                     assert!((drawn as f64 - 100.0 * (2.0 * t - t * t)).abs() < 2.0, "d={d}, p={p}, drawn={drawn}");
                 }
             }
             #[cfg(target_pointer_width = "64")]
             {
-                let seq =
-                    Seq::mix_with([(Seq::source(1usize), Sampling::Uniform), (Seq::source((1 << 46) - 1), Sampling::ramp(0.0, 1e-296))]);
-                let error = Order::new(seq).unwrap_err();
-                assert_eq!(error.kind(), &ErrorKind::SamplingOverflow);
-                assert!(error.path().is_empty());
-                // Accepted overcommit tolerance can move the analytic rank by thousands
-                // of positions. The old correction repeatedly guessed the same progress.
-                let n = 1usize << 44;
-                let order =
-                    Order::new(Seq::mix_with([(Seq::source(1), Sampling::Uniform), (Seq::source(n - 1), Sampling::until(1.0 - 5e-10))]))
-                        .unwrap();
-                for p in n - 4000..n - 3980 {
-                    assert_eq!(order.get(p), (&(n - 1), p));
+                // These profiles formerly overflowed the shared remainder builder.
+                let n = (1usize << 46) - 1;
+                let order = Order::new(Seq::mix_with([(Seq::source(1), Sampling::Uniform), (Seq::source(n), Sampling::ramp(0.0, 1e-296))]))
+                    .unwrap();
+                let at = (n + 1) / 4;
+                let window: Vec<_> = order.iter(at - 8..at + 8).map(|(&s, i)| (s, i)).collect();
+                assert!(window.iter().any(|&(s, _)| s == 1));
+                for (j, expected) in window.into_iter().enumerate() {
+                    let (&s, i) = order.get(at - 8 + j);
+                    assert_eq!((s, i), expected);
                 }
-                assert_eq!(order.get(n - 1), (&1, 0));
             }
             #[cfg(target_pointer_width = "64")]
             for n in [1_000_000_000_000usize, (1 << 46) - 1] {
@@ -193,11 +190,11 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
 }
 
 #[test]
-fn sharding_parts_requires_worker_schedule_feasibility() {
+fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
     let global = Seq::mix_with([(Seq::source(3), Sampling::Uniform), (Seq::source(1), Sampling::delayed(0.75))]);
     assert_eq!(global.check(), Ok(4));
     let shard = Seq::mix_with([(Seq::source(3).shard(2, 0), Sampling::Uniform), (Seq::source(1).shard(2, 0), Sampling::delayed(0.75))]);
-    assert!(matches!(shard.check().unwrap_err().kind(), ErrorKind::Overcommitted { .. }));
+    assert_eq!(shard.check(), Ok(3));
     for worker in 0..2 {
         assert_eq!(global.clone().shard(2, worker).check(), Ok(2));
     }

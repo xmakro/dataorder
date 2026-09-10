@@ -154,18 +154,6 @@ fn equality_preserves_nan_payload_sign_and_signaling_bits() {
 }
 
 #[test]
-fn overcommit_diagnostic_explains_small_excess_and_location() {
-    let off = 0.999999998;
-    let error = Order::new(Seq::mix_with([(Seq::source(1000), Sampling::until(off))])).unwrap_err();
-    let ErrorKind::Overcommitted { demand, start, end } = error.kind() else { panic!("{error}") };
-    assert!(*demand > 1.0 + 1e-9);
-    assert_eq!((*start, *end), (0.0, off));
-    let text = error.to_string();
-    assert!(text.contains("100.0000002"), "{text}");
-    assert!(text.contains("progress 0..0.999999998"), "{text}");
-}
-
-#[test]
 fn preparation_explains_folded_ranges_and_original_sources() {
     use dataorder::PreparedParameters as P;
     let seq = Seq::concat([Seq::source(4), Seq::concat([Seq::source(10), Seq::source(6)])]).skip(7).take(5);
@@ -189,7 +177,7 @@ fn preparation_explains_folded_ranges_and_original_sources() {
 }
 
 #[test]
-fn sampling_diagnostics_distinguish_reasons_and_report_successful_tolerance() {
+fn sampling_errors_and_preparation_describe_independent_profiles() {
     use dataorder::{MAX_MIX_LEN, SamplingDetail as D};
     for (sampling, expected) in [
         (Sampling::delayed(f64::INFINITY), D::NonFiniteParameter),
@@ -213,22 +201,8 @@ fn sampling_diagnostics_distinguish_reasons_and_report_successful_tolerance() {
     let mix = &report.mixes[0];
     assert_eq!(mix.path, [0]);
     assert_eq!(mix.counts, [1000]);
-    assert!(mix.diagnostics.demand > 1.0);
-    assert!(mix.diagnostics.used_tolerance);
-    assert!(!mix.diagnostics.clamped_uniform); // No uniform records to clamp.
-    assert_eq!((mix.diagnostics.start, mix.diagnostics.end), (0.0, 1.0 - 5e-10));
-    #[cfg(target_pointer_width = "64")]
-    {
-        let (_, report) = Order::prepare(
-            Seq::mix_with([(Seq::source((1usize << 44) - 1), Sampling::until(1.0 - 5e-10)), (Seq::source(1), Sampling::Uniform)]),
-            0,
-        )
-        .unwrap();
-        assert!(report.mixes[0].diagnostics.used_tolerance);
-        assert!(report.mixes[0].diagnostics.clamped_uniform);
-    }
+    assert_eq!(mix.sampling, [Sampling::until(1.0 - 5e-10)]);
     let (_, report) = Order::prepare(Seq::mix([Seq::source(10), Seq::source(20)]), 0).unwrap();
-    assert_eq!(report.mixes[0].diagnostics.demand, 0.0);
-    assert!(!report.mixes[0].diagnostics.used_tolerance);
-    assert!(!report.mixes[0].diagnostics.clamped_uniform);
+    assert_eq!(report.mixes[0].counts, [10, 20]);
+    assert_eq!(report.mixes[0].sampling, [Sampling::Uniform; 2]);
 }
