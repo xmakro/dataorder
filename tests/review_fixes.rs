@@ -1,5 +1,5 @@
 //! Public regressions for review findings and access APIs.
-use dataorder::{BoundsError, ErrorKind, Order, Sampling, Seq, Source, WeightedPart};
+use dataorder::{BoundsError, ErrorKind, Order, Sampling, Seq, Source};
 use std::ops::Bound;
 
 #[test]
@@ -99,18 +99,6 @@ fn sharding_preserves_global_partition_not_worker_mixture() {
 }
 
 #[test]
-fn increasing_weighted_total_can_reduce_a_parts_count() {
-    for (total, expected) in [(4, [2, 1, 1]), (5, [3, 2, 0])] {
-        let order = Order::new(Seq::weighted(total, [(Seq::source(10), 5.0), (Seq::source(10), 3.0), (Seq::source(10), 1.0)])).unwrap();
-        let mut counts = [0; 3];
-        for (ordinal, _, _) in order.iter(..).unwrap().indexed() {
-            counts[ordinal] += 1;
-        }
-        assert_eq!(counts, expected);
-    }
-}
-
-#[test]
 fn equality_preserves_nan_payload_sign_and_signaling_bits() {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let hash = |x: &Sampling| {
@@ -123,8 +111,6 @@ fn equality_preserves_nan_payload_sign_and_signaling_bits() {
         for (j, b) in bits.iter().enumerate() {
             let (a, b) = (f64::from_bits(*a), f64::from_bits(*b));
             assert_eq!(Sampling::delayed(a) == Sampling::delayed(b), i == j);
-            let part = |weight| WeightedPart::from((Seq::source(1), weight));
-            assert_eq!(part(a) == part(b), i == j);
         }
     }
     assert_eq!(Sampling::ramp(-0.0, 0.5), Sampling::ramp(0.0, 0.5));
@@ -148,8 +134,9 @@ fn sampling_errors_describe_independent_profiles() {
     let seq = Seq::mix_with([(Seq::source(1usize << 30), Sampling::until(1e-6))]);
     let err = Order::new(seq).unwrap_err();
     assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 1 << 30, peak_rate: 1e6, limit: MAX_MIX_LEN }));
-    let weighted = Seq::weighted_with(1 << 30, [(Seq::source(10), 3.0, Sampling::until(1e-6)), (Seq::source(10), 1.0, Sampling::Uniform)]);
-    let err = Order::new(weighted).unwrap_err();
+    let mixed =
+        Seq::mix_with([(Seq::source(10).cycle(3 << 28), Sampling::until(1e-6)), (Seq::source(10).cycle(1 << 28), Sampling::Uniform)]);
+    let err = Order::new(mixed).unwrap_err();
     assert_eq!(err.path(), [0]);
     assert_eq!(err.sampling_detail(), Some(&D::TooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN }));
 }

@@ -64,12 +64,12 @@ fn golden_orders() {
         ),
         ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).stride(7, 3), 0),
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
-        ("weighted", Seq::weighted(3000, [(src(0, 100).shuffle(1), 0.6), (src(1, 5000).shuffle(2), 0.4)]), 0),
+        ("mix with explicit counts", Seq::mix([src(0, 100).shuffle(1).cycle(1800), src(1, 5000).shuffle(2).cycle(1200)]), 0),
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
         ("cycle of a shuffled repeat", src(0, 300).shuffle(5).repeat(2).cycle(1000), 0),
         (
-            "weighted with a concat part",
-            Seq::weighted(500, [(Seq::concat([src(0, 200), src(1, 300)]), 1.0), (src(2, 50).shuffle(1), 1.0)]).shuffle(2),
+            "mix with a cycled concat part",
+            Seq::mix([Seq::concat([src(0, 200), src(1, 300)]).cycle(250), src(2, 50).shuffle(1).cycle(250)]).shuffle(2),
             0,
         ),
         (

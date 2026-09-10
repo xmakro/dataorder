@@ -34,7 +34,7 @@ and worker settings; see the [checkpoint example](examples/checkpoint.rs).
 
 ```toml
 [dependencies]
-dataorder = "0.2"
+dataorder = "0.4"
 ```
 
 Start with `Seq::source(dataset)`, add ordering operations, then validate and prepare
@@ -110,24 +110,36 @@ so you can nest mixes and concatenations.
 | --- | --- |
 | Read sequences one after another | `Seq::concat(sequences)` |
 | Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
-| Choose a total length and relative proportions | `Seq::weighted(total, [(seq, weight), …])` |
-| Control when a sequence contributes records | `Seq::mix_with` or `Seq::weighted_with`, with a `Sampling` schedule |
+| Choose exact counts for each dataset | `Seq::mix([a.cycle(a_count), b.cycle(b_count), …])` |
+| Control when a sequence contributes records | `Seq::mix_with`, with a `Sampling` schedule |
 | Shuffle positions | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
 | Repeat or truncate to an exact length | `.cycle(len)` |
 | Keep a range or every nth position | `.slice(range)` or `.stride(step, offset)` |
 | Assign every nth position to a worker | `.shard(worker_count, worker_index)` |
 
-A plain mix uses every input element once, drawing more often from longer sequences.
-A weighted mix repeats or truncates each input sequence to its assigned count; the
-counts sum exactly to `total`. Each input keeps its order unless you add `.shuffle(seed)`.
-Largest-remainder rounding can reduce a part's count when `total` grows: weights
-`[5, 3, 1]` receive `[2, 1, 1]` at total 4 and `[3, 2, 0]` at total 5. Changing the
-total or weights need not preserve the prefix. Keep the original configuration and
-concatenate additional data when the existing prefix must stay fixed.
+A mix uses every input element once, drawing more often from longer sequences.
+Choose each dataset's count with `.cycle(count)`, which repeats or truncates the
+sequence as needed. This gives a 75/25 mixture of one million records:
+
+```rust
+use dataorder::Seq;
+
+let web = Seq::source(100_000);
+let code = Seq::source(500_000);
+let seq = Seq::mix([
+    web.shuffle(1).cycle(750_000),
+    code.shuffle(2).cycle(250_000),
+]);
+assert_eq!(seq.check(), Ok(1_000_000));
+```
+
+Each input keeps its order; existing shuffles are reseeded for additional epochs.
+Changing a part's count can change the mixed order's prefix. Keep the original
+configuration and concatenate additional data when the existing prefix must stay fixed.
 
 Schedules assign each part's elements positions on a **shared virtual clock** from
-0 to 1. Lengths or weights still control **how many** elements each part contributes.
+0 to 1. Part lengths control **how many** elements each part contributes.
 Each curve is normalized independently, and the mix merges its virtual-time keys.
 `Sampling::Uniform` has a constant rate on that clock, just like `delayed(0.0)`.
 
@@ -138,9 +150,9 @@ virtual time 0.5:
 use dataorder::{Order, Sampling, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seq = Seq::weighted_with(1000, [
-        (Seq::source(300).shuffle(1), 3.0, Sampling::Uniform),
-        (Seq::source(100).shuffle(2), 1.0, Sampling::delayed(0.5)),
+    let seq = Seq::mix_with([
+        (Seq::source(300).shuffle(1).cycle(750), Sampling::Uniform),
+        (Seq::source(100).shuffle(2).cycle(250), Sampling::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
@@ -217,7 +229,7 @@ with depth. Arbitrarily deep hand-built trees are unsupported.
 
 `Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
 `map` or `try_map`. The optional `serde` feature adds configuration serialization. When
-using JSON, also enable `serde_json/float_roundtrip` to preserve weights and schedules.
+using JSON, also enable `serde_json/float_roundtrip` to preserve schedule parameters.
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
 
@@ -283,11 +295,7 @@ These allocator measurements include the cursor vector and cursor-owned allocati
 exclude the shared order and allocator overhead, and are not RSS. Peak live bytes count
 Rust allocation layouts; they cannot measure a system allocator's internal realloc copy.
 `bench --lifecycle` reports cumulative requests, retained bytes and peak live bytes.
-It also covers wide weight exponents, tiny positive weights, equal remainder ties and
-large scheduled mixes with minority sources. Exact quota construction can take
-longer for wide exponents:
-in this campaign, 10,000 parts took about 0.63 ms with weights 1–13 and 2.25 ms with
-one weight changed to `1e-300`.
+It also covers large scheduled mixes with minority sources.
 
 Concat cursors recycle compatible child buffers across boundaries, seeks and repeated
 epochs. Their retained capacities can reflect larger previously visited children,
@@ -304,18 +312,17 @@ cargo run --release --example demo
 cargo test --locked --all-features
 cargo test --locked --all-features --examples
 cargo doc --locked --no-deps --all-features
-python3 tests/fixtures/generate_weight_oracle.py --check
 python3 tests/fixtures/generate_schedule_oracle.py --check
 ```
 
 The README's Rust examples are tested with the crate's documentation examples.
-The fixture generators use Python's standard library and fixed seeds. Weight quotas
-use exact integer ratios; schedule expectations use rational CDFs and 96-digit
+The schedule fixture generator uses Python's standard library and a fixed seed.
+Schedule expectations use rational CDFs and 96-digit
 inverse calculations independent of the Rust implementation. Omit `--check` to
-regenerate the fixtures after changing a generator. The schedule fixtures include
+regenerate the fixtures after changing the generator. The fixtures include
 independent overlapping schedules without uniform parts, gaps, interacting ramps,
-reordered minorities, nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`. CI checks both generated
-files. Small oracle fixtures check complete continuous walks; large fixtures include
+reordered minorities, nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`.
+CI checks the generated file. Small oracle fixtures check complete continuous walks; large fixtures include
 independently computed contiguous windows. Stateful cursor tests combine seeks, range
 changes, clones, skips, exhaustion and failed operations; failures print a reproducible
 `DATAORDER_STATE_SEED` and minimize the operation history.

@@ -2,9 +2,8 @@
 //! combination of other sequences; [`Order::new`] validates and compiles the tree.
 
 use crate::bounds::{BoundsError, boundaries};
-use crate::{Error, MAX_DEPTH, Order, Sampling, Source, float_bits};
+use crate::{Error, MAX_DEPTH, Order, Sampling, Source};
 use std::convert::Infallible;
-use std::hash::{Hash, Hasher};
 use std::ops::RangeBounds;
 
 /// A description of how to order sources of type `T`.
@@ -16,15 +15,14 @@ use std::ops::RangeBounds;
 /// without loading records or generating indices.
 ///
 /// `Seq` supports cloning, comparison, hashing and, with the `serde` feature,
-/// serialization when `T` does. Floating-point weights and schedule parameters are
-/// compared by their bits, treating `-0.0` as `0.0`. NaN parameters are rejected
-/// during validation.
+/// serialization when `T` does. Schedule parameters are compared by their bits,
+/// treating `-0.0` as `0.0`. NaN parameters are rejected during validation.
 ///
 /// # Errors
 ///
 /// [`Order::new`] and [`check`](Seq::check) report invalid configurations as an
 /// [`Error`] with the path to the invalid node. This includes out-of-range skips
-/// and takes, zero strides, overflow, invalid schedules or weights, and excessive depth.
+/// and takes, zero strides, overflow, invalid schedules, and excessive depth.
 ///
 /// Two builders return [`BoundsError`] immediately: [`slice`](Seq::slice) for
 /// reversed or overflowing range bounds, and [`shard`](Seq::shard) for an index
@@ -52,31 +50,6 @@ pub enum Seq<T> {
     /// repeat its parts instead to schedule over the whole run. The total length
     /// cannot exceed [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     Mix(Vec<MixPart<T>>),
-    /// Exactly `total` elements, divided among the parts in proportion to their weights.
-    ///
-    /// Each part is [cycled](Seq::Cycle) to its assigned count, then interleaved
-    /// according to its schedule. Cycling repeats or truncates the part as needed
-    /// and reseeds any existing shuffles for each additional epoch.
-    ///
-    /// Counts use largest-remainder rounding: first round every exact quota
-    /// `weight / sum_of_weights * total` down, then give the remaining positions to
-    /// the largest fractional remainders. Ties go to the lowest part index. This
-    /// uses the exact binary values of the weights and makes the counts sum to `total`.
-    /// Increasing `total` need not increase every count: weights `[5, 3, 1]` receive
-    /// `[2, 1, 1]` at total 4, but `[3, 2, 0]` at total 5. Changing the total or
-    /// weights can change the entire order, including its prefix. To extend an
-    /// existing order while preserving its prefix, retain its original configuration
-    /// and concatenate additional data.
-    ///
-    /// Weights must be finite and nonnegative. A positive `total` requires at least
-    /// one positive weight, and a part assigned a positive count must not be empty.
-    /// Like any mix, `total` is limited to [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
-    Weighted {
-        /// Length of this weighted sequence.
-        total: usize,
-        /// The parts with their weights and schedules.
-        parts: Vec<WeightedPart<T>>,
-    },
     /// Every position of `inner` once, in a seeded pseudorandom order.
     ///
     /// The permutation depends on `seed`, the order's seed, enclosing repetitions,
@@ -167,48 +140,6 @@ impl<T> From<Seq<T>> for MixPart<T> {
     }
 }
 
-/// A part of a [`Weighted`](Seq::Weighted) mix: a sequence, its weight and its schedule.
-/// `(seq, weight, sampling)` and `(seq, weight)` (uniform) convert into it. Equality and
-/// hashing compare the weight bit for bit (with `-0.0` taken as `0.0`).
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
-pub struct WeightedPart<T> {
-    /// The sequence.
-    pub seq: Seq<T>,
-    /// Its share of the total, relative to the other weights.
-    pub weight: f64,
-    /// How its elements are spread over the mix.
-    pub sampling: Sampling,
-}
-
-impl<T> From<(Seq<T>, f64, Sampling)> for WeightedPart<T> {
-    fn from((seq, weight, sampling): (Seq<T>, f64, Sampling)) -> Self {
-        Self { seq, weight, sampling }
-    }
-}
-
-impl<T> From<(Seq<T>, f64)> for WeightedPart<T> {
-    fn from((seq, weight): (Seq<T>, f64)) -> Self {
-        Self { seq, weight, sampling: Sampling::Uniform }
-    }
-}
-
-impl<T: PartialEq> PartialEq for WeightedPart<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.seq == other.seq && float_bits(self.weight) == float_bits(other.weight) && self.sampling == other.sampling
-    }
-}
-
-impl<T: Eq> Eq for WeightedPart<T> {}
-
-impl<T: Hash> Hash for WeightedPart<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.seq.hash(state);
-        float_bits(self.weight).hash(state);
-        self.sampling.hash(state);
-    }
-}
-
 impl<T> Seq<T> {
     /// The elements of `source`, in order.
     #[must_use]
@@ -265,49 +196,6 @@ impl<T> Seq<T> {
     #[must_use]
     pub fn mix_with(parts: impl IntoIterator<Item = impl Into<MixPart<T>>>) -> Self {
         Self::Mix(parts.into_iter().map(Into::into).collect())
-    }
-
-    /// The parts mixed by weight into `total` elements, all [`Sampling::Uniform`]; see
-    /// [`Weighted`](Seq::Weighted).
-    ///
-    /// ```
-    /// use dataorder::{Order, Seq};
-    /// // Repeat the small source to supply 60%; truncate the large source to supply 40%.
-    /// let seq = Seq::weighted(3000, [
-    ///     (Seq::source(100).shuffle(1), 0.6),
-    ///     (Seq::source(5000).shuffle(2), 0.4),
-    /// ]);
-    /// let order = Order::new(seq)?;
-    /// assert_eq!(order.len(), 3000);
-    /// assert_eq!(order.iter(..)?.filter(|&(&source, _)| source == 100).count(), 1800);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[must_use]
-    pub fn weighted(total: usize, parts: impl IntoIterator<Item = (Self, f64)>) -> Self {
-        Self::Weighted { total, parts: parts.into_iter().map(WeightedPart::from).collect() }
-    }
-
-    /// Mixes exactly `total` elements by weight, with an individual schedule for each part.
-    /// Accepts `(seq, weight, sampling)` triples or other values that convert into
-    /// [`WeightedPart`]. See [`Weighted`](Seq::Weighted) for count allocation.
-    ///
-    /// ```
-    /// use dataorder::{Order, Sampling, Seq};
-    /// // Draw 750 elements from the first source and 250 from the delayed source.
-    /// let seq = Seq::weighted_with(1000, [
-    ///     (Seq::source(300), 3.0, Sampling::Uniform),
-    ///     (Seq::source(100), 1.0, Sampling::delayed(0.5)),
-    /// ]);
-    /// let order = Order::new(seq)?;
-    /// assert_eq!(order.iter(..)?.filter(|&(&s, _)| s == 100).count(), 250);
-    /// // Virtual time 0.5 is around output position 375 for these counts.
-    /// let first = order.iter(..)?.position(|(&s, _)| s == 100).unwrap();
-    /// assert!((374..=377).contains(&first));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[must_use]
-    pub fn weighted_with(total: usize, parts: impl IntoIterator<Item = impl Into<WeightedPart<T>>>) -> Self {
-        Self::Weighted { total, parts: parts.into_iter().map(Into::into).collect() }
     }
 
     /// This sequence in the pseudorandom order selected by `seed`.
@@ -572,13 +460,6 @@ impl<T: Source> Seq<T> {
             Self::Source(t) => Seq::Source(t.len()),
             Self::Concat(parts) => Seq::Concat(parts.iter().map(|p| p.lens_at(level + 1)).collect()),
             Self::Mix(parts) => Seq::Mix(parts.iter().map(|p| MixPart { seq: p.seq.lens_at(level + 1), sampling: p.sampling }).collect()),
-            Self::Weighted { total, parts } => Seq::Weighted {
-                total: *total,
-                parts: parts
-                    .iter()
-                    .map(|p| WeightedPart { seq: p.seq.lens_at(level + 1), weight: p.weight, sampling: p.sampling })
-                    .collect(),
-            },
             Self::Shuffle { seed, inner: i } => Seq::Shuffle { seed: *seed, inner: inner(i) },
             Self::Repeat { times, inner: i } => Seq::Repeat { times: *times, inner: inner(i) },
             Self::Cycle { len, inner: i } => Seq::Cycle { len: *len, inner: inner(i) },
@@ -597,13 +478,6 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Mix(parts) => Seq::Mix(
             parts.into_iter().map(|p| Ok(MixPart { seq: map_sources(p.seq, f)?, sampling: p.sampling })).collect::<Result<_, E>>()?,
         ),
-        Seq::Weighted { total, parts } => Seq::Weighted {
-            total,
-            parts: parts
-                .into_iter()
-                .map(|p| Ok(WeightedPart { seq: map_sources(p.seq, f)?, weight: p.weight, sampling: p.sampling }))
-                .collect::<Result<_, E>>()?,
-        },
         Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
         Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),
         Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle(len),

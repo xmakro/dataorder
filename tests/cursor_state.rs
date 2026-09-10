@@ -72,7 +72,8 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
                 return (s, n);
             }
             let total = r.below(300);
-            (Seq::weighted(total, [(s, 1.0), (Seq::source(7).shuffle(r.next()), 3.0)]), total)
+            let first = total / 4;
+            (Seq::mix([s.cycle(first), Seq::source(7).shuffle(r.next()).cycle(total - first)]), total)
         }
     }
 }

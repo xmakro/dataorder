@@ -6,9 +6,9 @@
 
 use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
-use crate::interleave::{Interleave, MAX_TOTAL_LEN, Sampling};
+use crate::interleave::{Interleave, Sampling};
 use crate::perm::{self, Shape};
-use crate::seq::{MixPart, WeightedPart};
+use crate::seq::MixPart;
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
 use std::ops::RangeBounds;
@@ -109,7 +109,7 @@ impl<T: Source> Order<T> {
     ///
     /// # Errors
     /// Skips and takes past the end, a zero stride, lengths that overflow, nesting deeper
-    /// than [`MAX_DEPTH`], and schedules or weights the mix rejects; see [`ErrorKind`]. The
+    /// than [`MAX_DEPTH`], and schedules the mix rejects; see [`ErrorKind`]. The
     /// error names the node it was found at.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
         Self::with_seed(seq, 0)
@@ -396,7 +396,6 @@ impl<T: Source> Compiler<T> {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, repeats, level),
             Seq::Mix(parts) => self.mix_parts(parts, repeats, level),
-            Seq::Weighted { total, parts } => self.weighted(total, parts, repeats, level),
             Seq::Shuffle { seed, inner } => self.shuffle(seed, *inner, repeats, level),
             Seq::Repeat { times, inner } => self.repeat(times, *inner, repeats, level),
             Seq::Cycle { len, inner } => self.cycled(len, *inner, repeats, level),
@@ -527,35 +526,10 @@ impl<T: Source> Compiler<T> {
             _ => Node::Mix { il, children },
         })
     }
-
-    /// A weighted mix: every part repeated as often as its share needs and cut to it, then
-    /// mixed. A part is compiled once; when it turns out to need repeating, the repeats
-    /// inside it move one level deeper after the fact.
-    fn weighted(&mut self, total: usize, parts: Vec<WeightedPart<T>>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
-        let sampling: Vec<Sampling> = parts.iter().map(|p| p.sampling).collect();
-        let shares = weighted_shares(total as u64, &weights).map_err(|(kind, part)| self.err_at(kind, part))?;
-        let children = parts
-            .into_iter()
-            .zip(shares)
-            .enumerate()
-            .map(|(i, (part, share))| self.weighted_part(i, part.seq, share, repeats, level))
-            .collect::<Result<_, _>>()?;
-        self.mix(children, &sampling)
-    }
-
-    /// Part `i` of a weighted mix, cycled to its `share`.
-    fn weighted_part(&mut self, i: usize, seq: Seq<T>, share: u64, repeats: u32, level: u32) -> Result<Node, Error> {
-        let child = self.child(i, seq, repeats, level)?;
-        if share > 0 && child.len() == 0 {
-            return Err(self.err_at(ErrorKind::EmptyWeightedPart, Some(i)));
-        }
-        Ok(cycle(child, share, repeats))
-    }
 }
 
-/// `child` repeated as often as `len` positions need and cut there (a [`Seq::Cycle`], or a
-/// part of a weighted mix): within one repetition it is a slice; beyond, a repeat whose
+/// `child` repeated as often as `len` positions need and cut there (a [`Seq::Cycle`]):
+/// within one repetition it is a slice; beyond, a repeat whose
 /// last repetition is cut short. The child was compiled `repeats` deep, once, before it
 /// was known whether it repeats; when it does, the repeats inside it move one level
 /// deeper after the fact, as compiling it under a repeat would have put them. `child` has
@@ -567,25 +541,6 @@ fn cycle(mut child: Node, len: u64, repeats: u32) -> Node {
     }
     deepen(&mut child);
     Node::Repeat { child_len, len, depth: repeats, child: Box::new(child) }
-}
-
-/// Exact largest-remainder shares, with the lowest index first on equal remainders.
-pub(crate) fn weighted_shares(total: u64, weights: &[f64]) -> Result<Vec<u64>, (ErrorKind, Option<usize>)> {
-    for (i, &w) in weights.iter().enumerate() {
-        if !(w.is_finite() && w >= 0.0) {
-            return Err((ErrorKind::InvalidWeight { weight: w }, Some(i)));
-        }
-    }
-    if total > MAX_TOTAL_LEN {
-        return Err((ErrorKind::MixTooLong, None));
-    }
-    if total == 0 {
-        return Ok(vec![0; weights.len()]);
-    }
-    if !weights.iter().any(|&w| w > 0.0) {
-        return Err((ErrorKind::ZeroWeights, None));
-    }
-    Ok(crate::weight::shares(total, weights))
 }
 
 /// The sources of `node` that can contribute elements, in order of appearance: every

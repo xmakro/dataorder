@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 /// Spreads a part's elements along a shared virtual clock from 0 to 1.
 ///
-/// Lengths or weights determine how many elements each part contributes. Each
+/// Part lengths determine how many elements each part contributes. Each
 /// schedule independently assigns those elements virtual-time keys; the mix emits
 /// them in increasing key order. `Uniform` is constant on this clock, with the
 /// same meaning as `delayed(0.0)` or `until(1.0)`.

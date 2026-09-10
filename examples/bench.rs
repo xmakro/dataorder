@@ -295,13 +295,6 @@ fn lifecycles() {
     for k in [100, 1000, 10_000, 100_000] {
         lifecycle(&format!("mix({k} sources)"), Seq::mix((0..k).map(|_| Seq::source(10_000))), 2 * k);
     }
-    for k in [1000, 10_000] {
-        lifecycle(
-            &format!("weighted({k} sources)"),
-            Seq::weighted(k * 10_000, (0..k).map(|i| (Seq::source(10_000), (i % 13 + 1) as f64))),
-            20 * k,
-        );
-    }
     for workers in [8, 32] {
         lifecycle_workers(
             &format!("mix(10000 sources), {workers} workers"),
@@ -309,19 +302,6 @@ fn lifecycles() {
             20_000,
             workers,
         );
-    }
-    for k in [1000, 10_000] {
-        for (name, weights) in [
-            ("tiny positive weight", (0..k).map(|i| if i == 0 { 1e-300 } else { (i % 13 + 1) as f64 }).collect::<Vec<_>>()),
-            ("wide exponents", (0..k).map(|i| 2.0f64.powi((i % 2000) as i32 - 1000)).collect()),
-            ("equal remainder ties", vec![1.0; k]),
-        ] {
-            lifecycle(
-                &format!("weighted({k}, {name})"),
-                Seq::weighted(k * 10_000 + k / 2, weights.into_iter().map(|w| (Seq::source(10_000), w))),
-                20 * k,
-            );
-        }
     }
     // A minority uniform source beside a large independent scheduled source.
     // On 64-bit hosts this exercises rank recovery close to MAX_MIX_LEN.

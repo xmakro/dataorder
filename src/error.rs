@@ -47,9 +47,9 @@ impl Error {
 
     /// Child indices leading from the root to the invalid node.
     ///
-    /// Each index selects a part of a `Concat`, `Mix` or `Weighted` node, or is 0
+    /// Each index selects a part of a `Concat` or `Mix` node, or is 0
     /// for a node with one child. An empty path means the root. Invalid schedule
-    /// parameters and weights point to their part; errors for the mix as a whole,
+    /// parameters point to their part; errors for the mix as a whole,
     /// such as excessive total length, point to the mix.
     #[must_use]
     pub fn path(&self) -> &[usize] {
@@ -98,7 +98,7 @@ pub enum SamplingDetail {
     CoefficientOverflow,
     /// The part's assigned length multiplied by its peak rate exceeds the limit.
     TooSteep {
-        /// Compiled part length, or assigned weighted quota.
+        /// Compiled part length.
         len: u64,
         /// Highest normalized rate in the part's profile.
         peak_rate: f64,
@@ -173,16 +173,6 @@ pub enum ErrorKind {
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
     TooSteep,
-    /// The weight of a weighted mix part is negative or not finite.
-    InvalidWeight {
-        /// The weight.
-        weight: f64,
-    },
-    /// A weighted mix with a positive total has no weight to distribute it over: no parts,
-    /// or weights that sum to zero.
-    ZeroWeights,
-    /// A part of a weighted mix has a positive share but no elements.
-    EmptyWeightedPart,
     /// A `Cycle` of positive length over a sequence without elements.
     EmptyCycle,
 }
@@ -201,9 +191,6 @@ impl fmt::Display for ErrorKind {
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSampling { sampling } => write!(f, "invalid schedule {sampling:?}"),
             Self::TooSteep => write!(f, "mix part too long for the steepness of its schedule"),
-            Self::InvalidWeight { weight } => write!(f, "invalid weight {weight}"),
-            Self::ZeroWeights => write!(f, "weighted mix: no parts, or weights that sum to zero"),
-            Self::EmptyWeightedPart => write!(f, "weighted mix part has a share but no elements"),
             Self::EmptyCycle => write!(f, "cannot cycle a sequence without elements"),
         }
     }

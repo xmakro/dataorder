@@ -60,7 +60,6 @@
 //! | [`Source`](Seq::Source) | Source length | Index `p` of the source |
 //! | [`Concat`](Seq::Concat) | Sum of part lengths | Parts read one after another |
 //! | [`Mix`](Seq::Mix) | Sum of part lengths | Parts interleaved, preserving each part's order |
-//! | [`Weighted`](Seq::Weighted) | `total` | Parts repeated or truncated to their weighted counts, then mixed |
 //! | [`Shuffle`](Seq::Shuffle) | `n` | A seeded permutation of the child's positions |
 //! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in epoch `p / n` |
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
@@ -68,10 +67,9 @@
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
 //! | [`Stride`](Seq::Stride) | Number of selected positions | Child position `offset + p × step` |
 //!
-//! A plain mix uses every element of every part once. A weighted mix assigns integer
-//! counts in proportion to the weights, using exact largest-remainder rounding so
-//! they sum to `total`; see [`Seq::Weighted`]. Neither mix changes the order *within*
-//! a part unless that part contains a shuffle.
+//! A mix uses every element of every part once. Set each part's exact count with
+//! [`Seq::cycle`] before mixing. A mix preserves the order within each part;
+//! add a shuffle to a part to change that order.
 //!
 //! [`Sampling`] assigns each part's elements keys on a shared virtual clock.
 //! Curves are independent: `Uniform` is constant in virtual time, and all parts
@@ -107,8 +105,8 @@
 //!
 //! Nested repeats need care: adding an outer repeat with more than one epoch increases
 //! the depth of inner repeats. Their later epochs can then change even during the
-//! outer repeat's first epoch. Extending a sequence with `cycle` or a weighted share
-//! has the same effect if it introduces another epoch. A single repetition, or a cycle
+//! outer repeat's first epoch. Extending a sequence with `cycle` has the same effect
+//! if it introduces another epoch. A single repetition, or a cycle
 //! within the existing length, preserves the prefix.
 //!
 //! Empty sources and subtrees do not contribute to a shuffle's salt. A skip or take
@@ -126,9 +124,9 @@
 //! traversal and destruction. Arbitrarily deep hand-built trees are unsupported.
 //!
 //! Skips and takes must stay within the child sequence. Strides must have a nonzero
-//! step, and an empty sequence cannot be cycled to a positive length. Weights must be
-//! finite and nonnegative. Schedules must have valid parameters and satisfy their
-//! individual numerical limits; see [`Sampling`] and [`ErrorKind`] for the full rules.
+//! step, and an empty sequence cannot be cycled to a positive length. Schedules must
+//! have valid parameters and satisfy their individual numerical limits; see
+//! [`Sampling`] and [`ErrorKind`] for the full rules.
 //!
 //! Lengths and positions use `usize` in the public API and `u64` internally. The final
 //! order must fit in `usize`; on a 32-bit target, intermediate nodes may be longer.
@@ -155,7 +153,7 @@
 //! Storage depends on the configuration and cursor state, not on the number of output
 //! elements. Compilation can revisit subtrees when flattening concatenations, deriving
 //! shuffle salts or adjusting repeat depths. Each mix builds independent profiles
-//! in `O(k)` time for `k` parts; weighted mixes also sort quota remainders.
+//! in `O(k)` time for `k` parts.
 //!
 //! For random access, [`Order::get`] follows the path from the root to a source:
 //!
@@ -200,7 +198,7 @@
 //! # Feature flags
 //!
 //! The optional `serde` feature derives `Serialize` and `Deserialize` for [`Seq`],
-//! [`MixPart`], [`WeightedPart`] and [`Sampling`]. It uses serde's derived representation,
+//! [`MixPart`] and [`Sampling`]. It uses serde's derived representation,
 //! with the documented variant and field names. For example:
 //!
 //! ```json
@@ -214,11 +212,11 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dataorder = { version = "0.2", features = ["serde"] }
+//! dataorder = { version = "0.4", features = ["serde"] }
 //! serde_json = { version = "1", features = ["float_roundtrip"] }
 //! ```
 //!
-//! Without it, parsing can change a weight or breakpoint by one representable `f64`
+//! Without it, parsing can change a breakpoint by one representable `f64`
 //! step, affecting equality and possibly the order. `dataorder/serde` does not enable
 //! this JSON parser feature. Also keep these limits in mind:
 //!
@@ -260,14 +258,13 @@ mod seq;
 mod source;
 #[cfg(test)]
 mod tests;
-mod weight;
 
 pub use bounds::BoundsError;
 pub use cursor::{Cursor, IndexedCursor};
 pub use error::{Error, ErrorKind, SamplingDetail};
 pub use interleave::Sampling;
 pub use order::Order;
-pub use seq::{MixPart, Seq, WeightedPart};
+pub use seq::{MixPart, Seq};
 pub use source::{Source, salt, salt_path};
 
 /// Float bits for equality and hashing, treating `-0.0` and `0.0` as equal.

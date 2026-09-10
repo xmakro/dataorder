@@ -30,17 +30,16 @@ impl Source for Src {
 }
 
 /// Salts and lengths of the sources under `seq` that can contribute elements, in order of
-/// appearance: a subtree without elements counts for nothing, whatever is under it, neither
-/// does a weighted part without a share, nor a part of a concatenation that skips and takes
-/// above it cut away entirely. `seq` is valid.
+/// appearance: a subtree without elements counts for nothing, whatever is under it, nor
+/// does a part of a concatenation that skips and takes above it cut away entirely. `seq` is valid.
 fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, u64)>) {
     let n = eval(seq, 0).unwrap().len();
     reachable(seq, 0..n, out);
 }
 
 /// [`salts`] of the sources that positions `range` of `seq` can reach. Skips and takes narrow
-/// the range, concatenations hand each part its share of it; every other node hands its
-/// children their whole range as soon as the range is not empty.
+/// the range, concatenations hand each part its share of it, and a mix with one nonempty
+/// part passes it through. Other nodes keep their children's whole range.
 fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, u64)>) {
     if range.is_empty() {
         return;
@@ -61,14 +60,15 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
         }
         Seq::Skip { n, inner } => reachable(inner, range.start + n..range.end + n, out),
         Seq::Take { inner, .. } => reachable(inner, range, out),
-        Seq::Mix(parts) => parts.iter().for_each(|p| whole(&p.seq, out)),
-        Seq::Weighted { total, parts } => {
-            let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
-            let shares = crate::order::weighted_shares(*total as u64, &weights).unwrap();
-            for (p, share) in parts.iter().zip(shares) {
-                cycled(&p.seq, share as usize, out);
+        Seq::Mix(parts) => {
+            let mut nonempty = parts.iter().filter(|p| !eval(&p.seq, 0).unwrap().is_empty());
+            if let (Some(part), None) = (nonempty.next(), nonempty.next()) {
+                reachable(&part.seq, range, out);
+            } else {
+                parts.iter().for_each(|p| whole(&p.seq, out));
             }
         }
+        Seq::Stride { step: 1, offset, inner } => reachable(inner, range.start + offset..range.end + offset, out),
         Seq::Cycle { len, inner } => cycled(inner, *len, out),
         Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::Stride { inner, .. } => whole(inner, out),
     }
@@ -93,14 +93,7 @@ fn ids<'a>(it: impl Iterator<Item = (&'a Src, usize)>) -> Vec<(u32, usize)> {
 impl Error {
     /// A schedule or length rejection of a mix.
     fn is_sampling(&self) -> bool {
-        matches!(
-            self.kind(),
-            ErrorKind::MixTooLong
-                | ErrorKind::InvalidSampling { .. }
-                | ErrorKind::TooSteep
-                | ErrorKind::ZeroWeights
-                | ErrorKind::EmptyWeightedPart
-        )
+        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSampling { .. } | ErrorKind::TooSteep)
     }
 }
 
@@ -162,19 +155,6 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
                 at(kind, part.as_slice()).with_sampling_detail(detail)
             })?;
             il.iter(0..il.len()).map(|(s, j)| evs[s][j as usize]).collect()
-        }
-        Seq::Weighted { total, parts } => {
-            let weights: Vec<f64> = parts.iter().map(|p| p.weight).collect();
-            let shares = crate::order::weighted_shares(*total as u64, &weights).map_err(|(kind, part)| at(kind, part.as_slice()))?;
-            let mut mixed = Vec::new();
-            for (i, (part, share)) in parts.iter().zip(shares).enumerate() {
-                let len = eval_at(&part.seq, ctx, depth)?.len();
-                if len == 0 && share > 0 {
-                    return Err(at(ErrorKind::EmptyWeightedPart, &[i]));
-                }
-                mixed.push((cycle_of(&part.seq, share as usize, len), part.sampling));
-            }
-            eval_at(&Seq::mix_with(mixed), ctx, depth)?
         }
         Seq::Cycle { len, inner } => {
             let n = eval_at(inner, ctx, depth)?.len();
@@ -239,34 +219,18 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
         return src(id as u32, lens[id]);
     }
     let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens)).collect::<Vec<_>>();
-    match rng.below(10) {
-        9 => {
+    match rng.below(9) {
+        8 => {
             let inner = random_seq(rng, depth - 1, lens);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
             inner.cycle(if n == 0 { 0 } else { rng.below(70) })
         }
-        8 => {
+        7 => {
             // Empty parts in a mix, which must not affect the order (checked separately) and
             // must not break the walk.
             let mut ps = parts(rng, depth - 1);
             ps.insert(rng.below(ps.len() + 1), src(0, 0));
             Seq::mix(ps)
-        }
-        7 => {
-            let total = rng.below(60);
-            let weighted: Vec<(Seq<Src>, f64, Sampling)> = parts(rng, depth - 1)
-                .into_iter()
-                .map(|p| {
-                    let w = (1 + rng.below(3)) as f64;
-                    let s = match rng.below(4) {
-                        0 => Sampling::delayed(0.5),
-                        1 => Sampling::fading(0.3, 0.8),
-                        _ => Sampling::Uniform,
-                    };
-                    (p, w, s)
-                })
-                .collect();
-            Seq::weighted_with(total, weighted)
         }
         0 => Seq::concat(parts(rng, depth - 1)),
         1 => Seq::mix(parts(rng, depth - 1)),
@@ -315,7 +279,7 @@ fn random_configurations_match_reference() {
             Ok(o) => o,
             Err(e) if e.is_sampling() => {
                 assert!(eval(&seq, seed).is_err_and(|e| e.is_sampling()), "round {round}: {seq:?}");
-                assert!(!e.path().is_empty() || matches!(seq, Seq::Mix(_) | Seq::Weighted { .. }), "round {round}: {e}");
+                assert!(!e.path().is_empty() || matches!(seq, Seq::Mix(_)), "round {round}: {e}");
                 skipped += 1;
                 continue;
             }
@@ -429,12 +393,12 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert_eq!(ids(Order::new(src(7, 1000).shuffle(3).repeat(1)).unwrap().iter(0..1000).unwrap()), ids(once.iter(0..1000).unwrap()));
     assert_eq!(ids(Order::new(seq.clone().repeat(1)).unwrap().iter(..).unwrap()), ids(order.iter(..).unwrap()));
     assert_eq!(ids(Order::new(Seq::concat([seq.clone().repeat(1)]).repeat(1)).unwrap().iter(..).unwrap()), ids(order.iter(..).unwrap()));
-    // A weighted part that fits its share once is not repeated, so it is the part itself;
+    // A cycle that fits within its part is not repeated, so it is the part itself;
     // one that is repeated preserves the part's first inner epoch, but being one repeat
     // deeper reshuffles the part's later epochs even during its first outer repetition.
     let part = || src(7, 100).shuffle(3).repeat(2);
-    let fits = Order::new(Seq::weighted(400, [(part(), 1.0), (src(8, 1000), 1.0)])).unwrap();
-    let repeats = Order::new(Seq::weighted(500, [(part(), 1.0), (src(8, 1000), 1.0)])).unwrap();
+    let fits = Order::new(Seq::mix([part().cycle(200), src(8, 1000).cycle(200)])).unwrap();
+    let repeats = Order::new(Seq::mix([part().cycle(250), src(8, 1000).cycle(250)])).unwrap();
     let sevens = |o: &Order<Src>| ids(o.iter(..).unwrap()).into_iter().filter(|e| e.0 == 7).collect::<Vec<_>>();
     let alone = ids(Order::new(part()).unwrap().iter(..).unwrap());
     assert_eq!(sevens(&fits), alone);
@@ -549,19 +513,13 @@ fn errors() {
     assert!(matches!(err.kind(), ErrorKind::TooSteep | ErrorKind::MixTooLong), "{err}");
     assert_eq!(err.path(), if err.kind() == &ErrorKind::TooSteep { &[1, 1][..] } else { &[1][..] });
     // The path leads to the node: part 1 of the mix, then the single child of the shuffle.
-    let nested = Seq::mix([a.clone(), Seq::concat([a.clone(), a.clone().take(11).shuffle(1)])]).repeat(2);
+    let nested = Seq::mix([a.clone(), Seq::concat([a.clone(), a.take(11).shuffle(1)])]).repeat(2);
     let err = Order::new(nested).unwrap_err();
     assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 11, len: 10 });
     assert_eq!(err.path(), [0, 1, 1, 0]);
     assert_eq!(err.to_string(), "cannot take 11 of 10 positions (at node 0/1/1/0)");
     assert_eq!(root(ErrorKind::ZeroStep).to_string(), "stride step is zero (at the root)");
     assert_eq!(err.into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
-    // Weights: reported at the part, before any part is compiled.
-    let w = Seq::concat([a.clone(), Seq::weighted(10, [(a.clone(), 1.0), (a.take(99), -1.0)])]);
-    let err = Order::new(w).unwrap_err();
-    assert_eq!((err.kind(), err.path()), (&ErrorKind::InvalidWeight { weight: -1.0 }, &[1, 1][..]));
-    assert_eq!(err.to_string(), "invalid weight -1 (at node 1/1)");
-    assert_eq!(Order::new(Seq::<Src>::weighted(5, [])).unwrap_err(), root(ErrorKind::ZeroWeights));
     assert_eq!(Order::new(src(0, 0).cycle(5)).unwrap_err(), root(ErrorKind::EmptyCycle));
     assert_eq!(Order::new(Seq::concat([src(0, 3), src(1, 0).cycle(5)])).unwrap_err(), at(ErrorKind::EmptyCycle, &[1]));
     assert_eq!(Order::new(src(0, 5).take(6).cycle(5)).unwrap_err(), at(ErrorKind::TakeOutOfRange { n: 6, len: 5 }, &[0]));
@@ -570,7 +528,7 @@ fn errors() {
 }
 
 /// A cycle is the repeat cut to length, with the repeats inside one level deeper only when
-/// it does repeat; a weighted part is a cycle; and a prefix of a repeat folds into it.
+/// it does repeat; a prefix of a repeat folds into it.
 #[test]
 fn cycles() {
     use crate::order::Node;
@@ -589,10 +547,6 @@ fn cycles() {
     assert_eq!(ids(Order::new(y().cycle(15)).unwrap().iter(..).unwrap()), ids(Order::new(y()).unwrap().iter(..15).unwrap()));
     assert_eq!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap()), ids(Order::new(y().repeat(3)).unwrap().iter(..45).unwrap()));
     assert_ne!(ids(Order::new(y().cycle(45)).unwrap().iter(..).unwrap())[..20], ids(Order::new(y()).unwrap().iter(..).unwrap())[..]);
-    // A weighted part is a cycle of its share.
-    let w = Order::new(Seq::weighted(300, [(x(), 2.0), (src(1, 1000).shuffle(4), 1.0)])).unwrap();
-    let zeros: Vec<(u32, usize)> = ids(w.iter(..).unwrap()).into_iter().filter(|e| e.0 == 0).collect();
-    assert_eq!(zeros, ids(Order::new(x().cycle(200)).unwrap().iter(..).unwrap()));
     // Node shapes: no slice above a repeat, a short cycle is a slice or the child.
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
     assert!(matches!(root(x().cycle(250)), Node::Repeat { child_len: 100, len: 250, .. }));
@@ -601,7 +555,7 @@ fn cycles() {
     assert!(matches!(root(x().cycle(7)), Node::Slice { start: 0, len: 7, .. }));
     assert!(matches!(root(src(0, 100).cycle(7)), Node::Source { offset: 0, len: 7, .. }));
     assert!(matches!(root(x().repeat(4).skip(1).take(250)), Node::Slice { start: 1, len: 250, .. }));
-    let Node::Mix { children, .. } = root(Seq::weighted(300, [(x(), 2.0), (src(1, 1000).shuffle(4), 1.0)])) else { panic!() };
+    let Node::Mix { children, .. } = root(Seq::mix([x().cycle(200), src(1, 1000).shuffle(4).cycle(100)])) else { panic!() };
     assert!(matches!(children[0], Node::Repeat { child_len: 100, len: 200, .. }));
     assert!(matches!(children[1], Node::Slice { start: 0, len: 100, .. }));
     // The longest order representable by the public API; still finite.
@@ -615,10 +569,10 @@ fn cycles() {
     let base = ids(Order::new(src(0, 100).shuffle(1)).unwrap().iter(..).unwrap());
     assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(100).shuffle(1)).unwrap().iter(..).unwrap()), base);
     assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle(200).shuffle(1)).unwrap().iter(..).unwrap())[..100], base[..]);
-    // A weighted part that is a concatenation is narrowed to its share as well.
+    // A cycled concat part is narrowed to the requested count before mixing.
     let part = || Seq::concat([src(0, 100), src(1, 50)]);
-    let narrowed = Order::new(Seq::weighted(150, [(part(), 1.0), (src(2, 75), 1.0)]).shuffle(1)).unwrap();
-    let plain = Order::new(Seq::weighted(150, [(src(0, 100).take(75), 1.0), (src(2, 75), 1.0)]).shuffle(1)).unwrap();
+    let narrowed = Order::new(Seq::mix([part().cycle(75), src(2, 75)]).shuffle(1)).unwrap();
+    let plain = Order::new(Seq::mix([src(0, 100).take(75), src(2, 75)]).shuffle(1)).unwrap();
     assert_eq!(ids(narrowed.iter(..).unwrap()), ids(plain.iter(..).unwrap()));
 }
 
@@ -645,9 +599,6 @@ fn configurations_over_the_depth_limit_are_rejected() {
         let out_of_range = ErrorKind::TakeOutOfRange { n: 99, len: 10 };
         assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
         assert_eq!(Order::new(Seq::mix([bad(), deep()])).unwrap_err().kind(), &out_of_range);
-        assert_eq!(Order::new(Seq::weighted(10, [(bad(), 1.0), (deep(), 1.0)])).unwrap_err().kind(), &out_of_range);
-        assert_eq!(Order::new(Seq::weighted(10, [(deep(), -1.0)])).unwrap_err(), at(ErrorKind::InvalidWeight { weight: -1.0 }, &[0]));
-        assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (deep(), 1.0)])).unwrap_err(), at(ErrorKind::EmptyWeightedPart, &[0]));
         assert_eq!(Order::new(deep().stride(0, 0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
         let first_too_deep = Seq::concat([deep(), bad()]);
         assert_eq!(first_too_deep.check().unwrap_err().kind(), &ErrorKind::TooDeep);
@@ -667,10 +618,8 @@ fn empty_parts_do_not_affect_shuffles_above() {
     same(Seq::concat([src(0, 0), x()]).shuffle(1));
     same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).stride(1, 2)]).shuffle(1));
     same(Seq::mix([x(), src(1, 0), Seq::concat([src(2, 5).skip(5), src(3, 0)])]).shuffle(1));
-    same(Seq::weighted(100, [(x(), 1.0), (src(1, 50), 0.0)]).shuffle(1));
     same(Seq::mix([x()]).shuffle(1));
     same(x().stride(1, 0).shuffle(1));
-    same(Seq::concat([x(), Seq::weighted(0, [(src(1, 5), 1.0)])]).shuffle(1));
     // A part of a concatenation that a skip or take cuts away entirely does not count
     // either, however the concatenation nests; a part it touches counts.
     same(Seq::concat([x(), src(1, 50)]).take(100).shuffle(1));
@@ -719,8 +668,7 @@ fn folds() {
     );
 }
 
-/// A mix's order does not depend on empty parts, wherever they sit, nor a weighted mix's on
-/// parts without a share.
+/// A mix's order does not depend on empty parts, wherever they sit.
 #[test]
 fn empty_mix_parts_do_not_affect_the_order() {
     let mut rng = Rng(0x0E0E_0E0E_1234_5678);
@@ -745,24 +693,21 @@ fn empty_mix_parts_do_not_affect_the_order() {
         assert_eq!(ids(a.iter(..).unwrap()), ids(b.iter(..).unwrap()), "round {round}");
         assert_eq!(a.sources().len(), b.sources().len() + a.sources().iter().filter(|s| s.id == 99).count());
     }
-    let with = Order::new(Seq::weighted(80, [(src(0, 30), 1.0), (src(9, 5), 0.0), (src(1, 50), 2.0)])).unwrap();
-    let without = Order::new(Seq::weighted(80, [(src(0, 30), 1.0), (src(1, 50), 2.0)])).unwrap();
-    assert_eq!(ids(with.iter(..).unwrap()), ids(without.iter(..).unwrap()));
 }
 
 /// `Seq` is `Eq` and `Hash` by comparing floats bitwise, with the two zeros equal.
 #[test]
 fn seq_eq_and_hash() {
     use std::collections::HashSet;
-    let a = Seq::weighted_with(10, [(src(0, 5), 0.0, Sampling::ramp(0.0, 0.5))]);
-    let b = Seq::weighted_with(10, [(src(0, 5), -0.0, Sampling::ramp(-0.0, 0.5))]);
-    let c = Seq::weighted_with(10, [(src(0, 5), 1.0, Sampling::ramp(0.0, 0.5))]);
+    let a = Seq::mix_with([(src(0, 5), Sampling::ramp(0.0, 0.5))]);
+    let b = Seq::mix_with([(src(0, 5), Sampling::ramp(-0.0, 0.5))]);
+    let c = Seq::mix_with([(src(0, 5), Sampling::ramp(0.1, 0.5))]);
     assert_eq!(a, b);
     assert_ne!(a, c);
     let set: HashSet<Seq<Src>> = [a.clone(), b, c.clone(), a.clone()].into_iter().collect();
     assert_eq!(set.len(), 2);
     assert!(set.contains(&a) && set.contains(&c));
-    let nan = Seq::weighted(10, [(src(0, 5), f64::NAN)]);
+    let nan = Seq::mix_with([(src(0, 5), Sampling::delayed(f64::NAN))]);
     assert_eq!(nan, nan.clone());
     assert_eq!(Sampling::delayed(0.5), Sampling::ramp(0.5, 0.5));
     assert_eq!(Sampling::until(0.5), Sampling::fading(0.5, 0.5));
@@ -770,7 +715,6 @@ fn seq_eq_and_hash() {
     assert_ne!(Sampling::trapezoid(0.0, 0.0, 1.0, 1.0), Sampling::ramp(0.0, 0.0));
     assert_eq!(Sampling::trapezoid(-0.0, 0.1, 0.5, 0.9), Sampling::trapezoid(0.0, 0.1, 0.5, 0.9));
     assert_eq!(MixPart::from(src(1, 2)), MixPart { seq: src(1, 2), sampling: Sampling::Uniform });
-    assert_eq!(WeightedPart::from((src(1, 2), 2.0)), WeightedPart { seq: src(1, 2), weight: 2.0, sampling: Sampling::Uniform });
 }
 
 #[test]
@@ -921,7 +865,6 @@ fn types_are_send_and_sync() {
     assert_send_sync::<ErrorKind>();
     assert_send_sync::<Sampling>();
     assert_send_sync::<MixPart<usize>>();
-    assert_send_sync::<WeightedPart<usize>>();
 }
 
 /// Inclusive and open bounds in `slice`.
@@ -961,51 +904,10 @@ fn steep_schedule_at_scale() {
     assert_eq!(MAX_MIX_LEN, 1 << 46);
 }
 
+/// Explicit counts repeat short parts (reshuffled) and truncate long ones before mixing.
 #[test]
-fn weighted_shares_sum_and_round() {
-    use crate::order::weighted_shares;
-    assert_eq!(weighted_shares(1000, &[0.6, 0.4]).unwrap(), [600, 400]);
-    assert_eq!(weighted_shares(10, &[1.0, 1.0, 1.0]).unwrap(), [4, 3, 3]);
-    assert_eq!(weighted_shares(0, &[]).unwrap(), Vec::<u64>::new());
-    assert_eq!(weighted_shares(7, &[0.0, 2.0]).unwrap(), [0, 7]);
-    for total in [1u64, 17, 999, 123_456] {
-        let w = [0.1, 0.25, 3.0, 0.65, 2.0];
-        let shares = weighted_shares(total, &w).unwrap();
-        assert_eq!(shares.iter().sum::<u64>(), total);
-        let sum: f64 = w.iter().sum();
-        for (share, w) in shares.iter().zip(w) {
-            assert!((*share as f64 - w / sum * total as f64).abs() < 1.0);
-        }
-    }
-    assert_eq!(weighted_shares(5, &[1.0, -1.0]).unwrap_err(), (ErrorKind::InvalidWeight { weight: -1.0 }, Some(1)));
-    assert!(matches!(weighted_shares(5, &[f64::NAN]).unwrap_err(), (ErrorKind::InvalidWeight { .. }, Some(0))));
-    assert_eq!(weighted_shares(5, &[0.0, 0.0]).unwrap_err(), (ErrorKind::ZeroWeights, None));
-    assert_eq!(weighted_shares(5, &[]).unwrap_err(), (ErrorKind::ZeroWeights, None));
-    assert_eq!(weighted_shares(0, &[0.0, 0.0]).unwrap(), [0, 0]);
-    // Many parts with near-integer shares at the mix limit: the sum still comes out exact.
-    let w: Vec<f64> = (0..300).map(|i| 1.0 + 1e-9 * (i % 7) as f64).collect();
-    for total in [(1u64 << 46) - 1, 1 << 46, 12_345_678_901_234] {
-        assert_eq!(weighted_shares(total, &w).unwrap().iter().sum::<u64>(), total);
-    }
-    // Finite weights whose sum overflows, subnormal weights, and extreme ratios.
-    assert_eq!(weighted_shares(100, &[f64::MAX, f64::MAX]).unwrap(), [50, 50]);
-    assert_eq!(weighted_shares(100, &[1e308, 1e308, 1.0]).unwrap(), [50, 50, 0]);
-    assert_eq!(weighted_shares(10, &[f64::MAX; 3]).unwrap(), [4, 3, 3]);
-    assert_eq!(weighted_shares(100, &[5e-324, 5e-324]).unwrap(), [50, 50]);
-    assert_eq!(weighted_shares(100, &[1e300, 1e-300]).unwrap(), [100, 0]);
-    assert_eq!(Seq::weighted(100, [(src(0, 10), f64::MAX), (src(1, 10), f64::MAX)]).check(), Ok(100));
-    // A total beyond the mix limit is rejected before any rounding could go wrong.
-    assert_eq!(weighted_shares((1 << 46) + 1, &[1.0]).unwrap_err(), (ErrorKind::MixTooLong, None));
-    assert_eq!(weighted_shares(u64::MAX, &[1.0, 1.0]).unwrap_err(), (ErrorKind::MixTooLong, None));
-    #[cfg(target_pointer_width = "64")]
-    assert_eq!(Seq::weighted((1usize << 60) + 5, [(src(0, 10), 1.0), (src(1, 10), 1.0)]).check().unwrap_err(), root(ErrorKind::MixTooLong));
-}
-
-/// A weighted mix has the composition of its weights, repeats short parts (reshuffled) and
-/// cuts long ones.
-#[test]
-fn weighted_mix() {
-    let seq = Seq::weighted(3000, [(src(0, 100).shuffle(1), 0.6), (src(1, 5000).shuffle(2), 0.4)]);
+fn mix_with_explicit_counts() {
+    let seq = Seq::mix([src(0, 100).shuffle(1).cycle(1800), src(1, 5000).shuffle(2).cycle(1200)]);
     assert_eq!(seq.check(), Ok(3000));
     let order = Order::new(seq).unwrap();
     let all = ids(order.iter(0..3000).unwrap());
@@ -1024,32 +926,7 @@ fn weighted_mix() {
     ones.sort_unstable();
     ones.dedup();
     assert_eq!(ones.len(), 1200);
-    // Errors and edges.
-    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 1.0), (src(1, 5), 1.0)])).unwrap_err(), at(ErrorKind::EmptyWeightedPart, &[0]));
-    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 0), 0.0), (src(1, 5), 1.0)])).unwrap().len(), 10);
-    assert_eq!(Order::new(Seq::weighted(0, [(src(0, 5), 1.0)])).unwrap().len(), 0);
-    assert_eq!(Order::new(Seq::weighted(0, [(src(0, 5), 0.0)])).unwrap().len(), 0);
-    assert_eq!(Order::new(Seq::<Src>::weighted(0, [])).unwrap().len(), 0);
-    assert_eq!(Order::new(Seq::weighted(10, [(src(0, 5), 0.0)])).unwrap_err(), root(ErrorKind::ZeroWeights));
     // A part is compiled once: its sources appear once.
-    let once = Order::new(Seq::weighted(30, [(Seq::concat([src(0, 4), src(1, 4)]), 1.0), (src(2, 10), 2.0)])).unwrap();
+    let once = Order::new(Seq::mix([Seq::concat([src(0, 4), src(1, 4)]).cycle(10), src(2, 10).cycle(20)])).unwrap();
     assert_eq!(once.sources().len(), 3);
-}
-
-#[test]
-fn weight_quotas_survive_small_terms_and_reordering() {
-    use crate::order::weighted_shares;
-    let total = MAX_MIX_LEN;
-    let denominator = (1u128 << 54) + 10_000;
-    for big in [0, 1, 5000, 10_000] {
-        let mut weights = vec![2.0f64.powi(-54); 10_000];
-        weights.insert(big, 1.0);
-        let shares = weighted_shares(total, &weights).unwrap();
-        assert_eq!(shares.iter().sum::<u64>(), total);
-        assert_eq!(shares[big], total - 39);
-        for (i, &share) in shares.iter().enumerate() {
-            let numerator = u128::from(total) * if i == big { 1 << 54 } else { 1 };
-            assert!((u128::from(share) * denominator).abs_diff(numerator) < denominator);
-        }
-    }
 }

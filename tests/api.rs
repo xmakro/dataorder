@@ -1,7 +1,7 @@
 //! The public surface, used as a downstream crate would: building configurations by hand,
 //! matching on non-exhaustive enums, errors with paths, cursors, sources.
 
-use dataorder::{Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source, WeightedPart};
+use dataorder::{Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shard {
@@ -29,20 +29,16 @@ fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
 
 #[test]
 fn hand_built_configuration() {
-    let seq = Seq::Weighted {
-        total: 100,
-        parts: vec![
-            WeightedPart { seq: shard("a", 10).shuffle(1), weight: 3.0, sampling: Sampling::Uniform },
-            WeightedPart::from((
-                Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::delayed(0.5) }]),
-                1.0,
-            )),
-        ],
-    };
+    let seq = Seq::Mix(vec![
+        MixPart { seq: shard("a", 10).shuffle(1).cycle(75), sampling: Sampling::Uniform },
+        MixPart::from(
+            Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::delayed(0.5) }]).cycle(25),
+        ),
+    ]);
     assert_eq!(seq.check(), Ok(100));
     // The builders take parts, pairs or bare sequences alike.
-    let Seq::Weighted { parts, .. } = seq.clone() else { unreachable!() };
-    assert_eq!(Seq::weighted_with(100, parts), seq);
+    let Seq::Mix(parts) = seq.clone() else { unreachable!() };
+    assert_eq!(Seq::mix_with(parts), seq);
     let mixed = Seq::mix_with([MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), sampling: Sampling::default() }]);
     assert_eq!(mixed, Seq::mix_with([(shard("b", 40), Sampling::Uniform), (shard("c", 5), Sampling::Uniform)]));
     assert_eq!(mixed, Seq::mix_with([shard("b", 40), shard("c", 5)]));
@@ -141,10 +137,10 @@ fn serde_round_trip() {
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
     assert!(a.iter(..).unwrap().eq(b.iter(..).unwrap()));
     // The wire format is part of the API.
-    let seq: Seq<usize> = Seq::weighted_with(9, [(Seq::source(4).shuffle(1), 0.5, Sampling::ramp(0.1, 0.2))]);
+    let seq: Seq<usize> = Seq::mix_with([(Seq::source(4).shuffle(1).cycle(9), Sampling::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
-        r#"{"Weighted":{"total":9,"parts":[{"seq":{"Shuffle":{"seed":1,"inner":{"Source":4}}},"weight":0.5,"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}}"#
+        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#
     );
     assert_eq!(serde_json::to_string(&Sampling::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
     assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
@@ -152,22 +148,22 @@ fn serde_round_trip() {
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
         r#"{"Shuffle":{"seed":1,"inner":{"Source":5},"extra":true}}"#,
-        r#"{"Weighted":{"total":9,"parts":[],"x":0}}"#,
         r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform","extra":1}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"sampling":{"DelayedLinear":{"start":0.1,"full":0.2,"end":0.3}}}]}"#,
     ] {
         assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
     }
+    // Removed variants are rejected rather than silently reinterpreted.
+    assert!(serde_json::from_str::<Seq<usize>>(r#"{"Weighted":{"total":9,"parts":[]}}"#).is_err());
 }
 
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trips_at_the_supported_depth_limit() {
-    for variant in ["Take", "Mix", "Weighted"] {
+    for variant in ["Take", "Mix"] {
         let seq = (1..dataorder::MAX_DEPTH).fold(Seq::source(10usize), |seq, _| match variant {
             "Take" => seq.take(10),
-            "Mix" => Seq::mix([seq]),
-            _ => Seq::weighted(10, [(seq, 1.0)]),
+            _ => Seq::mix([seq]),
         });
         assert_eq!(seq.check(), Ok(10));
         let json = serde_json::to_string(&seq).unwrap();

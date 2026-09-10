@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Seq::Weighted`, `Seq::weighted`, `Seq::weighted_with`,
+  `WeightedPart`, and the `InvalidWeight`, `ZeroWeights` and `EmptyWeightedPart`
+  error kinds. Choose exact counts with `Seq::mix([a.cycle(a_count), b.cycle(b_count)])`
+  or attach schedules with `Seq::mix_with`. Remove the exact floating-point quota
+  allocator and its fixtures and benchmarks. Serialized `Weighted` configurations
+  must be rewritten using explicit counts.
+
 - **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
   `Seq::map` or `Seq::try_map` before compilation.
 - **Breaking:** make checked access the default and remove the corresponding `try_`
@@ -11,8 +18,8 @@
   references or zero-sized source types; use indexed results for explicit ordinals.
 
 - **Breaking:** reduce `MAX_DEPTH` from 256 to 16 and remove `Seq::dispose`.
-  `Seq` remains an enum with the same builders and serialized format. Compilation,
-  mapping and cleanup now use ordinary recursion within the supported depth limit;
+  `Seq` remains an enum. Compilation, mapping and cleanup now use ordinary recursion
+  within the supported depth limit;
   arbitrarily deep hand-built trees are unsupported.
 
 - **Breaking:** remove `Order::prepare` and the `Preparation`, `PreparedNode`,
@@ -31,8 +38,8 @@
 - Remove `ErrorKind::Overcommitted`, `ErrorKind::SamplingOverflow`,
   `SamplingDiagnostics` and `PreparedMix::diagnostics`.
 - Seek by summing integer counts below virtual-time keys and bounded bisection.
-  Counts, source-local order and seek/walk agreement remain exact; weighted
-  allocation and shuffle arithmetic are unchanged. Scheduled order fingerprints
+  Counts, source-local order and seek/walk agreement remain exact;
+  shuffle arithmetic is unchanged. Scheduled order fingerprints
   change: resume existing checkpoints with their original crate version.
 
 ## 0.3.0
