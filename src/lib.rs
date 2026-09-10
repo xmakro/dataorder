@@ -68,9 +68,8 @@
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
 //! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
-//! | [`Slice`](Seq::Slice) | Range length | Positions within the given bounds |
 //! | [`Shard`](Seq::Shard) | Number of worker positions | Child position `index + p × count` |
-//! | [`Stride`](Seq::Stride) | Number of selected positions | Child position `offset + p × step` |
+//! | [`StepBy`](Seq::StepBy) | `⌈n / step⌉` | Child position `p × step` |
 //!
 //! A mix uses every element of every part once. Set each part's exact count with
 //! [`Seq::cycle`] before mixing. A mix preserves the order within each part;
@@ -127,7 +126,7 @@
 //! Configurations support up to [`MAX_DEPTH`] levels and use ordinary recursive
 //! traversal and destruction. Arbitrarily deep hand-built trees are unsupported.
 //!
-//! Skips and takes must stay within the child sequence. Strides must have a nonzero
+//! Skips and takes must stay within the child sequence. `step_by` requires a nonzero
 //! step, and an empty sequence cannot be cycled to a positive length. Schedules must
 //! have valid parameters and satisfy their individual numerical limits; see
 //! [`Sampling`] and [`ErrorKind`] for the full rules.
@@ -166,7 +165,7 @@
 //! | Concat | `O(log k)` search over `k` part offsets |
 //! | Shuffle | Constant average permutation cost; an individual position can take longer |
 //! | Mix | A seek over its parts, with the cost described below |
-//! | Repeat, slice, stride | Position arithmetic |
+//! | Repeat, skip, take, step by, shard | Position arithmetic |
 //!
 //! For a mix with `k` non-empty parts, seeking counts elements below a trial virtual
 //! time, then replays at most `2k` tournament steps. It tries `position / N` first,
@@ -185,9 +184,10 @@
 //! that shuffle, allocating on the first visit and reusing them thereafter. Shuffle
 //! the parts before mixing when that is the order you need.
 //!
-//! A stride skips unselected child positions. Mixes advance their interleave for short
-//! skips and seek for longer ones. Sharding a mix across `count` workers can therefore
-//! multiply the total interleaving work by up to `count`; see [`Seq::shard`].
+//! Stepping through a sequence skips unselected child positions. Mixes advance their
+//! interleave for short skips and seek for longer ones. Sharding a mix across `count`
+//! workers can therefore multiply the total interleaving work by up to `count`;
+//! see [`Seq::shard`].
 //!
 //! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing

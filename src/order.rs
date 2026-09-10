@@ -4,14 +4,14 @@
 //! with lengths, concat offsets, interleave profiles and shuffle shapes. [`get`]
 //! follows that tree to resolve a position without keeping iteration state.
 
-use crate::bounds::{BoundsError, boundaries, resolve};
+use crate::bounds::{BoundsError, resolve};
 use crate::cursor::Cursor;
 use crate::interleave::{Interleave, Sampling};
 use crate::perm::{self, Shape};
 use crate::seq::MixPart;
 use crate::{Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 
 /// A compiled node. Empty subtrees are folded to [`Node::Empty`], so every child of a
 /// `Concat`, `Mix` and every child of a transform has elements. Source indices still
@@ -132,7 +132,7 @@ impl<T: Source> Order<T> {
     /// ```
     ///
     /// # Errors
-    /// Invalid slice or shard bounds, skips and takes past the end, a zero stride,
+    /// Invalid shard bounds, skips and takes past the end, a zero step,
     /// lengths that overflow, nesting deeper than [`MAX_DEPTH`], and schedules the
     /// mix rejects; see [`ErrorKind`]. The error names the node it was found at.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
@@ -390,8 +390,7 @@ impl<T: Source> Compiler<T> {
             Seq::Cycle { len, inner } => self.cycled(len, *inner, repeats, level),
             Seq::Skip { n, inner } => self.skip(n, *inner, repeats, level),
             Seq::Take { n, inner } => self.take(n, *inner, repeats, level),
-            Seq::Slice { start, end, inner } => self.sliced(start, end, *inner, repeats, level),
-            Seq::Stride { step, offset, inner } => self.strided(step, offset, *inner, repeats, level),
+            Seq::StepBy { step, inner } => self.strided(step, 0, *inner, repeats, level),
             Seq::Shard { count, index, inner } => self.sharded(count, index, *inner, repeats, level),
         }
     }
@@ -483,30 +482,9 @@ impl<T: Source> Compiler<T> {
         Ok(slice(child, 0, n as u64))
     }
 
-    fn sliced(&mut self, start: Bound<usize>, end: Bound<usize>, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        let (start, end) = boundaries((start, end)).map_err(|error| self.err(ErrorKind::InvalidBounds { error }))?;
-        let child = self.child(0, inner, repeats, level)?;
-        let len = child.len();
-        if start as u64 > len {
-            return Err(self.err(ErrorKind::SkipOutOfRange { n: start, len }));
-        }
-        let remaining = len - start as u64;
-        let len = match end {
-            Some(end) => {
-                let n = end - start;
-                if n as u64 > remaining {
-                    return Err(self.err(ErrorKind::TakeOutOfRange { n, len: remaining }));
-                }
-                n as u64
-            }
-            None => remaining,
-        };
-        Ok(slice(child, start as u64, len))
-    }
-
     fn sharded(&mut self, count: usize, index: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         if index >= count {
-            return Err(self.err(ErrorKind::InvalidBounds { error: BoundsError::InvalidShard { count, index } }));
+            return Err(self.err(ErrorKind::InvalidShard { count, index }));
         }
         self.strided(count, index, inner, repeats, level)
     }

@@ -4,13 +4,19 @@
 
 - **Breaking:** remove `Seq::check` and `Seq::validate`; all sequence builders
   accept any `T` and defer configuration checks to `Order::new` or
-  `Order::with_seed`, which require `T: Source`. `Seq::slice` and `Seq::shard`
-  now return `Seq` directly and store `Slice { start, end, inner }` and
-  `Shard { count, index, inner }` variants. Malformed bounds produce
-  `ErrorKind::InvalidBounds` with a node path during compilation. Each new
-  variant adds one level of configuration depth, including an unbounded slice.
-  Serialized builder output uses these new variants; existing `Skip`, `Take`
-  and `Stride` configurations remain supported.
+  `Order::with_seed`, which require `T: Source`. `Seq::shard` now returns `Seq`
+  directly and stores a `Shard { count, index, inner }` variant. Invalid worker
+  bounds produce `ErrorKind::InvalidShard` with a node path during compilation.
+  `BoundsError` is reserved for order and cursor access.
+
+- **Breaking:** replace `Seq::stride(step, offset)` and `Seq::Stride` with
+  `skip(offset).step_by(step)` and `Seq::StepBy { step, inner }`. Remove
+  `Seq::slice` and `Seq::Slice`; use `skip(start).take(len)` for a range.
+  Each operation adds a level of configuration depth. `skip` rejects an offset
+  past the end, while the former `stride` returned an empty sequence. A skip can
+  also remove preceding concatenation sources from a following shuffle's salt.
+  Serialized `Stride` and `Slice` configurations must be rewritten using these
+  operations; they are rejected during deserialization.
 
 - **Breaking:** use `Item { source_ordinal, source, record_index }` for both
   `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,

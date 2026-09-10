@@ -60,7 +60,7 @@ fn golden_orders() {
             Seq::mix([Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2).repeat(3)]), src(2, 900).shuffle(3)]).shard(4, 1),
             0,
         ),
-        ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).stride(7, 3), 0),
+        ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).skip(3).step_by(7), 0),
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
         ("mix with explicit counts", Seq::mix([src(0, 100).shuffle(1).cycle(1800), src(1, 5000).shuffle(2).cycle(1200)]), 0),
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),

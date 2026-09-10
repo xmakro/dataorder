@@ -48,7 +48,7 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
             let step = if r.below(2) == 0 { r.below(16) + 1 } else { (r.next() as usize).max(1) };
             let offset = if n == 0 { 0 } else { r.below(n) };
             let len = if offset >= n { 0 } else { (n - offset - 1) / step + 1 };
-            (s.stride(step, offset), len)
+            (s.skip(offset).step_by(step), len)
         }
         6 => {
             let (t, m) = configuration(r, depth - 1);
@@ -246,9 +246,9 @@ fn recycled_children_replace_every_transform_parameter() {
     let source = |n, seed| Seq::source(n).shuffle(seed);
     let nested = |seed, n| {
         Seq::mix([
-            source(n, seed).repeat(3).skip(2).stride(3, 1),
+            source(n, seed).repeat(3).skip(2).skip(1).step_by(3),
             source(n + 2, seed + 1).repeat(2).take(n + 3),
-            Seq::concat([source(n, seed + 2), Seq::source(n + 3)]).stride(2, 1),
+            Seq::concat([source(n, seed + 2), Seq::source(n + 3)]).skip(1).step_by(2),
             Seq::mix([source(n, seed), source(n + 1, seed + 3)]).shuffle(seed + 4),
         ])
     };

@@ -73,7 +73,7 @@ fn isolated_case() {
                 let deep = || (0..MAX_DEPTH).fold(Seq::source(1usize), |s, _| s.take(1));
                 assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
                 assert!(Order::new(deep().shard(0, 0)).is_err());
-                assert!(Order::new(deep().slice(..=usize::MAX)).is_err());
+                assert!(Order::new(deep().step_by(0)).is_err());
                 assert_eq!(Order::new(Seq::source(3)).unwrap().len(), 3);
             })
             .unwrap()

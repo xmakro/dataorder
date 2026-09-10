@@ -1,8 +1,7 @@
 //! The public surface, used as a downstream crate would: building configurations by hand,
 //! matching on non-exhaustive enums, errors with paths, cursors, sources.
 
-use dataorder::{BoundsError, Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source};
-use std::ops::Bound;
+use dataorder::{Cursor, Error, ErrorKind, MAX_MIX_LEN, MixPart, Order, Sampling, Seq, Source};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shard {
@@ -38,8 +37,10 @@ fn builders_accept_unresolved_sources() {
             .cycle(50)
             .skip(2)
             .take(40)
-            .stride(2, 1)
-            .slice(1..=8)
+            .skip(1)
+            .step_by(2)
+            .skip(1)
+            .take(8)
             .shard(3, 1)
     }
     struct Unresolved(&'static str);
@@ -58,35 +59,29 @@ fn builders_accept_unresolved_sources() {
 }
 
 #[test]
-#[allow(clippy::reversed_empty_ranges)]
-fn bounds_are_validated_only_when_compiling() {
+fn configuration_errors_are_validated_only_when_compiling() {
     let invalid = [
-        (Seq::source("data").slice(5..3), BoundsError::Reversed { start: 5, end: 3 }),
-        (Seq::source("data").slice(..=usize::MAX), BoundsError::EndOverflow),
-        (Seq::source("data").slice((Bound::Excluded(usize::MAX), Bound::Unbounded)), BoundsError::StartOverflow),
-        (Seq::source("data").shard(0, 0), BoundsError::InvalidShard { count: 0, index: 0 }),
-        (Seq::source("data").shard(2, 2), BoundsError::InvalidShard { count: 2, index: 2 }),
+        (Seq::source("data").step_by(0), ErrorKind::ZeroStep),
+        (Seq::source("data").skip(11), ErrorKind::SkipOutOfRange { n: 11, len: 10 }),
+        (Seq::source("data").take(11), ErrorKind::TakeOutOfRange { n: 11, len: 10 }),
+        (Seq::source("data").shard(0, 0), ErrorKind::InvalidShard { count: 0, index: 0 }),
+        (Seq::source("data").shard(2, 2), ErrorKind::InvalidShard { count: 2, index: 2 }),
     ];
-    for (seq, bounds) in invalid {
+    for (seq, expected) in invalid {
         // Mapping must preserve invalid nodes, including in an empty subtree.
         let seq = Seq::concat([Seq::source("other"), seq.repeat(0)]).map(|_| 10usize);
-        let expected = ErrorKind::InvalidBounds { error: bounds };
         let error = Order::new(seq.clone()).unwrap_err();
         assert_eq!(error.kind(), &expected);
         assert_eq!(error.path(), [1, 0]);
         assert_eq!(Order::with_seed(seq.clone(), 7).unwrap_err(), error);
         assert_eq!(Order::try_from(seq).unwrap_err(), error);
     }
-    let seq = Seq::source("data").slice(..11);
-    assert_eq!(Order::new(seq.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::TakeOutOfRange { n: 11, len: 10 });
-    let seq = Seq::source("data").slice(11..);
-    assert_eq!(Order::new(seq.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 11, len: 10 });
 }
 
 #[test]
-fn slice_and_shard_count_as_configuration_nodes() {
-    for slice in [false, true] {
-        let chain = |levels| (1..levels).fold(Seq::source(10), |seq, _| if slice { seq.slice(..) } else { seq.shard(1, 0) });
+fn step_by_and_shard_count_as_configuration_nodes() {
+    for step_by in [false, true] {
+        let chain = |levels| (1..levels).fold(Seq::source(10), |seq, _| if step_by { seq.step_by(1) } else { seq.shard(1, 0) });
         assert_eq!(Order::new(chain(dataorder::MAX_DEPTH)).unwrap().len(), 10);
         let error = Order::new(chain(dataorder::MAX_DEPTH + 1)).unwrap_err();
         assert_eq!(error.kind(), &ErrorKind::TooDeep);
@@ -96,24 +91,21 @@ fn slice_and_shard_count_as_configuration_nodes() {
 
 #[cfg(feature = "serde")]
 #[test]
-fn unresolved_slice_and_shard_round_trip() {
-    let seq = Seq::source("data").slice((Bound::Excluded(1), Bound::Included(8))).shard(3, 1);
+fn unresolved_position_operations_round_trip() {
+    let seq = Seq::source("data").skip(2).take(7).step_by(3).shard(2, 1);
     let json = serde_json::to_string(&seq).unwrap();
     assert_eq!(
         json,
-        r#"{"Shard":{"count":3,"index":1,"inner":{"Slice":{"start":{"Excluded":1},"end":{"Included":8},"inner":{"Source":"data"}}}}}"#
+        r#"{"Shard":{"count":2,"index":1,"inner":{"StepBy":{"step":3,"inner":{"Take":{"n":7,"inner":{"Skip":{"n":2,"inner":{"Source":"data"}}}}}}}}}"#
     );
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
     let order = Order::new(back.map(|_| 10usize)).unwrap();
-    assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [3, 6]);
-    let seq = Seq::source("data").slice(..=usize::MAX).shard(0, 0);
+    assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [5]);
+    let seq = Seq::source("data").step_by(0).shard(0, 0);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq.map(str::to_owned));
-    assert_eq!(
-        Order::new(back.map(|_| 10usize)).unwrap_err().kind(),
-        &ErrorKind::InvalidBounds { error: BoundsError::InvalidShard { count: 0, index: 0 } }
-    );
+    assert_eq!(Order::new(back.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::InvalidShard { count: 0, index: 0 });
 }
 
 #[test]
@@ -242,7 +234,14 @@ fn serde_round_trip() {
         assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
     }
     // Removed variants are rejected rather than silently reinterpreted.
-    assert!(serde_json::from_str::<Seq<usize>>(r#"{"Weighted":{"total":9,"parts":[]}}"#).is_err());
+    for json in [
+        r#"{"Weighted":{"total":9,"parts":[]}}"#,
+        r#"{"Stride":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
+        r#"{"Slice":{"start":"Unbounded","end":"Unbounded","inner":{"Source":4}}}"#,
+        r#"{"StepBy":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
+    ] {
+        assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
+    }
 }
 
 #[cfg(feature = "serde")]

@@ -36,11 +36,11 @@ fn large_orders_keep_baseline_outputs() {
         let fields: Vec<u64> = fixture.split('|').map(|s| s.parse().unwrap()).collect();
         let (case, pos) = (fields[0] as usize, fields[1]);
         let expected = (fields[2] as usize, fields[3] as usize);
-        // An outer stride addresses u64 intermediate positions on 32-bit hosts too.
-        // It adds no repeat context and changes no shuffle or mix keys. Both the
+        // An outer skip and step_by address u64 intermediate positions on 32-bit hosts too.
+        // They add no repeat context and change no shuffle or mix keys. Both the
         // resulting order length and each original source index fit in 32 bits.
         let step = 1usize << 30;
-        let order = Order::with_seed(cases[case].clone().stride(step, (pos % step as u64) as usize), seeds[case]).unwrap();
+        let order = Order::with_seed(cases[case].clone().skip((pos % step as u64) as usize).step_by(step), seeds[case]).unwrap();
         let at = (pos / step as u64) as usize;
         let item = order.get(at).unwrap();
         assert_eq!((item.source.id, item.record_index), expected, "get: {fixture}");

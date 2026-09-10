@@ -60,14 +60,6 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
         }
         Seq::Skip { n, inner } => reachable(inner, range.start + n..range.end + n, out),
         Seq::Take { inner, .. } => reachable(inner, range, out),
-        Seq::Slice { start, inner, .. } => {
-            let start = match start {
-                std::ops::Bound::Included(start) => *start,
-                std::ops::Bound::Excluded(start) => start + 1,
-                std::ops::Bound::Unbounded => 0,
-            };
-            reachable(inner, range.start + start..range.end + start, out);
-        }
         Seq::Mix(parts) => {
             let mut nonempty = parts.iter().filter(|p| !eval(&p.seq, 0).unwrap().is_empty());
             if let (Some(part), None) = (nonempty.next(), nonempty.next()) {
@@ -76,10 +68,10 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
                 parts.iter().for_each(|p| whole(&p.seq, out));
             }
         }
-        Seq::Stride { step: 1, offset, inner } => reachable(inner, range.start + offset..range.end + offset, out),
+        Seq::StepBy { step: 1, inner } => reachable(inner, range, out),
         Seq::Shard { count: 1, inner, .. } => reachable(inner, range, out),
         Seq::Cycle { len, inner } => cycled(inner, *len, out),
-        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::Stride { inner, .. } | Seq::Shard { inner, .. } => whole(inner, out),
+        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::StepBy { inner, .. } | Seq::Shard { inner, .. } => whole(inner, out),
     }
 }
 
@@ -204,26 +196,17 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
             }
             v[..*n].to_vec()
         }
-        Seq::Slice { start, end, inner } => {
-            let (start, end) = crate::bounds::boundaries((*start, *end)).map_err(|error| root(ErrorKind::InvalidBounds { error }))?;
-            let seq = inner.clone().skip(start);
-            let seq = match end {
-                Some(end) => seq.take(end - start),
-                None => seq,
-            };
-            eval_at(&seq, ctx, depth)?
-        }
         Seq::Shard { count, index, inner } => {
             if index >= count {
-                return Err(root(ErrorKind::InvalidBounds { error: BoundsError::InvalidShard { count: *count, index: *index } }));
+                return Err(root(ErrorKind::InvalidShard { count: *count, index: *index }));
             }
-            eval_at(&inner.clone().stride(*count, *index), ctx, depth)?
+            eval_at(inner, ctx, depth)?.into_iter().skip(*index).step_by(*count).collect()
         }
-        Seq::Stride { step, offset, inner } => {
+        Seq::StepBy { step, inner } => {
             if *step == 0 {
                 return Err(root(ErrorKind::ZeroStep));
             }
-            eval_at(inner, ctx, depth)?.into_iter().skip(*offset).step_by(*step).collect()
+            eval_at(inner, ctx, depth)?.into_iter().step_by(*step).collect()
         }
     })
 }
@@ -277,13 +260,13 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
             match rng.below(3) {
                 0 => inner.skip(start),
                 1 => inner.take(rng.below(n + 1)),
-                _ => inner.slice(start..start + rng.below(n - start + 1)),
+                _ => inner.skip(start).take(rng.below(n - start + 1)),
             }
         }
         _ => {
             let inner = random_seq(rng, depth - 1, lens);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
-            inner.stride(1 + rng.below(4), rng.below(n + 2))
+            inner.skip(rng.below(n + 1)).step_by(1 + rng.below(4))
         }
     }
 }
@@ -515,12 +498,12 @@ fn map_keeps_the_order() {
 #[test]
 fn errors() {
     let a = src(0, 10);
-    assert_eq!(Order::new(a.clone().slice(3..12)).unwrap_err(), root(ErrorKind::TakeOutOfRange { n: 9, len: 7 }));
+    assert_eq!(Order::new(a.clone().skip(3).take(9)).unwrap_err(), root(ErrorKind::TakeOutOfRange { n: 9, len: 7 }));
     assert_eq!(Order::new(a.clone().skip(11)).unwrap_err(), root(ErrorKind::SkipOutOfRange { n: 11, len: 10 }));
     assert_eq!(Order::new(a.clone().take(11)).unwrap_err(), root(ErrorKind::TakeOutOfRange { n: 11, len: 10 }));
-    assert_eq!(Order::new(a.clone().slice(2..=9)).unwrap().len(), 8);
-    assert_eq!(Order::new(a.clone().slice(10..)).unwrap().len(), 0);
-    assert_eq!(Order::new(a.clone().stride(0, 0)).unwrap_err(), root(ErrorKind::ZeroStep));
+    assert_eq!(Order::new(a.clone().skip(2).take(8)).unwrap().len(), 8);
+    assert_eq!(Order::new(a.clone().skip(10)).unwrap().len(), 0);
+    assert_eq!(Order::new(a.clone().step_by(0)).unwrap_err(), root(ErrorKind::ZeroStep));
     // Beyond 64 bits on every target: a repeat of a repeat, and a concat of two halves of 2⁶⁴.
     assert_eq!(Order::new(a.clone().repeat(usize::MAX).repeat(usize::MAX)).unwrap_err().kind(), &ErrorKind::LengthOverflow);
     let half = || src(0, 1 << 31).repeat(1 << 31).repeat(2);
@@ -545,7 +528,7 @@ fn errors() {
     assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 11, len: 10 });
     assert_eq!(err.path(), [0, 1, 1, 0]);
     assert_eq!(err.to_string(), "cannot take 11 of 10 positions (at node 0/1/1/0)");
-    assert_eq!(root(ErrorKind::ZeroStep).to_string(), "stride step is zero (at the root)");
+    assert_eq!(root(ErrorKind::ZeroStep).to_string(), "step is zero (at the root)");
     assert_eq!(err.into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
     assert_eq!(Order::new(src(0, 0).cycle(5)).unwrap_err(), root(ErrorKind::EmptyCycle));
     assert_eq!(Order::new(Seq::concat([src(0, 3), src(1, 0).cycle(5)])).unwrap_err(), at(ErrorKind::EmptyCycle, &[1]));
@@ -621,7 +604,7 @@ fn configurations_over_the_depth_limit_are_rejected() {
         let out_of_range = ErrorKind::TakeOutOfRange { n: 99, len: 10 };
         assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
         assert_eq!(Order::new(Seq::mix([bad(), deep()])).unwrap_err().kind(), &out_of_range);
-        assert_eq!(Order::new(deep().stride(0, 0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
+        assert_eq!(Order::new(deep().step_by(0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
         let first_too_deep = Seq::concat([deep(), bad()]);
         assert_eq!(Order::new(first_too_deep).unwrap_err().kind(), &ErrorKind::TooDeep);
     };
@@ -637,25 +620,26 @@ fn empty_parts_do_not_affect_shuffles_above() {
     let same = |seq: Seq<Src>| assert_eq!(ids(Order::new(seq).unwrap().iter(..).unwrap()), base);
     same(Seq::concat([x(), src(1, 0)]).shuffle(1));
     same(Seq::concat([src(0, 0), x()]).shuffle(1));
-    same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).stride(1, 2)]).shuffle(1));
+    same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).skip(2).step_by(1)]).shuffle(1));
     same(Seq::mix([x(), src(1, 0), Seq::concat([src(2, 5).skip(5), src(3, 0)])]).shuffle(1));
     same(Seq::mix([x()]).shuffle(1));
-    same(x().stride(1, 0).shuffle(1));
+    same(x().step_by(1).shuffle(1));
     // A part of a concatenation that a skip or take cuts away entirely does not count
     // either, however the concatenation nests; a part it touches counts.
     same(Seq::concat([x(), src(1, 50)]).take(100).shuffle(1));
     same(Seq::concat([src(1, 50), x()]).skip(50).shuffle(1));
     same(Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100).shuffle(1));
-    same(Seq::concat([src(1, 50), x(), src(2, 7)]).slice(50..150).shuffle(1));
     same(Seq::concat([Seq::concat([src(1, 5), x()]), src(2, 3)]).skip(5).take(100).shuffle(1));
     same(Seq::concat([src(1, 5), Seq::concat([x(), src(2, 3)])]).take(105).skip(5).shuffle(1));
     let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter(..).unwrap());
     assert_ne!(with(src(1, 1)), base);
     assert_ne!(with(src(0, 1)), base);
-    // A stride does not cut parts away, even ones it never reaches.
+    // Sharding does not cut parts away, even ones it never reaches; an explicit
+    // skip removes preceding concat parts before deriving a later shuffle salt.
     let strided = |seq: Seq<Src>| ids(Order::new(seq).unwrap().iter(..).unwrap());
-    assert_eq!(strided(Seq::concat([src(1, 1), x()]).stride(2, 1)), strided(x().stride(2, 0)));
-    assert_ne!(strided(Seq::concat([src(1, 1), x()]).stride(2, 1).shuffle(1)), strided(x().stride(2, 0).shuffle(1)));
+    assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2)), strided(x().step_by(2)));
+    assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2).shuffle(1)), strided(x().step_by(2).shuffle(1)));
+    assert_ne!(strided(Seq::concat([src(1, 1), x()]).shard(2, 1).shuffle(1)), strided(x().step_by(2).shuffle(1)));
 }
 
 /// The folds: what compiles to a single node.
@@ -669,11 +653,11 @@ fn folds() {
     );
     assert!(matches!(root(a().shard(8, 1).shard(4, 1).shard(2, 1)), Node::Source { offset: 41, len: 1, .. }));
     assert!(
-        matches!(root(a().shuffle(1).skip(10).stride(3, 2)), Node::Stride { step: 3, offset: 12, len: 30, ref child } if matches!(**child, Node::Shuffle { .. }))
+        matches!(root(a().shuffle(1).skip(10).skip(2).step_by(3)), Node::Stride { step: 3, offset: 12, len: 30, ref child } if matches!(**child, Node::Shuffle { .. }))
     );
     assert!(matches!(root(a().shuffle(1).skip(10).take(50).skip(5)), Node::Slice { start: 15, len: 45, .. }));
     assert!(
-        matches!(root(a().stride(4, 1).stride(2, 1)), Node::Stride { step: 8, offset: 5, len: 12, ref child } if matches!(**child, Node::Source { .. }))
+        matches!(root(a().skip(1).step_by(4).skip(1).step_by(2)), Node::Stride { step: 8, offset: 4, len: 12, ref child } if matches!(**child, Node::Source { offset: 1, .. }))
     );
     let cat = || Seq::concat([src(1, 10), src(2, 20), src(3, 30)]);
     assert!(matches!(root(cat().take(10)), Node::Source { src: 0, offset: 0, len: 10 }));
@@ -681,10 +665,10 @@ fn folds() {
     assert!(matches!(root(cat().skip(10).take(20)), Node::Source { src: 1, offset: 0, len: 20 }));
     assert!(matches!(root(cat().skip(10)), Node::Concat { ref children, .. } if children.len() == 2));
     assert!(
-        matches!(root(cat().slice(5..35)), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
+        matches!(root(cat().skip(5).take(30)), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
     );
     assert_eq!(
-        ids(Order::new(cat().skip(15).stride(7, 3)).unwrap().iter(..).unwrap()),
+        ids(Order::new(cat().skip(15).skip(3).step_by(7)).unwrap().iter(..).unwrap()),
         ids(Order::new(cat()).unwrap().iter(..).unwrap()).into_iter().skip(18).step_by(7).collect::<Vec<_>>()
     );
 }
@@ -745,7 +729,8 @@ fn edge_cases() {
     assert_eq!(empty.iter(0..0).unwrap().count(), 0);
     let empty = Order::new(src(1, 5).shuffle(1).take(0).repeat(4)).unwrap();
     assert!(empty.is_empty());
-    assert_eq!(Order::new(src(1, 5).stride(3, 9)).unwrap().len(), 0);
+    assert_eq!(Order::new(src(1, 5).skip(5).step_by(3)).unwrap().len(), 0);
+    assert_eq!(Order::new(src(1, 5).skip(9).step_by(3)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 9, len: 5 });
     let one = Order::new(src(2, 1).shuffle(5).repeat(3)).unwrap();
     assert_eq!(ids(one.iter(0..3).unwrap()), vec![(2, 0); 3]);
     let order = Order::with_seed(src(0, 5), 77).unwrap();
@@ -852,10 +837,9 @@ fn orders_longer_than_usize_are_rejected() {
         let intermediate = Seq::concat([src(0, usize::MAX), src(1, 1)]).take(10);
         assert_eq!(Order::new(intermediate).unwrap().len(), 10);
         let intermediate = || Seq::concat([src(0, usize::MAX), src(1, 1)]);
-        assert_eq!(Order::new(intermediate().slice(..10)).unwrap().len(), 10);
-        let tail = Order::new(intermediate().slice(usize::MAX..)).unwrap();
+        let tail = Order::new(intermediate().skip(usize::MAX)).unwrap();
         assert_eq!(ids(tail.iter(..).unwrap()), [(1, 0)]);
-        assert_eq!(Order::new(intermediate().slice(..).shard(2, 0)).unwrap().len(), (usize::MAX / 2) + 1);
+        assert_eq!(Order::new(intermediate().shard(2, 0)).unwrap().len(), (usize::MAX / 2) + 1);
         let err = Order::new(Seq::concat([src(0, usize::MAX), src(1, 1)]).skip(usize::MAX).skip(3)).unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 3, len: 1 });
     }
@@ -886,15 +870,15 @@ fn types_are_send_and_sync() {
     assert_send_sync::<MixPart<usize>>();
 }
 
-/// Inclusive and open bounds in `slice`.
+/// Prefixes, suffixes and finite ranges composed from skip and take.
 #[test]
-fn slice_bounds() {
+fn skip_and_take_ranges() {
     let a = || src(0, 10);
-    assert_eq!(ids(Order::new(a().slice(..=2)).unwrap().iter(0..3).unwrap()), vec![(0, 0), (0, 1), (0, 2)]);
-    assert_eq!(ids(Order::new(a().slice(8..)).unwrap().iter(0..2).unwrap()), vec![(0, 8), (0, 9)]);
-    assert_eq!(ids(Order::new(a().slice(3..=3)).unwrap().iter(0..1).unwrap()), vec![(0, 3)]);
-    assert_eq!(Order::new(a().slice(..)).unwrap().len(), 10);
-    assert_eq!(Order::new(a().slice(4..4)).unwrap().len(), 0);
+    assert_eq!(ids(Order::new(a().take(3)).unwrap().iter(0..3).unwrap()), vec![(0, 0), (0, 1), (0, 2)]);
+    assert_eq!(ids(Order::new(a().skip(8)).unwrap().iter(0..2).unwrap()), vec![(0, 8), (0, 9)]);
+    assert_eq!(ids(Order::new(a().skip(3).take(1)).unwrap().iter(0..1).unwrap()), vec![(0, 3)]);
+    assert_eq!(Order::new(a()).unwrap().len(), 10);
+    assert_eq!(Order::new(a().skip(4).take(0)).unwrap().len(), 0);
 }
 
 /// Schedules at the steep end of what a mix accepts, at lengths near its limit: seeks and

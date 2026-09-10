@@ -1,7 +1,7 @@
 //! Configuration errors, including their location in the sequence tree.
 
+use crate::Sampling;
 use crate::interleave::{MAX_TOTAL_LEN, SamplingError};
-use crate::{BoundsError, Sampling};
 use std::fmt;
 
 /// A configuration error from [`Order::new`](crate::Order::new).
@@ -122,7 +122,7 @@ impl fmt::Display for SamplingDetail {
 ///
 /// ```
 /// use dataorder::{ErrorKind, Order, Sampling, Seq};
-/// let err = Order::new(Seq::source(10).stride(0, 0)).unwrap_err();
+/// let err = Order::new(Seq::source(10).step_by(0)).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::ZeroStep));
 /// let err = Order::new(Seq::mix_with([(Seq::source(10), Sampling::delayed(1.5))])).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::InvalidSampling { .. }));
@@ -130,10 +130,12 @@ impl fmt::Display for SamplingDetail {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    /// Invalid slice bounds or shard parameters.
-    InvalidBounds {
-        /// The malformed range or shard bounds.
-        error: BoundsError,
+    /// A worker index is outside `0..count`, including a zero worker count.
+    InvalidShard {
+        /// Number of workers.
+        count: usize,
+        /// Requested worker index.
+        index: usize,
     },
     /// A `Skip` of `n` positions from a sequence of `len < n`. The length is that of an
     /// intermediate node, which may exceed `usize` on a 32-bit target.
@@ -151,7 +153,7 @@ pub enum ErrorKind {
         /// Length of the sequence.
         len: u64,
     },
-    /// A stride with `step == 0`.
+    /// A `StepBy` with `step == 0`.
     ZeroStep,
     /// The final order is longer than `usize::MAX`. Only intermediate nodes may
     /// exceed that limit.
@@ -185,10 +187,10 @@ pub enum ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidBounds { error } => error.fmt(f),
+            Self::InvalidShard { count, index } => write!(f, "shard index {index} out of range for {count} shards"),
             Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
             Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
-            Self::ZeroStep => write!(f, "stride step is zero"),
+            Self::ZeroStep => write!(f, "step is zero"),
             Self::OrderTooLong { len } => write!(f, "order of {len} positions is longer than usize::MAX"),
             Self::LengthOverflow => write!(f, "a length does not fit in 64 bits"),
             Self::TooManySources => write!(f, "more than 2^32 sources"),

@@ -4,7 +4,6 @@
 
 use crate::Sampling;
 use std::convert::Infallible;
-use std::ops::{Bound, RangeBounds};
 
 /// A description of how to order sources of type `T`.
 ///
@@ -22,8 +21,8 @@ use std::ops::{Bound, RangeBounds};
 /// # Errors
 ///
 /// [`Order::new`](crate::Order::new) reports invalid configurations as an
-/// [`Error`](crate::Error) with the path to the invalid node. This includes invalid slice and shard bounds,
-/// out-of-range skips and takes, zero strides, overflow, invalid schedules, and
+/// [`Error`](crate::Error) with the path to the invalid node. This includes invalid
+/// shard bounds, out-of-range skips and takes, zero steps, overflow, invalid schedules, and
 /// excessive depth. All sequence builders accept any `T` and defer these checks
 /// until the order is built.
 ///
@@ -103,26 +102,13 @@ pub enum Seq<T> {
         /// The sequence to take from.
         inner: Box<Self>,
     },
-    /// The positions between `start` and `end` of `inner`.
-    /// Bounds are stored as given and validated when the order is built.
-    /// This adds one level of configuration depth, even when both bounds are unbounded.
-    Slice {
-        /// Start bound.
-        start: Bound<usize>,
-        /// End bound.
-        end: Bound<usize>,
-        /// The sequence to slice.
-        inner: Box<Self>,
-    },
-    /// Positions `offset, offset + step, offset + 2·step, …` of `inner`.
-    /// `step` must be positive. An offset at or past the end gives an empty sequence.
-    /// Use [`shard`](Seq::shard) to partition positions among workers.
-    Stride {
+    /// Positions `0, step, 2·step, …` of `inner`.
+    /// `step` must be positive when the order is built. Use [`skip`](Seq::skip)
+    /// before this node to start at a different position.
+    StepBy {
         /// Distance between kept positions.
         step: usize,
-        /// First kept position.
-        offset: usize,
-        /// The sequence to stride over.
+        /// The sequence to step through.
         inner: Box<Self>,
     },
     /// Positions `index, index + count, …` of `inner`.
@@ -273,21 +259,6 @@ impl<T> Seq<T> {
         Self::Cycle { len, inner: Box::new(self) }
     }
 
-    /// The positions in `range` of this sequence.
-    ///
-    /// ```
-    /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(10).slice(3..=5))?;
-    /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [3, 4, 5]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// Reversed, overflowing and out-of-range bounds are rejected by [`Order::new`](crate::Order::new).
-    #[must_use]
-    pub fn slice(self, range: impl RangeBounds<usize>) -> Self {
-        Self::Slice { start: range.start_bound().cloned(), end: range.end_bound().cloned(), inner: Box::new(self) }
-    }
-
     /// The first `n` positions (an error when the order is built if there are fewer).
     ///
     /// ```
@@ -303,6 +274,8 @@ impl<T> Seq<T> {
     }
 
     /// Everything after the first `n` positions (an error when the order is built if there are fewer).
+    /// Follow with `take(len)` to select a range, or `step_by(step)` to select
+    /// every `step`-th position starting at `n`.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -316,19 +289,21 @@ impl<T> Seq<T> {
         Self::Skip { n, inner: Box::new(self) }
     }
 
-    /// Every `step`-th position starting at `offset`, as many as exist; `offset` may exceed
-    /// `step`. See [`Stride`](Seq::Stride).
+    /// Every `step`-th position, starting at the first position.
+    /// Precede this with [`skip`](Seq::skip) to start at a different position.
+    /// [`Order::new`](crate::Order::new) rejects a zero step, even for an empty sequence.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(10).stride(4, 1))?;
+    /// let order = Order::new(Seq::source(10).step_by(4))?;
+    /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [0, 4, 8]);
+    /// let order = Order::new(Seq::source(10).skip(1).step_by(4))?;
     /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [1, 5, 9]);
-    /// assert!(Order::new(Seq::source(10).stride(4, 12))?.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn stride(self, step: usize, offset: usize) -> Self {
-        Self::Stride { step, offset, inner: Box::new(self) }
+    pub fn step_by(self, step: usize) -> Self {
+        Self::StepBy { step, inner: Box::new(self) }
     }
 
     /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
@@ -427,8 +402,7 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle(len),
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
         Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
-        Seq::Slice { start, end, inner } => map_sources(*inner, f)?.slice((start, end)),
-        Seq::Stride { step, offset, inner } => map_sources(*inner, f)?.stride(step, offset),
+        Seq::StepBy { step, inner } => map_sources(*inner, f)?.step_by(step),
         Seq::Shard { count, index, inner } => map_sources(*inner, f)?.shard(count, index),
     })
 }

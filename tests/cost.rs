@@ -190,7 +190,7 @@ fn undrawn_cursors_resume_after_range_changes_and_skips() {
         Seq::source(100),
         Seq::source(100).shuffle(11),
         mix(),
-        mix().repeat(3).stride(7, 2),
+        mix().repeat(3).skip(2).step_by(7),
         Seq::concat([mix(), mix().shuffle(7)]).skip(20),
     ];
     for seq in sequences {

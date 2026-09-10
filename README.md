@@ -116,7 +116,8 @@ so you can nest mixes and concatenations.
 | Shuffle positions | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
 | Repeat or truncate to an exact length | `.cycle(len)` |
-| Keep a range or every nth position | `.slice(range)` or `.stride(step, offset)` |
+| Keep a range of positions | `.skip(start).take(len)` |
+| Keep every nth position from an offset | `.skip(offset).step_by(step)` |
 | Assign every nth position to a worker | `.shard(worker_count, worker_index)` |
 
 A mix uses every input element once, drawing more often from longer sequences.
@@ -207,8 +208,8 @@ resume existing checkpoints with their original crate version.
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
   returns `None` for invalid positions. `iter`, `seek` and `set_range` return
-  `Result` for range operations. `Seq::slice` and `Seq::shard` store their bounds;
-  `Order::new` validates the ranges, worker counts and indices.
+  `Result` for range operations. `step_by(0)` is an error when the order is built.
+  `Seq::shard` stores its worker count and index for `Order::new` to validate.
   Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
