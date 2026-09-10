@@ -80,14 +80,18 @@ impl Node {
 /// The ordinal identifies the source within this order's [`sources`](Order::sources),
 /// even when source values are equal or zero-sized. It is local to the order, not a
 /// persistent dataset ID. The item borrows its source and is cheap to copy.
+///
+/// Equality compares `source_ordinal` and `record_index` first, then compares source
+/// values only when both indices match. Source comparison uses `T`'s equality
+/// implementation, so its cost depends on the source type.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Item<'a, T> {
     /// Index into [`Order::sources`], including sources removed during compilation.
     pub source_ordinal: usize,
-    /// The source handle owned by the order.
-    pub source: &'a T,
     /// Index of the record within this source, not its position in the order.
     pub record_index: usize,
+    /// The source handle owned by the order.
+    pub source: &'a T,
 }
 
 impl<T> Copy for Item<'_, T> {}

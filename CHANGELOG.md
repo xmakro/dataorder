@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- Compare `Item` source ordinals and record indices before source values, avoiding
+  source comparisons when either index differs. Document that equality includes
+  source values and that their comparison cost depends on the source type.
+
 - **Breaking:** rename `ErrorKind::TooSteep` to `ErrorKind::ScheduleTooSteep`.
   Update matches and constructors to use the new variant name. Its diagnostic
   fields, error paths, display messages and ordering behavior are unchanged.

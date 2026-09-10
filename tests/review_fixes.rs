@@ -104,6 +104,43 @@ fn items_copy_without_cloning_source_handles() {
 }
 
 #[test]
+fn item_equality_checks_indices_before_source_values() {
+    use std::cell::Cell;
+
+    #[derive(Debug)]
+    struct ComparedSource<'a> {
+        value: u8,
+        comparisons: &'a Cell<usize>,
+    }
+
+    impl PartialEq for ComparedSource<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            self.comparisons.set(self.comparisons.get() + 1);
+            self.value == other.value
+        }
+    }
+
+    let comparisons = Cell::new(0);
+    let source = ComparedSource { value: 1, comparisons: &comparisons };
+    let equal_source = ComparedSource { value: 1, comparisons: &comparisons };
+    let different_source = ComparedSource { value: 2, comparisons: &comparisons };
+    let item = Item { source_ordinal: 0, source: &source, record_index: 2 };
+
+    for other in [Item { source_ordinal: 1, ..item }, Item { record_index: 3, ..item }] {
+        assert_ne!(item, other);
+        assert_eq!(comparisons.get(), 0, "different indices must skip source comparison");
+    }
+
+    // Matching indices compare values, including when both references point to the same source.
+    for (source, equal) in [(&source, true), (&equal_source, true), (&different_source, false)] {
+        comparisons.set(0);
+        let other = Item { source, ..item };
+        assert_eq!(item == other, equal);
+        assert_eq!(comparisons.get(), 1);
+    }
+}
+
+#[test]
 fn sharding_preserves_global_partition_not_worker_mixture() {
     let seq = Seq::mix([Seq::source(4).shuffle(1), Seq::source(4).shuffle(2)]);
     for worker in 0..2 {
