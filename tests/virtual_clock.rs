@@ -70,7 +70,7 @@ fn schedules_can_overlap_without_uniform_or_skip_empty_clock_intervals() {
     check_seeks(&separated);
 
     let overlapping =
-        order(&[(43, Schedule::ramp(0.2, 0.9)), (37, Schedule::trapezoid(0.3, 0.4, 0.5, 0.8)), (29, Schedule::fading(0.4, 0.7))]);
+        order(&[(43, Schedule::ramp(0.2, 0.9)), (37, Schedule::trapezoid(0.3, 0.4, 0.5, 0.8)), (29, Schedule::fade(0.4, 0.7))]);
     check_seeks(&overlapping);
     for (s, n) in [43, 37, 29].into_iter().enumerate() {
         assert_eq!(entries(&overlapping).iter().filter(|&&(i, _)| i == s).count(), n);

@@ -95,7 +95,7 @@ fn scheduled_cases() -> Vec<(Vec<usize>, Vec<Schedule>)> {
         (vec![100, 100, 800], vec![Schedule::ramp(0.0, 0.5), Schedule::ramp(0.5, 1.0), Uniform]),
         (vec![3, 1000, 1], vec![Schedule::delayed(0.7), Uniform, Schedule::ramp(0.2, 0.9)]),
         (vec![300, 700], vec![Schedule::until(0.5), Uniform]),
-        (vec![200, 300, 500], vec![Schedule::fading(0.2, 0.6), Schedule::trapezoid(0.3, 0.5, 0.7, 0.9), Uniform]),
+        (vec![200, 300, 500], vec![Schedule::fade(0.2, 0.6), Schedule::trapezoid(0.3, 0.5, 0.7, 0.9), Uniform]),
         (vec![500, 500], vec![Schedule::until(0.5), Schedule::delayed(0.5)]),
         (vec![40, 60, 900], vec![Schedule::trapezoid(0.1, 0.1, 0.1, 0.3), Schedule::trapezoid(0.6, 0.8, 0.8, 1.0), Uniform]),
     ]

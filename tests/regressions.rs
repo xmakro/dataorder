@@ -134,7 +134,7 @@ fn isolated_case() {
             #[cfg(target_pointer_width = "64")]
             for n in [1_000_000_000_000usize, (1 << 46) - 1] {
                 let order =
-                    Order::new(Seq::mix([(Seq::source(n), Schedule::Uniform), (Seq::source(1), Schedule::fading(0.0, 1.0))])).unwrap();
+                    Order::new(Seq::mix([(Seq::source(n), Schedule::Uniform), (Seq::source(1), Schedule::fade(0.0, 1.0))])).unwrap();
                 for start in [0, n / 4, n / 2 - 16, 3 * (n / 4), n - 16] {
                     for (p, dataorder::Item { source: &s, record_index: i, .. }) in (start..).zip(order.cursor(start..).unwrap().take(16)) {
                         assert_eq!((s, i), {

@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** rename `Schedule::fading` to `Schedule::fade` to pair with
+  `Schedule::ramp`. Replace `fading(fade, off)` calls with `fade(fade, off)`.
+  Parameters, validation, ordering and serialized configurations are unchanged.
+
 - **Breaking:** rename `Seq::map` and `Seq::try_map` to `Seq::map_sources` and
   `Seq::try_map_sources` to make clear that they transform source handles.
   Update mapping calls to use the new names. Ordering, callback behavior and

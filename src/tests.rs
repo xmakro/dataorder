@@ -867,7 +867,7 @@ fn seq_eq_and_hash() {
     let nan = Seq::mix([(src(0, 5), Schedule::delayed(f64::NAN))]);
     assert_eq!(nan, nan.clone());
     assert_eq!(Schedule::delayed(0.5), Schedule::ramp(0.5, 0.5));
-    assert_eq!(Schedule::until(0.5), Schedule::fading(0.5, 0.5));
+    assert_eq!(Schedule::until(0.5), Schedule::fade(0.5, 0.5));
     assert_ne!(Schedule::until(0.5), Schedule::delayed(0.5));
     assert_eq!(Schedule::trapezoid(0.0, 0.0, 1.0, 1.0), Schedule::ramp(0.0, 0.0));
     assert_ne!(Schedule::Uniform, Schedule::ramp(0.0, 0.0));

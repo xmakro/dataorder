@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 /// | [`delayed(at)`](Self::delayed) | Starts at `at`, then stays constant |
 /// | [`ramp(start, full)`](Self::ramp) | Rises from zero, then stays constant |
 /// | [`until(at)`](Self::until) | Starts constant, then stops at `at` |
-/// | [`fading(fade, off)`](Self::fading) | Starts constant, then falls to zero |
+/// | [`fade(fade, off)`](Self::fade) | Starts constant, then falls to zero |
 /// | [`trapezoid(start, full, fade, off)`](Self::trapezoid) | Rises, stays constant, then falls |
 ///
 /// Each curve is normalized to an integral of one. If `F_i(t)` is its cumulative
@@ -84,7 +84,7 @@ pub enum Schedule {
     /// Requires finite parameters with `0 ≤ start ≤ full ≤ fade ≤ off ≤ 1` and
     /// `start < off`, ensuring some time at a positive rate.
     /// Build it with [`Schedule::delayed`], [`Schedule::ramp`], [`Schedule::until`],
-    /// [`Schedule::fading`] or [`Schedule::trapezoid`].
+    /// [`Schedule::fade`] or [`Schedule::trapezoid`].
     Trapezoid {
         /// Virtual time at which the rate starts rising from zero.
         start: f64,
@@ -140,10 +140,10 @@ impl Schedule {
     ///
     /// ```
     /// use dataorder::Schedule;
-    /// assert_eq!(Schedule::fading(0.4, 0.8), Schedule::Trapezoid { start: 0.0, full: 0.0, fade: 0.4, off: 0.8 });
+    /// assert_eq!(Schedule::fade(0.4, 0.8), Schedule::Trapezoid { start: 0.0, full: 0.0, fade: 0.4, off: 0.8 });
     /// ```
     #[must_use]
-    pub const fn fading(fade: f64, off: f64) -> Self {
+    pub const fn fade(fade: f64, off: f64) -> Self {
         Self::Trapezoid { start: 0.0, full: 0.0, fade, off }
     }
 

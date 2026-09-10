@@ -61,7 +61,7 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
                 0 => Schedule::Uniform,
                 1 => Schedule::until(0.25),
                 2 => Schedule::ramp(0.25, 0.75),
-                3 => Schedule::fading(0.25, 0.75),
+                3 => Schedule::fade(0.25, 0.75),
                 _ => Schedule::trapezoid(0.125, 0.25, 0.75, 0.875),
             };
             let b = m.min(if schedule == Schedule::Uniform { 100 } else { a / 3 });
