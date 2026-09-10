@@ -31,7 +31,7 @@ fn float(bits: u64) -> f64 {
 }
 
 /// A tournament tree over `k` leaves with `f64` keys and values of type `V`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TournamentTree<V> {
     /// Losers in heap layout, with the overall winner in `nodes[0]`.
     /// For `n` leaves (rounded up to a power of two), internal node `m` has children
@@ -42,20 +42,8 @@ pub(crate) struct TournamentTree<V> {
     nodes: Vec<Entry>,
     values: Vec<V>,
     live: usize,
-    /// The winners of the last rebuild, kept so that a rebuild allocates nothing.
+    /// Temporary winners during rebuilds. Cleared afterward, retaining the allocation.
     scratch: Vec<Entry>,
-}
-
-impl<V: Clone> Clone for TournamentTree<V> {
-    fn clone(&self) -> Self {
-        // A tree positioned near the end still reserves for every part a backward seek
-        // can revive. Vec::clone keeps only the length, losing that allocation guarantee.
-        let mut nodes = Vec::with_capacity(self.nodes.capacity());
-        nodes.extend_from_slice(&self.nodes);
-        let mut values = Vec::with_capacity(self.values.capacity());
-        values.extend_from_slice(&self.values);
-        Self { nodes, values, live: self.live, scratch: Vec::with_capacity(self.scratch.capacity()) }
-    }
 }
 
 /// A leaf's key (in [`sortable`] form) and index, as stored in the nodes.
@@ -143,6 +131,7 @@ impl<V> TournamentTree<V> {
         }
         self.nodes[0] = winner[1];
         self.live = k;
+        winner.clear();
     }
 
     /// Number of leaves not yet removed.

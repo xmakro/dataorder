@@ -227,7 +227,7 @@ fn failure_history_shrinking_keeps_only_relevant_operations() {
 }
 
 #[test]
-fn boundary_skip_rebinds_retained_child_before_backward_seek() {
+fn boundary_skip_initializes_target_child_before_backward_seek() {
     let order = Order::new(Seq::concat([
         Seq::mix([Seq::source(5), Seq::source(5)]),
         Seq::mix([Seq::source(7), Seq::source(7), Seq::source(7)]),
@@ -236,13 +236,13 @@ fn boundary_skip_rebinds_retained_child_before_backward_seek() {
     .unwrap();
     let mut cursor = order.iter(..).unwrap();
     cursor.next(); // Initialize buffers for the first child.
-    cursor.seek(31).unwrap(); // End of the second child; retain the first child's buffers.
-    cursor.seek(10).unwrap(); // Same child index, but the retained buffers must be rebound.
+    cursor.seek(31).unwrap(); // End of the second child; its state has not been built.
+    cursor.seek(10).unwrap(); // Same child index, but its state must now be initialized.
     assert_eq!(cursor.next(), Some(order.get(10).unwrap()));
 }
 
 #[test]
-fn recycled_children_replace_every_transform_parameter() {
+fn concat_children_keep_their_own_transform_parameters() {
     let source = |n, seed| Seq::source(n).shuffle(seed);
     let nested = |seed, n| {
         Seq::mix([

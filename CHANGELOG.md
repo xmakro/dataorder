@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- Simplify cursor allocation behavior: clones no longer preserve spare buffer
+  capacity, and concat transitions create fresh child state. Repeated seeks within
+  an initialized mix still reuse its buffers. Item order and public signatures are
+  unchanged; clones and transitions may allocate on subsequent seeks.
+
+- Remove the checkpoint worker example.
+
 - Replace the custom benchmark harness and campaign runner with a small Criterion
   suite. Run `cargo bench --bench ordering`; use Criterion's saved baselines for
   comparisons.

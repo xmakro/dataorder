@@ -82,8 +82,9 @@ impl<'a, T> Cursor<'a, T> {
     /// the cursor; seeking backward lets iteration resume.
     ///
     /// Forward seeks skip; backward seeks reposition the cursor tree. Both reuse
-    /// existing buffers. Entering another concat child or a previously unvisited mix
-    /// part can allocate a child cursor. Use this method for repeated random access.
+    /// existing buffers within the current child. Entering another concat child
+    /// creates fresh state; entering a previously unvisited mix part can also allocate.
+    /// Use this method for repeated random access.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -177,7 +178,8 @@ impl<T> fmt::Debug for Cursor<'_, T> {
 
 /// Clones the current position and cursor state for independent iteration.
 /// Copies initialized child cursors and mix buffers, so cloning an active cursor
-/// can allocate. The source handles remain borrowed from the same order.
+/// can allocate. Spare buffer capacity is not preserved, so later seeks may allocate
+/// too. The source handles remain borrowed from the same order.
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
         Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end, deferred_from: self.deferred_from }
@@ -246,8 +248,7 @@ pub(crate) enum NodeCursor<'a> {
         offset: u64,
         next: u64,
     },
-    /// Only the current child has a cursor. Compatible buffers are recycled when
-    /// entering another child; no cache grows with the number of visited children.
+    /// Only the current child has a cursor. Changing children replaces its state.
     Concat {
         children: &'a [Node],
         offsets: &'a [u64],
@@ -288,54 +289,6 @@ pub(crate) enum NodeCursor<'a> {
 }
 
 impl<'a> NodeCursor<'a> {
-    /// Retarget storage to a new compiled node, then let the caller seek it. This
-    /// is used at concat boundaries and lazily for children of a retargeted mix.
-    /// Reuse only matching variants; all positional state is reset by `seek`.
-    fn rebind(&mut self, node: &'a Node) {
-        match (self, node) {
-            (Self::Source { src, offset, .. }, Node::Source { src: s, offset: o, .. }) => {
-                (*src, *offset) = (*s, *o);
-            }
-            (Self::Concat { children, offsets, .. }, Node::Concat { children: cs, offsets: os }) => {
-                *children = cs;
-                *offsets = os;
-            }
-            (Self::Mix(mix), Node::Mix { il, children }) => {
-                if !std::ptr::eq(mix.il, il) {
-                    mix.il = il;
-                    mix.children = children;
-                    mix.iter.rebind(il);
-                    mix.next_j.resize(children.len(), UNSEEKED);
-                    mix.next_j.fill(UNSEEKED);
-                    mix.cursors.resize_with(children.len(), || Self::Empty);
-                }
-            }
-            (Self::Shuffle(sh), Node::Shuffle { seed, salt, shape, child }) => {
-                if !std::ptr::eq(sh.child, &**child) {
-                    // Pointer-keyed seek states belong to the previous subtree.
-                    // Keep the header, but do not accumulate a cache of old subtrees.
-                    if let Some(mixes) = &mut sh.mixes {
-                        mixes.clear();
-                    }
-                }
-                (sh.seed, sh.salt, sh.shape, sh.child) = (*seed, *salt, *shape, child);
-            }
-            (Self::Repeat { child_len, depth, child, .. }, Node::Repeat { child_len: n, depth: d, child: c, .. }) => {
-                (*child_len, *depth) = (*n, *d);
-                child.rebind(c);
-            }
-            (Self::Slice { start, child }, Node::Slice { start: s, child: c, .. }) => {
-                *start = *s;
-                child.rebind(c);
-            }
-            (Self::Stride { step, offset, len, child, .. }, Node::Stride { step: s, offset: o, len: n, child: c }) => {
-                (*step, *offset, *len) = (*s, *o, *n);
-                child.rebind(c);
-            }
-            (cursor, node) => *cursor = Self::new(node),
-        }
-    }
-
     /// Creates a cursor over `node`; it must be positioned before drawing an element.
     fn new(node: &'a Node) -> Self {
         match node {
@@ -381,9 +334,10 @@ impl<'a> NodeCursor<'a> {
             NodeCursor::Source { offset, next, .. } => *next = *offset + pos,
             NodeCursor::Concat { children, offsets, idx, left, ctx: c, child } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
-                // A boundary skip may retain buffers bound to a different child.
+                if i != *idx || matches!(**child, Self::Empty) {
+                    **child = Self::new(&children[i]);
+                }
                 *idx = i;
-                child.rebind(&children[i]);
                 *left = offsets[i + 1] - pos;
                 *c = ctx;
                 child.seek(pos - offsets[i], ctx);
@@ -428,7 +382,7 @@ impl<'a> NodeCursor<'a> {
                 if *left == 0 {
                     *idx += 1;
                     *left = offsets[*idx + 1] - offsets[*idx];
-                    child.rebind(&children[*idx]);
+                    **child = Self::new(&children[*idx]);
                     child.seek(0, *ctx);
                 }
                 *left -= 1;
@@ -487,12 +441,10 @@ impl<'a> NodeCursor<'a> {
                     // The part containing `pos`, or the one ending there.
                     let i = offsets.partition_point(|&o| o < pos) - 1;
                     *idx = i;
-                    if offsets[i + 1] == pos {
-                        *left = 0;
-                        // Keep the previous buffers; next/seek will retarget them.
-                    } else {
-                        *left = offsets[i + 1] - pos;
-                        child.rebind(&children[i]);
+                    *left = offsets[i + 1] - pos;
+                    // At a boundary, defer building a child until it is entered.
+                    **child = if *left == 0 { Self::Empty } else { Self::new(&children[i]) };
+                    if *left > 0 {
                         child.seek(pos - offsets[i], *ctx);
                     }
                 }
@@ -535,7 +487,7 @@ impl<'a> NodeCursor<'a> {
 /// is unknown. Skipping the mix leaves child cursors behind; the next draw from a
 /// child catches it up. Children are stored inline to avoid an extra pointer load
 /// per tree level, at the cost of reserving a full cursor slot for every part.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct MixCursor<'a> {
     il: &'a Interleave,
     children: &'a [Node],
@@ -544,18 +496,6 @@ pub(crate) struct MixCursor<'a> {
     next_j: Vec<u64>,
     cursors: Vec<NodeCursor<'a>>,
     ctx: u64,
-}
-
-impl Clone for MixCursor<'_> {
-    fn clone(&self) -> Self {
-        // Retain spare slots from previously visited larger concat children.
-        // Removed child states stay removed; only their vector capacity survives.
-        let mut next_j = Vec::with_capacity(self.next_j.capacity());
-        next_j.extend_from_slice(&self.next_j);
-        let mut cursors = Vec::with_capacity(self.cursors.capacity());
-        cursors.extend_from_slice(&self.cursors);
-        Self { il: self.il, children: self.children, iter: self.iter.clone(), pos: self.pos, next_j, cursors, ctx: self.ctx }
-    }
 }
 
 impl<'a> MixCursor<'a> {
@@ -602,8 +542,9 @@ impl<'a> MixCursor<'a> {
             self.cursors[s].skip(j - at);
             return;
         }
-        // After recycling a mix, a slot may still refer to the previous child.
-        self.cursors[s].rebind(&self.children[s]);
+        if matches!(self.cursors[s], NodeCursor::Empty) {
+            self.cursors[s] = NodeCursor::new(&self.children[s]);
+        }
         self.cursors[s].seek(j, self.ctx);
     }
 

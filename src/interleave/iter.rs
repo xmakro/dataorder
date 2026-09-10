@@ -9,7 +9,7 @@ use std::ops::Range;
 
 /// Iterator returned by [`Interleave::iter`]; yields `(part, index_within_part)`.
 /// Further calls to [`seek`](Iter::seek) reuse its buffers.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Iter<'a> {
     il: &'a Interleave,
     tree: TournamentTree<Slot>,
@@ -18,29 +18,12 @@ pub(crate) struct Iter<'a> {
     remaining: u64,
 }
 
-impl Clone for Iter<'_> {
-    fn clone(&self) -> Self {
-        // Rebinding to a smaller mix shortens counts without relinquishing the
-        // storage a later seek into the larger mix can reuse.
-        let mut counts = Vec::with_capacity(self.counts.capacity());
-        counts.extend_from_slice(&self.counts);
-        Self { il: self.il, tree: self.tree.clone(), counts, remaining: self.remaining }
-    }
-}
-
 impl<'a> Iter<'a> {
     /// Seeks to `range.start` (the range is already validated) and builds the tree of heads.
     pub(crate) fn new(il: &'a Interleave, range: Range<u64>) -> Self {
         let mut iter = Iter { il, tree: TournamentTree::empty(), counts: Vec::new(), remaining: 0 };
         iter.seek(range);
         iter
-    }
-
-    /// Recycle seek buffers for a different immutable interleave. A nonempty seek
-    /// must follow before drawing: the old tournament still describes the old mix.
-    pub(crate) fn rebind(&mut self, il: &'a Interleave) {
-        self.il = il;
-        self.remaining = 0;
     }
 
     /// Repositions at an already validated range, reusing allocated buffers.

@@ -21,7 +21,7 @@ The default build has **no dependencies**.
 Combine these operations with sampling schedules, repeated epochs and worker sharding.
 The same configuration, source metadata and seed reproduce the same order within the
 crate's ordering compatibility policy. For restarts, also preserve the crate version
-and worker settings; see the [checkpoint example](examples/checkpoint.rs).
+and worker settings.
 
 [API documentation](https://docs.rs/dataorder) · [Runnable example](examples/demo.rs) ·
 [Performance](#performance)
@@ -210,6 +210,8 @@ resume existing checkpoints with their original crate version.
   Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
+  Changing concat children creates fresh state. Clones copy current state without
+  preserving spare capacity, so later seeks can allocate.
   `offset()` reports the next absolute position; `position(predicate)` is the usual
   consuming iterator search.
 
@@ -233,16 +235,6 @@ using JSON, also enable `serde_json/float_roundtrip` to preserve schedule parame
 See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
 for details.
 
-For a complete restart pattern, run `cargo run --example checkpoint --features serde`.
-The example stores the whole configuration as its identity, immutable source versions,
-lengths and salts, seeds, shard count/index, the next worker-local offset, and checkpoint
-and crate versions, using `dataorder::ORDERING_VERSION` to identify the linked crate.
-Restore compares these against independently loaded current metadata and rejects
-mismatches. Processing seeks once per batch and commits each successful callback,
-including after resume. Worker creation checks that its checkpoint can be parsed by
-the restore format: JSON's depth limit can reject configurations that the crate accepts.
-Applications should persist committed work rather than prefetched positions.
-
 ## Performance
 
 Run the [Criterion](https://criterion-rs.github.io/book/) benchmarks:
@@ -260,6 +252,11 @@ Configuration cloning is excluded from construction timing. Lookup positions are
 precomputed. Both seek measurements include the first item; fresh seek also
 includes cursor construction and destruction. Walk timing includes its initial
 seek and reports throughput in elements per second.
+
+The `cursor_state` group measures cloning after entering a smaller concat child,
+seeking the clone back, repeated seeks between children, and walking across children
+and epochs. Clone setup is excluded from `cloned_seek_back`; that measurement includes
+the seek, first item, and destruction of the clone.
 
 Criterion handles warmup, sampling and comparison with the previous run. To keep
 a baseline across changes, run these before and after the change on the same

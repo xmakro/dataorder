@@ -1,6 +1,6 @@
-//! The cost model, pinned by counting allocations: seeking an existing cursor allocates
-//! nothing, and a forward seek or `nth` across many repetitions or concat parts lands in
-//! the target one instead of entering every one on the way.
+//! The cost model, pinned by counting allocations: seeks within an initialized mix
+//! reuse its buffers, and a forward seek or `nth` across many repetitions or concat
+//! parts lands in the target one instead of entering every one on the way.
 
 use dataorder::{Order, Seq};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -61,7 +61,7 @@ fn unary_traversals_do_not_allocate_temporary_child_lists() {
 }
 
 #[test]
-fn concat_recycles_mix_buffers_across_epochs_and_seeks() {
+fn seeks_within_each_concat_child_reuse_mix_buffers() {
     use dataorder::Sampling;
     let part = |k, len, scheduled| {
         Seq::mix_with((0..k).map(|i| {
@@ -71,19 +71,18 @@ fn concat_recycles_mix_buffers_across_epochs_and_seeks() {
     let order = Order::new(Seq::concat([part(1000, 10, false), part(700, 20, true)]).repeat(3)).unwrap();
     let epoch = order.len() / 3;
     let mut cursor = order.iter(..).unwrap();
-    cursor.by_ref().take(epoch).for_each(|item| {
-        black_box(item);
-    });
-    let count = allocations(|| {
-        cursor.by_ref().take(epoch).for_each(|item| {
-            black_box(item);
+    for start in [0, 10_000, epoch, epoch + 10_000] {
+        cursor.seek(start).unwrap();
+        cursor.next();
+        let checks = [start + 50, start + 1, start + 49].map(|pos| (pos, order.get(pos)));
+        let count = allocations(|| {
+            for (pos, expected) in checks {
+                cursor.seek(pos).unwrap();
+                assert_eq!(cursor.next(), expected);
+            }
         });
-        for pos in [10_000, 0, 17_001, epoch, 9999, 10_000, 10_001] {
-            cursor.seek(pos).unwrap();
-            black_box(cursor.next());
-        }
-    });
-    assert_eq!(count, 0, "recycled mix buffers allocated {count} times");
+        assert_eq!(count, 0, "seeks within a concat child allocated {count} times");
+    }
 }
 
 /// A mix builds a part's cursor when the part is first drawn from (nothing to allocate for
@@ -121,21 +120,28 @@ fn seeking_backward_revives_parts_without_allocating() {
     assert_eq!(cursor.next().map(|item| (*item.source, item.record_index)), Some(element(&order, 0)));
 }
 
-/// Cloning a partially exhausted mix retains the spare capacity of its seek buffers.
+/// A clone can grow new buffers on its first backward seek, then reuse them.
 #[test]
-fn cloned_cursors_revive_parts_without_allocating() {
+fn cloned_cursors_revive_parts_and_reuse_new_buffers() {
     let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
     let mut cursor = order.iter(order.len() - 1..).unwrap();
     cursor.next();
     let mut cloned = cursor.clone();
-    let count = allocations(|| cloned.seek(0).unwrap());
-    assert_eq!(count, 0, "a cloned cursor allocated {count} times when reviving parts");
+    cloned.seek(0).unwrap();
     assert_eq!(cloned.next().map(|item| (*item.source, item.record_index)), Some(element(&order, 0)));
+    let checks = [order.len() - 1, 0, 100, order.len() / 3].map(|pos| (pos, order.get(pos)));
+    let count = allocations(|| {
+        for (pos, expected) in checks {
+            cloned.seek(pos).unwrap();
+            assert_eq!(cloned.next(), expected);
+        }
+    });
+    assert_eq!(count, 0, "a warmed clone allocated {count} times");
     assert_eq!(cursor.next(), None);
 }
 
 #[test]
-fn cloned_cursors_preserve_capacity_after_rebinding_to_smaller_mixes() {
+fn cloned_cursors_cross_concat_children_independently() {
     let part = |k| Seq::mix((0..k).map(|i| Seq::source(10).shuffle(i as u64)));
     let order = Order::new(Seq::concat([part(1000), part(2)]).repeat(2)).unwrap();
     let mut cursor = order.iter(..).unwrap();
@@ -145,13 +151,10 @@ fn cloned_cursors_preserve_capacity_after_rebinding_to_smaller_mixes() {
     let mut cloned = cursor.clone();
     let expected = order.get(0).unwrap();
     let repeated = order.get(10_020).unwrap();
-    let count = allocations(|| {
-        cloned.seek(0).unwrap();
-        assert_eq!(cloned.next(), Some(expected));
-        cloned.set_range(10_020..).unwrap();
-        assert_eq!(cloned.next(), Some(repeated));
-    });
-    assert_eq!(count, 0, "a cloned cursor lost reusable capacity: {count} allocations");
+    cloned.seek(0).unwrap();
+    assert_eq!(cloned.next(), Some(expected));
+    cloned.set_range(10_020..).unwrap();
+    assert_eq!(cloned.next(), Some(repeated));
     assert_eq!(cursor.offset(), 10_001);
     assert_eq!(cursor.next(), order.get(10_001));
 }
@@ -281,6 +284,9 @@ fn shuffles_reuse_every_reached_mix_including_concat_children() {
     let mut cursor = order.iter(..).unwrap();
     cursor.by_ref().for_each(drop); // Reach all cached mixes and exhaust the cursor.
     let mut clone = cursor.clone();
+    // A clone warms its own seek scratch before allocation-free reuse.
+    clone.set_range(..).unwrap();
+    clone.by_ref().for_each(drop);
     for c in [&mut cursor, &mut clone] {
         let count = allocations(|| {
             c.set_range(..).unwrap();

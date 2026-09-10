@@ -190,10 +190,9 @@
 //!
 //! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing
-//! buffers, including in a cloned cursor, though entering a new child can allocate.
-//! Concat transitions recycle compatible child buffers, including mix seek state.
-//! Retained capacities can reflect the largest previously visited compatible child;
-//! incompatible variants and removed child states are dropped rather than cached.
+//! buffers within the current child. Concat transitions replace child state, and
+//! entering a new mix part can allocate. Cloning copies current state without
+//! preserving spare buffer capacity; subsequent seeks may allocate new buffers.
 //! `last()` reuses initialized state; selecting an empty range defers repositioning.
 //! For benchmark workloads and commands, see the
 //! [README's performance section](https://github.com/xmakro/dataorder/blob/main/README.md#performance).
