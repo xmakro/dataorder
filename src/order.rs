@@ -132,7 +132,7 @@ impl<T: Source> Order<T> {
     /// ```
     ///
     /// # Errors
-    /// Invalid shard bounds, skips and takes past the end, a zero step,
+    /// Skips and takes past the end, a zero step,
     /// lengths that overflow, nesting deeper than [`MAX_DEPTH`], and schedules the
     /// mix rejects; see [`ErrorKind`]. The error names the node it was found at.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
@@ -390,8 +390,7 @@ impl<T: Source> Compiler<T> {
             Seq::Cycle { len, inner } => self.cycled(len, *inner, repeats, level),
             Seq::Skip { n, inner } => self.skip(n, *inner, repeats, level),
             Seq::Take { n, inner } => self.take(n, *inner, repeats, level),
-            Seq::StepBy { step, inner } => self.strided(step, 0, *inner, repeats, level),
-            Seq::Shard { count, index, inner } => self.sharded(count, index, *inner, repeats, level),
+            Seq::StepBy { step, inner } => self.stepped(step, *inner, repeats, level),
         }
     }
 
@@ -482,22 +481,14 @@ impl<T: Source> Compiler<T> {
         Ok(slice(child, 0, n as u64))
     }
 
-    fn sharded(&mut self, count: usize, index: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
-        if index >= count {
-            return Err(self.err(ErrorKind::InvalidShard { count, index }));
-        }
-        self.strided(count, index, inner, repeats, level)
-    }
-
-    fn strided(&mut self, step: usize, offset: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
+    fn stepped(&mut self, step: usize, inner: Seq<T>, repeats: u32, level: u32) -> Result<Node, Error> {
         if step == 0 {
             return Err(self.err(ErrorKind::ZeroStep));
         }
         let child = self.child(0, inner, repeats, level)?;
-        let (step, offset) = (step as u64, offset as u64);
-        let n = child.len();
-        let len = if offset >= n { 0 } else { (n - offset - 1) / step + 1 };
-        Ok(stride(child, step, offset, len))
+        let step = step as u64;
+        let len = child.len().div_ceil(step);
+        Ok(stride(child, step, len))
     }
 
     /// The mix of compiled `children` with their schedules; validates the schedules even
@@ -634,22 +625,20 @@ fn slice(child: Node, start: u64, len: u64) -> Node {
     }
 }
 
-/// Positions `offset, offset + step, …` of `child`, `len` of them (as many as exist, which
+/// Positions `0, step, 2·step, …` of `child`, `len` of them (as many as exist, which
 /// the caller has counted), folded where that is exact: one position or a step of one is a
 /// slice, and a stride over a slice or over another stride is one stride (the products
 /// cannot overflow, since with `len ≥ 2` they are bounded by the child's length).
-fn stride(child: Node, step: u64, offset: u64, len: u64) -> Node {
+fn stride(child: Node, step: u64, len: u64) -> Node {
     if len == 0 {
         return Node::Empty;
     }
     if step == 1 || len == 1 {
-        return slice(child, offset, len);
+        return slice(child, 0, len);
     }
     match child {
-        Node::Slice { start, child, .. } => Node::Stride { step, offset: start + offset, len, child },
-        Node::Stride { step: inner, offset: base, child, .. } => {
-            Node::Stride { step: step * inner, offset: base + offset * inner, len, child }
-        }
-        child => Node::Stride { step, offset, len, child: Box::new(child) },
+        Node::Slice { start, child, .. } => Node::Stride { step, offset: start, len, child },
+        Node::Stride { step: inner, offset: base, child, .. } => Node::Stride { step: step * inner, offset: base, len, child },
+        child => Node::Stride { step, offset: 0, len, child: Box::new(child) },
     }
 }

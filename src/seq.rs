@@ -21,8 +21,8 @@ use std::convert::Infallible;
 /// # Errors
 ///
 /// [`Order::new`](crate::Order::new) reports invalid configurations as an
-/// [`Error`](crate::Error) with the path to the invalid node. This includes invalid
-/// shard bounds, out-of-range skips and takes, zero steps, overflow, invalid schedules, and
+/// [`Error`](crate::Error) with the path to the invalid node. This includes
+/// out-of-range skips and takes, zero steps, overflow, invalid schedules, and
 /// excessive depth. All sequence builders accept any `T` and defer these checks
 /// until the order is built.
 ///
@@ -109,16 +109,6 @@ pub enum Seq<T> {
         /// Distance between kept positions.
         step: usize,
         /// The sequence to step through.
-        inner: Box<Self>,
-    },
-    /// Positions `index, index + count, …` of `inner`.
-    /// `index` must be less than `count` when the order is built.
-    Shard {
-        /// Number of workers.
-        count: usize,
-        /// Worker index.
-        index: usize,
-        /// The sequence to shard.
         inner: Box<Self>,
     },
 }
@@ -301,47 +291,29 @@ impl<T> Seq<T> {
     /// assert_eq!(order.iter(..)?.map(|item| item.record_index).collect::<Vec<_>>(), [1, 5, 9]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// # Workers
+    ///
+    /// Use `skip(index).step_by(count)` to assign positions `index, index + count, …`
+    /// to a worker. Check `index < count` in the calling code. Since `skip` rejects
+    /// positions past the end, use `skip(index.min(len))` when the sequence length
+    /// is known and workers beyond it should receive an empty sequence.
+    ///
+    /// Applying this to a completed mix partitions its global positions exactly
+    /// once across workers. Worker lengths can differ by one, and their dataset
+    /// mixtures need not be balanced: two equal interleaved parts split across
+    /// two workers send one part exclusively to each worker. Shuffling the mix
+    /// first breaks that pattern but scatters its scheduled phases and adds a
+    /// mix seek per element.
+    ///
+    /// Each worker advances the mix past unselected positions, or seeks for long
+    /// skips. Across `count` workers this can cost up to `count` times the global
+    /// mix's interleaving work. Partitioning each part before mixing can reduce
+    /// this work, but changes the global order and how virtual time maps to output
+    /// positions because each part's count is rounded separately.
     #[must_use]
     pub fn step_by(self, step: usize) -> Self {
         Self::StepBy { step, inner: Box::new(self) }
-    }
-
-    /// Shard `index` of `count`: positions `index, index + count, …`. All shards of one
-    /// sequence together cover it exactly once, and shard `i` holds position `i` of every
-    /// consecutive block of `count` positions. This preserves the global schedule
-    /// across workers collectively; it does not balance each worker's dataset mix.
-    /// A shard of a sequence shorter than `count` may be empty, and shard lengths
-    /// can differ by one when the sequence length is not divisible by `count`.
-    ///
-    /// For two equal uniform parts, the mix alternates A, B, A, B. Two workers then
-    /// receive only A and only B respectively, even if each part was shuffled.
-    /// Shuffling the completed mix before sharding breaks this pattern, but scatters
-    /// scheduled phases and pays a mix seek per element. Sharding each part before
-    /// mixing can give each worker both datasets, but changes the global order and
-    /// the mapping from virtual time to output progress.
-    ///
-    /// Sharding a mix keeps one in `count` interleaved positions. The mix advances
-    /// past unselected positions, or seeks for long skips. Across `count` workers,
-    /// this can cost up to `count` times the global mix's interleaving work.
-    ///
-    /// Sharding each part before mixing can reduce that work, but produces a
-    /// different order. Rounding each part's length changes its contribution and
-    /// can move virtual-clock breakpoints to different output positions on each
-    /// worker. Shard the completed mix to preserve its global position partition.
-    ///
-    /// ```
-    /// use dataorder::{Order, Seq};
-    /// let seq = Seq::source(10).shuffle(1);
-    /// let all: Vec<usize> = Order::new(seq.clone())?.iter(..)?.map(|item| item.record_index).collect();
-    /// let shard: Vec<usize> = Order::new(seq.shard(4, 1))?.iter(..)?.map(|item| item.record_index).collect();
-    /// assert_eq!(shard, [all[1], all[5], all[9]]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// [`Order::new`](crate::Order::new) rejects `index >= count`, including `count == 0`.
-    #[must_use]
-    pub fn shard(self, count: usize, index: usize) -> Self {
-        Self::Shard { count, index, inner: Box::new(self) }
     }
 
     /// Transforms each source with `f`, preserving the sequence structure.
@@ -403,6 +375,5 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
         Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
         Seq::StepBy { step, inner } => map_sources(*inner, f)?.step_by(step),
-        Seq::Shard { count, index, inner } => map_sources(*inner, f)?.shard(count, index),
     })
 }

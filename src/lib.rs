@@ -68,7 +68,6 @@
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
 //! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
-//! | [`Shard`](Seq::Shard) | Number of worker positions | Child position `index + p × count` |
 //! | [`StepBy`](Seq::StepBy) | `⌈n / step⌉` | Child position `p × step` |
 //!
 //! A mix uses every element of every part once. Set each part's exact count with
@@ -83,9 +82,9 @@
 //! [`Sampling`] for the conversion and an example. Overlaps and gaps are allowed.
 //! Schedules belong to their mix:
 //! repeating a mix restarts its schedules each epoch. To schedule over several epochs,
-//! repeat the parts and mix them once. [`Seq::shard`] partitions the resulting positions
-//! among workers; its documentation explains the cost and the difference between
-//! sharding a mix and sharding its parts. The global position partition does not
+//! repeat the parts and mix them once. `skip(index).step_by(count)` partitions the
+//! resulting positions among workers; see [`Seq::step_by`] for worker configuration,
+//! costs, and the difference between partitioning a mix and partitioning its parts. The global position partition does not
 //! guarantee a balanced dataset mix on each worker: two equal interleaved parts
 //! sharded two ways send one part exclusively to each worker.
 //!
@@ -165,7 +164,7 @@
 //! | Concat | `O(log k)` search over `k` part offsets |
 //! | Shuffle | Constant average permutation cost; an individual position can take longer |
 //! | Mix | A seek over its parts, with the cost described below |
-//! | Repeat, skip, take, step by, shard | Position arithmetic |
+//! | Repeat, skip, take, step by | Position arithmetic |
 //!
 //! For a mix with `k` non-empty parts, seeking counts elements below a trial virtual
 //! time, then replays at most `2k` tournament steps. It tries `position / N` first,
@@ -187,7 +186,7 @@
 //! Stepping through a sequence skips unselected child positions. Mixes advance their
 //! interleave for short skips and seek for longer ones. Sharding a mix across `count`
 //! workers can therefore multiply the total interleaving work by up to `count`;
-//! see [`Seq::shard`].
+//! see [`Seq::step_by`].
 //!
 //! Cursor allocations are deferred until needed. Empty ranges and `count()` allocate
 //! nothing. [`Cursor::seek`], [`Cursor::set_range`] and [`Iterator::nth`] reuse existing

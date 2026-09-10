@@ -69,9 +69,8 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
             }
         }
         Seq::StepBy { step: 1, inner } => reachable(inner, range, out),
-        Seq::Shard { count: 1, inner, .. } => reachable(inner, range, out),
         Seq::Cycle { len, inner } => cycled(inner, *len, out),
-        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::StepBy { inner, .. } | Seq::Shard { inner, .. } => whole(inner, out),
+        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::StepBy { inner, .. } => whole(inner, out),
     }
 }
 
@@ -195,12 +194,6 @@ fn eval_at(seq: &Seq<Src>, ctx: u64, depth: u32) -> Result<Vec<(u32, usize)>, Er
                 return Err(root(ErrorKind::TakeOutOfRange { n: *n, len: v.len() as u64 }));
             }
             v[..*n].to_vec()
-        }
-        Seq::Shard { count, index, inner } => {
-            if index >= count {
-                return Err(root(ErrorKind::InvalidShard { count: *count, index: *index }));
-            }
-            eval_at(inner, ctx, depth)?.into_iter().skip(*index).step_by(*count).collect()
         }
         Seq::StepBy { step, inner } => {
             if *step == 0 {
@@ -454,7 +447,7 @@ fn shards_partition_the_sequence() {
     let all = ids(order.iter(0..order.len()).unwrap());
     let mut from_shards = Vec::new();
     for w in 0..8 {
-        let shard = Order::new(base.clone().shard(8, w)).unwrap();
+        let shard = Order::new(base.clone().skip(w).step_by(8)).unwrap();
         let elems = ids(shard.iter(0..shard.len()).unwrap());
         for (i, &e) in elems.iter().enumerate() {
             assert_eq!(e, all[w + 8 * i]);
@@ -480,7 +473,7 @@ fn map_keeps_the_order() {
             self.salt
         }
     }
-    let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).shard(3, 1);
+    let seq = Seq::mix([src(0, 700).shuffle(1).repeat(2), Seq::concat([src(1, 50), src(2, 120).shuffle(2)])]).skip(1).step_by(3);
     let order = Order::new(seq.clone()).unwrap();
     let loaded = Order::new(seq.clone().map(|s| Loaded { salt: s.salt(), len: s.len })).unwrap();
     assert_eq!(loaded.sources().iter().map(|l| l.len).collect::<Vec<_>>(), [700, 50, 120]);
@@ -634,12 +627,11 @@ fn empty_parts_do_not_affect_shuffles_above() {
     let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter(..).unwrap());
     assert_ne!(with(src(1, 1)), base);
     assert_ne!(with(src(0, 1)), base);
-    // Sharding does not cut parts away, even ones it never reaches; an explicit
-    // skip removes preceding concat parts before deriving a later shuffle salt.
+    // An explicit skip removes preceding concat parts before deriving a later
+    // shuffle salt.
     let strided = |seq: Seq<Src>| ids(Order::new(seq).unwrap().iter(..).unwrap());
     assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2)), strided(x().step_by(2)));
     assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2).shuffle(1)), strided(x().step_by(2).shuffle(1)));
-    assert_ne!(strided(Seq::concat([src(1, 1), x()]).shard(2, 1).shuffle(1)), strided(x().step_by(2).shuffle(1)));
 }
 
 /// The folds: what compiles to a single node.
@@ -649,9 +641,9 @@ fn folds() {
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
     let a = || src(0, 100);
     assert!(
-        matches!(root(a().shard(8, 1).shard(4, 1)), Node::Stride { step: 32, offset: 9, len: 3, ref child } if matches!(**child, Node::Source { .. }))
+        matches!(root(a().skip(1).step_by(8).skip(1).step_by(4)), Node::Stride { step: 32, offset: 8, len: 3, ref child } if matches!(**child, Node::Source { offset: 1, .. }))
     );
-    assert!(matches!(root(a().shard(8, 1).shard(4, 1).shard(2, 1)), Node::Source { offset: 41, len: 1, .. }));
+    assert!(matches!(root(a().skip(1).step_by(8).skip(1).step_by(4).skip(1).step_by(2)), Node::Source { offset: 41, len: 1, .. }));
     assert!(
         matches!(root(a().shuffle(1).skip(10).skip(2).step_by(3)), Node::Stride { step: 3, offset: 12, len: 30, ref child } if matches!(**child, Node::Shuffle { .. }))
     );
@@ -839,7 +831,7 @@ fn orders_longer_than_usize_are_rejected() {
         let intermediate = || Seq::concat([src(0, usize::MAX), src(1, 1)]);
         let tail = Order::new(intermediate().skip(usize::MAX)).unwrap();
         assert_eq!(ids(tail.iter(..).unwrap()), [(1, 0)]);
-        assert_eq!(Order::new(intermediate().shard(2, 0)).unwrap().len(), (usize::MAX / 2) + 1);
+        assert_eq!(Order::new(intermediate().skip(0).step_by(2)).unwrap().len(), (usize::MAX / 2) + 1);
         let err = Order::new(Seq::concat([src(0, usize::MAX), src(1, 1)]).skip(usize::MAX).skip(3)).unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 3, len: 1 });
     }
@@ -847,7 +839,7 @@ fn orders_longer_than_usize_are_rejected() {
 
 #[test]
 fn cloned_cursor_continues_independently() {
-    let order = Order::new(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).shard(3, 1)).unwrap();
+    let order = Order::new(Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2)]).skip(1).step_by(3)).unwrap();
     let n = order.len();
     let mut c = order.iter(0..n).unwrap();
     let head = ids(c.by_ref().take(100));

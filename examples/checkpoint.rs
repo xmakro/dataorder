@@ -43,7 +43,10 @@ impl Configuration {
     // worker's shard: on 32-bit targets the unsharded sequence can exceed usize
     // even though this worker's positions fit.
     fn order(&self) -> Result<Order<Dataset>, String> {
-        let seq = self.sequence.clone().shard(self.workers, self.worker);
+        if self.worker >= self.workers {
+            return Err(format!("worker index {} out of range for {} workers", self.worker, self.workers));
+        }
+        let seq = self.sequence.clone().skip(self.worker).step_by(self.workers);
         Order::with_seed(seq, self.seed).map_err(|e| e.to_string())
     }
 }

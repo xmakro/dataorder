@@ -130,13 +130,6 @@ impl fmt::Display for SamplingDetail {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    /// A worker index is outside `0..count`, including a zero worker count.
-    InvalidShard {
-        /// Number of workers.
-        count: usize,
-        /// Requested worker index.
-        index: usize,
-    },
     /// A `Skip` of `n` positions from a sequence of `len < n`. The length is that of an
     /// intermediate node, which may exceed `usize` on a 32-bit target.
     SkipOutOfRange {
@@ -187,7 +180,6 @@ pub enum ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidShard { count, index } => write!(f, "shard index {index} out of range for {count} shards"),
             Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
             Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
             Self::ZeroStep => write!(f, "step is zero"),

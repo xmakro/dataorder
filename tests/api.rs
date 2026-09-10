@@ -41,7 +41,8 @@ fn builders_accept_unresolved_sources() {
             .step_by(2)
             .skip(1)
             .take(8)
-            .shard(3, 1)
+            .skip(1)
+            .step_by(3)
     }
     struct Unresolved(&'static str);
     let seq = configuration(Unresolved("10"), Unresolved("20"));
@@ -64,8 +65,6 @@ fn configuration_errors_are_validated_only_when_compiling() {
         (Seq::source("data").step_by(0), ErrorKind::ZeroStep),
         (Seq::source("data").skip(11), ErrorKind::SkipOutOfRange { n: 11, len: 10 }),
         (Seq::source("data").take(11), ErrorKind::TakeOutOfRange { n: 11, len: 10 }),
-        (Seq::source("data").shard(0, 0), ErrorKind::InvalidShard { count: 0, index: 0 }),
-        (Seq::source("data").shard(2, 2), ErrorKind::InvalidShard { count: 2, index: 2 }),
     ];
     for (seq, expected) in invalid {
         // Mapping must preserve invalid nodes, including in an empty subtree.
@@ -79,9 +78,15 @@ fn configuration_errors_are_validated_only_when_compiling() {
 }
 
 #[test]
-fn step_by_and_shard_count_as_configuration_nodes() {
-    for step_by in [false, true] {
-        let chain = |levels| (1..levels).fold(Seq::source(10), |seq, _| if step_by { seq.step_by(1) } else { seq.shard(1, 0) });
+fn position_operations_count_as_configuration_nodes() {
+    for operation in ["skip", "take", "step_by"] {
+        let chain = |levels| {
+            (1..levels).fold(Seq::source(10), |seq, _| match operation {
+                "skip" => seq.skip(0),
+                "take" => seq.take(10),
+                _ => seq.step_by(1),
+            })
+        };
         assert_eq!(Order::new(chain(dataorder::MAX_DEPTH)).unwrap().len(), 10);
         let error = Order::new(chain(dataorder::MAX_DEPTH + 1)).unwrap_err();
         assert_eq!(error.kind(), &ErrorKind::TooDeep);
@@ -89,23 +94,44 @@ fn step_by_and_shard_count_as_configuration_nodes() {
     }
 }
 
+#[test]
+fn workers_partition_short_sequences_with_explicit_offsets() {
+    let workers = 4;
+    for len in [0, 1, 3, 10] {
+        let mut combined = Vec::new();
+        for worker in 0..workers {
+            let seq = Seq::source(len).skip(worker.min(len)).step_by(workers);
+            let order = Order::new(seq).unwrap();
+            let positions = order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>();
+            assert_eq!(positions, (worker..len).step_by(workers).collect::<Vec<_>>());
+            combined.extend(positions);
+        }
+        combined.sort_unstable();
+        assert_eq!(combined, (0..len).collect::<Vec<_>>());
+    }
+    // Offsets are sequence positions; they need not be smaller than the step.
+    let order = Order::new(Seq::source(10).skip(5).step_by(2)).unwrap();
+    assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [5, 7, 9]);
+    assert_eq!(Order::new(Seq::source(3).skip(4).step_by(workers)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 4, len: 3 });
+}
+
 #[cfg(feature = "serde")]
 #[test]
 fn unresolved_position_operations_round_trip() {
-    let seq = Seq::source("data").skip(2).take(7).step_by(3).shard(2, 1);
+    let seq = Seq::source("data").skip(2).take(7).step_by(3).skip(1).step_by(2);
     let json = serde_json::to_string(&seq).unwrap();
     assert_eq!(
         json,
-        r#"{"Shard":{"count":2,"index":1,"inner":{"StepBy":{"step":3,"inner":{"Take":{"n":7,"inner":{"Skip":{"n":2,"inner":{"Source":"data"}}}}}}}}}"#
+        r#"{"StepBy":{"step":2,"inner":{"Skip":{"n":1,"inner":{"StepBy":{"step":3,"inner":{"Take":{"n":7,"inner":{"Skip":{"n":2,"inner":{"Source":"data"}}}}}}}}}}}"#
     );
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
     let order = Order::new(back.map(|_| 10usize)).unwrap();
     assert_eq!(order.iter(..).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), [5]);
-    let seq = Seq::source("data").step_by(0).shard(0, 0);
+    let seq = Seq::source("data").skip(11).step_by(0);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq.map(str::to_owned));
-    assert_eq!(Order::new(back.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::InvalidShard { count: 0, index: 0 });
+    assert_eq!(Order::new(back.map(|_| 10usize)).unwrap_err().kind(), &ErrorKind::ZeroStep);
 }
 
 #[test]
@@ -157,7 +183,7 @@ fn errors_name_kind_and_path() {
 
 #[test]
 fn cursors_seek_skip_and_clone() {
-    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).shard(3, 2)).unwrap();
+    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).skip(2).step_by(3)).unwrap();
     let all = names(order.iter(..).unwrap());
     assert_eq!(all.len(), order.len());
     let mut cursor = order.iter(..).unwrap();
@@ -210,7 +236,8 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let seq = Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).shard(2, 1);
+    let seq =
+        Seq::mix_with([(Seq::source(10).shuffle(1), Sampling::Uniform), (Seq::source(5), Sampling::ramp(0.2, 0.6))]).skip(1).step_by(2);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
@@ -237,6 +264,7 @@ fn serde_round_trip() {
     for json in [
         r#"{"Weighted":{"total":9,"parts":[]}}"#,
         r#"{"Stride":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
+        r#"{"Shard":{"count":2,"index":1,"inner":{"Source":4}}}"#,
         r#"{"Slice":{"start":"Unbounded","end":"Unbounded","inner":{"Source":4}}}"#,
         r#"{"StepBy":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
     ] {

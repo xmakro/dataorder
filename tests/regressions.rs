@@ -72,7 +72,6 @@ fn isolated_case() {
             .spawn(|| {
                 let deep = || (0..MAX_DEPTH).fold(Seq::source(1usize), |s, _| s.take(1));
                 assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
-                assert!(Order::new(deep().shard(0, 0)).is_err());
                 assert!(Order::new(deep().step_by(0)).is_err());
                 assert_eq!(Order::new(Seq::source(3)).unwrap().len(), 3);
             })
@@ -195,10 +194,13 @@ fn nested_slice_boundaries_remove_unreachable_salts() {
 fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
     let global = Seq::mix_with([(Seq::source(3), Sampling::Uniform), (Seq::source(1), Sampling::delayed(0.75))]);
     assert_eq!(Order::new(global.clone()).unwrap().len(), 4);
-    let shard = Seq::mix_with([(Seq::source(3).shard(2, 0), Sampling::Uniform), (Seq::source(1).shard(2, 0), Sampling::delayed(0.75))]);
+    let shard = Seq::mix_with([
+        (Seq::source(3).skip(0).step_by(2), Sampling::Uniform),
+        (Seq::source(1).skip(0).step_by(2), Sampling::delayed(0.75)),
+    ]);
     assert_eq!(Order::new(shard).unwrap().len(), 3);
     for worker in 0..2 {
-        assert_eq!(Order::new(global.clone().shard(2, worker)).unwrap().len(), 2);
+        assert_eq!(Order::new(global.clone().skip(worker).step_by(2)).unwrap().len(), 2);
     }
 }
 

@@ -15,14 +15,6 @@ fn standard_iterator_position_is_available() {
 #[test]
 #[allow(clippy::reversed_empty_ranges)]
 fn checked_access_preserves_cursor_on_errors() {
-    for (count, index) in [(0, 0), (2, 2), (1, usize::MAX)] {
-        let error = Order::new(Seq::source(10).shard(count, index)).unwrap_err();
-        assert_eq!(error.kind(), &ErrorKind::InvalidShard { count, index });
-        assert_eq!(error.to_string(), format!("shard index {index} out of range for {count} shards (at the root)"));
-    }
-    let shard = Order::new(Seq::source(10).shard(3, 1)).unwrap();
-    let stride = Order::new(Seq::source(10).skip(1).step_by(3)).unwrap();
-    assert!(shard.iter(..).unwrap().eq(stride.iter(..).unwrap()));
     let order = Order::new(Seq::mix([Seq::source(10).shuffle(1), Seq::source(7)])).unwrap();
     assert_eq!(order.get(16), (&order).into_iter().nth(16));
     assert_eq!(order.get(17), None);
@@ -108,7 +100,7 @@ fn items_copy_without_cloning_source_handles() {
 fn sharding_preserves_global_partition_not_worker_mixture() {
     let seq = Seq::mix([Seq::source(4).shuffle(1), Seq::source(4).shuffle(2)]);
     for worker in 0..2 {
-        let order = Order::new(seq.clone().shard(2, worker)).unwrap();
+        let order = Order::new(seq.clone().skip(worker).step_by(2)).unwrap();
         assert!(order.iter(..).unwrap().all(|item| item.source_ordinal == worker));
     }
 }

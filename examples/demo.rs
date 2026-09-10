@@ -39,7 +39,7 @@ fn main() {
 
     println!("\nfour shards, first 10 elements each (shard w holds every 4th element, offset w):");
     for w in 0..4 {
-        let shard = Order::new(seq.clone().shard(4, w)).unwrap();
+        let shard = Order::new(seq.clone().skip(w).step_by(4)).unwrap();
         let part: Vec<String> = shard.iter(0..10).unwrap().map(|item| format!("{}{}", item.source.name, item.record_index)).collect();
         println!("  shard {w}: {}", part.join(" "));
     }

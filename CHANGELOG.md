@@ -4,10 +4,8 @@
 
 - **Breaking:** remove `Seq::check` and `Seq::validate`; all sequence builders
   accept any `T` and defer configuration checks to `Order::new` or
-  `Order::with_seed`, which require `T: Source`. `Seq::shard` now returns `Seq`
-  directly and stores a `Shard { count, index, inner }` variant. Invalid worker
-  bounds produce `ErrorKind::InvalidShard` with a node path during compilation.
-  `BoundsError` is reserved for order and cursor access.
+  `Order::with_seed`, which require `T: Source`. `BoundsError` is reserved for
+  order and cursor access.
 
 - **Breaking:** replace `Seq::stride(step, offset)` and `Seq::Stride` with
   `skip(offset).step_by(step)` and `Seq::StepBy { step, inner }`. Remove
@@ -17,6 +15,14 @@
   also remove preceding concatenation sources from a following shuffle's salt.
   Serialized `Stride` and `Slice` configurations must be rewritten using these
   operations; they are rejected during deserialization.
+
+- **Breaking:** remove `Seq::shard`, `Seq::Shard` and `ErrorKind::InvalidShard`.
+  Partition worker positions with `skip(index).step_by(count)` and check
+  `index < count` in the caller. Each operation adds a level of configuration
+  depth. Unlike the former `shard`, a skip past the end is an error; for a known
+  length, use `skip(index.min(len))` when those workers should be empty. As with
+  the `stride` migration, a skip can change a following shuffle's salt by removing
+  preceding concatenation sources. Serialized `Shard` configurations are rejected.
 
 - **Breaking:** use `Item { source_ordinal, source, record_index }` for both
   `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,

@@ -118,7 +118,7 @@ so you can nest mixes and concatenations.
 | Repeat or truncate to an exact length | `.cycle(len)` |
 | Keep a range of positions | `.skip(start).take(len)` |
 | Keep every nth position from an offset | `.skip(offset).step_by(step)` |
-| Assign every nth position to a worker | `.shard(worker_count, worker_index)` |
+| Assign every nth position to a worker | `.skip(worker_index).step_by(worker_count)` |
 
 A mix uses every input element once, drawing more often from longer sequences.
 Choose each dataset's count with `.cycle(count)`, which repeats or truncates the
@@ -192,8 +192,10 @@ resume existing checkpoints with their original crate version.
 - **Composition matters.** Shuffle each input sequence before mixing for efficient
   iteration. To make a schedule span several epochs, repeat its input sequence;
   repeating the whole mix restarts its schedules each epoch.
-- **Workers partition positions.** Apply `.shard(count, index)` to the completed
-  sequence to divide its positions without overlap. The global schedule is preserved
+- **Workers partition positions.** Apply `.skip(index).step_by(count)` to the
+  completed sequence to divide its positions without overlap. Check `index < count`
+  in your calling code. For a known sequence length `len`, use `skip(index.min(len))`
+  if workers past its end should receive no positions. The global schedule is preserved
   collectively; each worker need not receive a balanced dataset mix. Two equal
   interleaved datasets split across two workers send one dataset to each worker,
   even when both inputs are shuffled. Shuffling the completed mix breaks that pattern
@@ -209,7 +211,6 @@ resume existing checkpoints with their original crate version.
   kind and node path. `take` and `skip` past the end are errors. `get`
   returns `None` for invalid positions. `iter`, `seek` and `set_range` return
   `Result` for range operations. `step_by(0)` is an error when the order is built.
-  `Seq::shard` stores its worker count and index for `Order::new` to validate.
   Failed cursor operations leave their state unchanged.
 - **Reuse cursors.** `iter` is best for consecutive positions. For repeated seeks or
   ranges, reuse its `Cursor` with `seek` or `set_range` to reuse allocated buffers.
