@@ -171,14 +171,19 @@ impl Source for Named {
 }
 
 #[test]
-fn nested_slice_boundaries_remove_unreachable_salts() {
+fn nested_slice_boundaries_preserve_configuration_salts() {
     let s = |salt| Seq::source(Named { salt, len: 10 });
     let make = |removed| Seq::concat([Seq::concat([s(removed), s(1), s(2)]).skip(1), s(3)]).skip(15);
     let tail = |removed| Seq::concat([s(1), Seq::concat([s(2), s(3), s(removed)]).take(29)]).take(25);
     for (a, b) in [(make(0), make(999)), (tail(0), tail(999))] {
         let a = Order::new(a.shuffle(1)).unwrap();
         let b = Order::new(b.shuffle(1)).unwrap();
-        assert!(a.iter().map(|item| (item.source.salt, item.record_index)).eq(b.iter().map(|item| (item.source.salt, item.record_index))));
+        let mut a_items: Vec<_> = a.iter().map(|item| (item.source.salt, item.record_index)).collect();
+        let mut b_items: Vec<_> = b.iter().map(|item| (item.source.salt, item.record_index)).collect();
+        assert_ne!(a_items, b_items);
+        a_items.sort_unstable();
+        b_items.sort_unstable();
+        assert_eq!(a_items, b_items);
         assert_eq!(a.sources().len(), 4);
     }
 }

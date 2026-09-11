@@ -44,6 +44,8 @@ pub trait Source {
     /// Sources with the same length and salt shuffle alike under the same seeds
     /// and repetition context. Derive a salt from a dataset name with [`crate::salt`]
     /// to keep ordering independent of storage location.
+    /// The compiler includes this salt and the original length in configuration
+    /// salts, even when the source is empty or a selection discards its records.
     fn salt(&self) -> u64 {
         0
     }

@@ -2,6 +2,15 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** derive shuffle salts from the original configuration during compilation.
+  Sources contribute their salts and original lengths, including empty or discarded
+  sources. Unary operations pass salts through; concatenations combine child salts in
+  configuration order before flattening. Nested grouping can affect the result.
+  Return salts with compiler summaries and remove the source-salt table and traversal
+  of pruned nodes. Single-source shuffle arithmetic and epoch reseeding are unchanged;
+  shuffles over concatenations can change, including when selections retain only one
+  source. Resume existing orders with their original crate version.
+
 - **Breaking:** reject shuffles whose input configuration contains any mix, including
   empty or single-part mixes and mixes beneath concatenations, repetitions or selections.
   `Order::new` reports `ErrorKind::ShuffleContainsMix` at the nearest enclosing shuffle.
@@ -141,8 +150,7 @@
   `skip(offset).step_by(step)` and `Seq::StepBy { step, inner }`. Remove
   `Seq::slice` and `Seq::Slice`; use `skip(start).take(len)` for a range.
   Each operation adds a level of configuration depth. `skip` rejects an offset
-  past the end, while the former `stride` returned an empty sequence. A skip can
-  also remove preceding concatenation sources from a following shuffle's salt.
+  past the end, while the former `stride` returned an empty sequence.
   Serialized `Stride` and `Slice` configurations must be rewritten using these
   operations; they are rejected during deserialization.
 
@@ -150,9 +158,8 @@
   Partition worker positions with `skip(index).step_by(count)` and check
   `index < count` in the caller. Each operation adds a level of configuration
   depth. Unlike the former `shard`, a skip past the end is an error; for a known
-  length, use `skip(index.min(len))` when those workers should be empty. As with
-  the `stride` migration, a skip can change a following shuffle's salt by removing
-  preceding concatenation sources. Serialized `Shard` configurations are rejected.
+  length, use `skip(index.min(len))` when those workers should be empty.
+  Serialized `Shard` configurations are rejected.
 
 - **Breaking:** use `Item { source_ordinal, source, record_index }` for both
   `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,

@@ -68,7 +68,7 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]) over sources
-/// with the given `salt` (see [`shuffle_salt`]): the three are hashed together, not merely
+/// with the given configuration `salt`: the three are hashed together, not merely
 /// xored, so no simple relation between them reproduces another triple's key. Not a
 /// security boundary: seeds are for reproducibility.
 #[inline]
@@ -82,12 +82,15 @@ pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
     k
 }
 
-/// Combines the salts and original lengths of retained sources in traversal order.
-/// The compiler removes empty subtrees and excluded concat parts before collecting
-/// these inputs. Equal input lists produce equal salts; other lists are hashed to
-/// distinguish shuffles over different datasets.
-pub(crate) fn shuffle_salt(sources: impl IntoIterator<Item = (u64, usize)>) -> u64 {
-    sources.into_iter().fold(0, |h, (salt, len)| mix64(h ^ mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ (len as u64).wrapping_mul(PHI)))
+/// A source's configuration salt, including its original length even when empty.
+pub(crate) fn source_salt(salt: u64, len: usize) -> u64 {
+    mix64(mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ (len as u64).wrapping_mul(PHI))
+}
+
+/// Combines child configuration salts in order, before flattening or dropping children.
+/// Empty lists use zero; a single child passes through unchanged. Grouping matters.
+pub(crate) fn combine_salts(salts: impl IntoIterator<Item = u64>) -> u64 {
+    salts.into_iter().reduce(|left, right| mix64(left.wrapping_add(PHI) ^ right)).unwrap_or(0)
 }
 
 /// Derives a shuffle context from the enclosing context, epoch and inside-out repeat level.
@@ -186,12 +189,12 @@ mod tests {
         let c: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
-        let k = key(1, 0, shuffle_salt([(7, n)]));
+        let k = key(1, 0, source_salt(7, n));
         let d: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
-        assert_ne!(shuffle_salt([(0, 1000)]), shuffle_salt([(0, 999)]));
-        assert_ne!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt([(2, 10), (1, 10)]));
-        assert_eq!(shuffle_salt([(1, 10), (2, 10)]), shuffle_salt(vec![(1, 10), (2, 10)]));
+        assert_ne!(source_salt(0, 1000), source_salt(0, 999));
+        let (a, b) = (source_salt(1, 10), source_salt(2, 10));
+        assert_ne!(combine_salts([a, b]), combine_salts([b, a]));
         // The first repetition keeps its context; contexts of nested repetitions do not collide.
         assert_eq!(epoch_ctx(5, 0, 1), 5);
         assert_ne!(epoch_ctx(0, 1, 1), 0);

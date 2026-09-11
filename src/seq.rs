@@ -56,7 +56,8 @@ pub enum Seq<T> {
     /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
     /// The permutation depends on `seed`, the order's seed, enclosing repetitions,
-    /// and the salts and lengths of retained sources. See the crate's
+    /// and the input configuration's source salts, original lengths and concat grouping.
+    /// Empty or discarded sources still contribute. See the crate's
     /// [shuffle rules](crate#shuffles-and-repetitions) for details.
     Shuffle {
         /// Selects the permutation.

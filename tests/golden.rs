@@ -77,13 +77,14 @@ fn golden_orders() {
             0,
         ),
     ];
-    // Nested-repeat entries were independently recomputed from the inside-out
-    // context and Feistel arithmetic for 0.4.0. Other entries retain their outputs.
+    // Nested-repeat and shuffle(concat) entries were independently recomputed from
+    // the inside-out contexts, configuration salts and Feistel arithmetic for 0.4.0.
+    // Other entries retain their outputs.
     const EXPECTED: [u64; 14] = [
         13510848840803686825,
         5734682759774056529,
         2152343650903757428,
-        2341334849338153325,
+        1077492288285509245,
         2420967535336859100,
         11125969817394475988,
         3696955324159907089,

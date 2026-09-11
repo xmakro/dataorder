@@ -204,6 +204,10 @@ resume existing checkpoints with their original crate version.
   must choose their truncation or padding policy.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
+  Shuffle salts follow the original source configuration, including empty and
+  selected-away sources. Changing a source's salt or original length, or changing
+  concatenation grouping, can change a shuffle above it. Compiler pruning has no
+  effect on these salts.
   Adding an outer repeat preserves the entire first pass, including nested epochs;
   later outer passes reseed the shuffles inside it. See the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).

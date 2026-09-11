@@ -29,49 +29,19 @@ impl Source for Src {
     }
 }
 
-/// Salts and lengths of the sources under `seq` that can contribute elements, in order of
-/// appearance: a subtree without elements counts for nothing, whatever is under it, nor
-/// does a part of a concatenation that skips and takes above it cut away entirely. `seq` is valid.
-fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, usize)>) {
-    let n = eval(seq, 0).unwrap().len();
-    reachable(seq, 0..n, out);
-}
-
-/// [`salts`] of the sources that positions `range` of `seq` can reach. Skips and takes narrow
-/// the range and concatenations hand each part its share of it. Other nodes keep
-/// their children's whole range. Shuffle inputs cannot contain mixes.
-fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, usize)>) {
-    if range.is_empty() {
-        return;
-    }
-    let whole = |s: &Seq<Src>, out: &mut Vec<(u64, usize)>| salts(s, out);
+/// Configuration salt, independent of materialization, selections and compiler folding.
+fn config_salt(seq: &Seq<Src>) -> u64 {
     match seq {
-        Seq::Source(s) => out.push((s.salt(), s.len)),
-        Seq::Concat(parts) => {
-            let mut offset = 0;
-            for p in parts {
-                let n = eval(p, 0).unwrap().len();
-                let (a, b) = (range.start.max(offset), range.end.min(offset + n));
-                if a < b {
-                    reachable(p, a - offset..b - offset, out);
-                }
-                offset += n;
-            }
-        }
-        Seq::Skip { n, inner } => reachable(inner, range.start + n..range.end + n, out),
-        Seq::Take { inner, .. } => reachable(inner, range, out),
+        Seq::Source(s) => perm::source_salt(s.salt(), s.len),
+        Seq::Concat(parts) => perm::combine_salts(parts.iter().map(config_salt)),
         Seq::Mix(_) => unreachable!("shuffle inputs cannot contain mixes"),
-        Seq::StepBy { step: 1, inner } => reachable(inner, range, out),
-        Seq::Cycle { len, inner } => cycled(inner, *len, out),
-        Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::StepBy { inner, .. } => whole(inner, out),
+        Seq::Shuffle { inner, .. }
+        | Seq::Repeat { inner, .. }
+        | Seq::Cycle { inner, .. }
+        | Seq::Skip { inner, .. }
+        | Seq::Take { inner, .. }
+        | Seq::StepBy { inner, .. } => config_salt(inner),
     }
-}
-
-/// [`salts`] of `seq` cycled to `len` positions: within one repetition a take, beyond it the
-/// whole sequence.
-fn cycled(seq: &Seq<Src>, len: usize, out: &mut Vec<(u64, usize)>) {
-    let n = eval(seq, 0).unwrap().len();
-    if len <= n { reachable(seq, 0..len, out) } else { salts(seq, out) }
 }
 
 fn src(id: u32, len: usize) -> Seq<Src> {
@@ -251,9 +221,7 @@ fn eval(seq: &Seq<Src>, ctx: u64) -> Result<Vec<(u32, usize)>, Error> {
         }
         Seq::Shuffle { seed, inner } => {
             let v = eval(inner, ctx)?;
-            let mut under = Vec::new();
-            salts(inner, &mut under);
-            let (shape, key) = (Shape::new(v.len()), perm::key(*seed, ctx, perm::shuffle_salt(under)));
+            let (shape, key) = (Shape::new(v.len()), perm::key(*seed, ctx, config_salt(inner)));
             (0..v.len()).map(|i| v[perm::permute(shape, key, i)]).collect()
         }
         Seq::Repeat { times, inner } => {
@@ -715,15 +683,15 @@ fn cycles() {
     let last = usize::MAX - 1;
     assert_eq!(ids(endless.cursor(last..).unwrap()), vec![(0, endless.get(last).unwrap().record_index)]);
     assert_eq!(ids(endless.cursor(..300).unwrap()), all[..300]);
-    // A cycle over a concatenation narrows it like a take, beyond one repetition it counts
-    // every part.
+    // A cycle over a concatenation keeps every source in its configuration salt,
+    // including sources beyond the selected prefix.
     let base = ids(Order::new(src(0, 100).shuffle(1)).unwrap().iter());
-    assert_eq!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle_to(100).shuffle(1)).unwrap().iter()), base);
+    assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle_to(100).shuffle(1)).unwrap().iter()), base);
     assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle_to(200).shuffle(1)).unwrap().iter())[..100], base[..]);
     // A cycled concat part is narrowed to the requested count before mixing.
     let part = || Seq::concat([src(0, 100), src(1, 50)]);
     let narrowed = Order::new(Seq::mix([part().cycle_to(75).shuffle(1), src(2, 75)])).unwrap();
-    let plain = Order::new(Seq::mix([src(0, 100).take(75).shuffle(1), src(2, 75)])).unwrap();
+    let plain = Order::new(Seq::mix([part().take(75).shuffle(1), src(2, 75)])).unwrap();
     assert_eq!(ids(narrowed.iter()), ids(plain.iter()));
 }
 
@@ -753,32 +721,63 @@ fn configurations_over_the_depth_limit_are_rejected() {
     std::thread::Builder::new().stack_size(2 << 20).spawn(run).unwrap().join().unwrap();
 }
 
-/// An empty source, or a part that folds away as empty, does not change the shuffle above
-/// it: only sources that contribute elements salt it.
+/// Sources removed from the compiled tree still distinguish the shuffle above them.
 #[test]
-fn empty_parts_do_not_affect_shuffles_above() {
+fn discarded_sources_contribute_to_shuffle_salts() {
     let x = || src(0, 100);
     let base = ids(Order::new(x().shuffle(1)).unwrap().iter());
-    let same = |seq: Seq<Src>| assert_eq!(ids(Order::new(seq).unwrap().iter()), base);
-    same(Seq::concat([x(), src(1, 0)]).shuffle(1));
-    same(Seq::concat([src(0, 0), x()]).shuffle(1));
-    same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).skip(2).step_by(1)]).shuffle(1));
-    same(x().step_by(1).shuffle(1));
-    // A part of a concatenation that a skip or take cuts away entirely does not count
-    // either, however the concatenation nests; a part it touches counts.
-    same(Seq::concat([x(), src(1, 50)]).take(100).shuffle(1));
-    same(Seq::concat([src(1, 50), x()]).skip(50).shuffle(1));
-    same(Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100).shuffle(1));
-    same(Seq::concat([Seq::concat([src(1, 5), x()]), src(2, 3)]).skip(5).take(100).shuffle(1));
-    same(Seq::concat([src(1, 5), Seq::concat([x(), src(2, 3)])]).take(105).skip(5).shuffle(1));
-    let with = |extra: Seq<Src>| ids(Order::new(Seq::concat([x(), extra]).take(101).shuffle(1)).unwrap().iter());
-    assert_ne!(with(src(1, 1)), base);
-    assert_ne!(with(src(0, 1)), base);
-    // An explicit skip removes preceding concat parts before deriving a later
-    // shuffle salt.
-    let strided = |seq: Seq<Src>| ids(Order::new(seq).unwrap().iter());
-    assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2)), strided(x().step_by(2)));
-    assert_eq!(strided(Seq::concat([src(1, 1), x()]).skip(1).step_by(2).shuffle(1)), strided(x().step_by(2).shuffle(1)));
+    let different = |seq: Seq<Src>| {
+        let got = ids(Order::new(seq.shuffle(1)).unwrap().iter());
+        assert_ne!(got, base);
+        let mut sorted = got;
+        sorted.sort_unstable();
+        assert_eq!(sorted, ids(Order::new(x()).unwrap().iter()));
+    };
+    for seq in [
+        Seq::concat([x(), src(1, 0)]),
+        Seq::concat([src(1, 0), x()]),
+        Seq::concat([x(), Seq::concat([])]),
+        Seq::concat([Seq::concat([]), x()]),
+        Seq::concat([x(), src(1, 50)]).take(100),
+        Seq::concat([src(1, 50), x()]).skip(50),
+        Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100),
+        Seq::concat([Seq::concat([src(1, 5), x()]), src(2, 3)]).skip(5).take(100),
+        Seq::concat([src(1, 5), Seq::concat([x(), src(2, 3)])]).take(105).skip(5),
+    ] {
+        different(seq);
+    }
+    // Unary operations pass the original source's salt through even when they
+    // produce no elements. Each configuration below selects exactly x's records.
+    let expected = ids(Order::new(Seq::concat([x(), src(1, 50)]).take(100).shuffle(1)).unwrap().iter());
+    for empty in [
+        src(1, 50).repeat(0),
+        src(1, 50).cycle_to(0),
+        src(1, 50).take(0),
+        src(1, 50).skip(50),
+        src(1, 50).skip(50).step_by(2),
+        src(1, 50).take(0).shuffle(9),
+        src(1, 50).shuffle(9).take(0),
+    ] {
+        let seq = Seq::concat([x(), empty]).shuffle(1);
+        assert_eq!(ids(Order::new(seq).unwrap().iter()), expected);
+    }
+    // The original length of a discarded source also contributes.
+    let changed_length = Seq::concat([x(), src(1, 51).take(0)]).shuffle(1);
+    assert_ne!(ids(Order::new(changed_length).unwrap().iter()), expected);
+}
+
+/// Configuration grouping survives concat flattening; unary wrappers preserve the salt.
+#[test]
+fn configuration_grouping_controls_shuffle_salts() {
+    let flat = Seq::concat([src(0, 100), src(1, 100), src(2, 100)]);
+    let nested = Seq::concat([src(0, 100), Seq::concat([src(1, 100), src(2, 100)])]);
+    assert_eq!(ids(Order::new(flat.clone()).unwrap().iter()), ids(Order::new(nested.clone()).unwrap().iter()));
+    assert_ne!(ids(Order::new(flat.shuffle(7)).unwrap().iter()), ids(Order::new(nested.shuffle(7)).unwrap().iter()));
+    let x = || src(0, 100);
+    let expected = ids(Order::new(x().shuffle(7)).unwrap().iter());
+    for seq in [x().skip(0), x().take(100), x().step_by(1), x().repeat(1), x().cycle_to(100), Seq::concat([x()])] {
+        assert_eq!(ids(Order::new(seq.shuffle(7)).unwrap().iter()), expected);
+    }
 }
 
 /// The folds: what compiles to a single node.

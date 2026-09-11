@@ -95,8 +95,8 @@
 //!
 //! - The shuffle's seed and the order's seed.
 //! - The repetition context, derived from enclosing repeats, their epochs and inside-out levels.
-//! - The salts and original lengths of sources retained under the shuffle, in order
-//!   of appearance.
+//! - The input configuration's source salts, original source lengths and concatenation
+//!   grouping, before pruning or flattening.
 //!
 //! A shuffle's input configuration must contain no mixes, including empty or single-part
 //! mixes and mixes nested under other operations. Shuffle each input before mixing.
@@ -115,15 +115,20 @@
 //! beneath it has level 1; an enclosing repeat has one more than the maximum child level.
 //! Levels are assigned after compiling the child: empty subtrees and repeats folded away
 //! by a prefix selection do not contribute. Slices of mixes and strides can retain repeats
-//! even when their selected positions do not reach them, just as with source salts below.
+//! even when their selected positions do not reach them.
 //! Adding an outer repeat leaves inner levels unchanged, so its entire first pass keeps
 //! the child's order, including all nested epochs. Later outer passes reseed the shuffles
 //! inside it. Increasing `repeat(times)` or `cycle_to(len)` preserves the existing prefix.
 //! A single repetition, or a cycle within the existing length, introduces no repeat level.
 //!
-//! Empty sources and subtrees do not contribute to a shuffle's salt. A skip or take
-//! also removes concatenation parts that it excludes entirely. A stride over a
-//! concatenation can retain sources even when the selected positions do not reach them.
+//! Configuration salts are computed from the original tree. Each source contributes
+//! its salt and original length, even when empty. Unary operations pass that value
+//! through unchanged, including selections or repetitions that discard all elements.
+//! A concatenation combines its children's salts in order; an empty concatenation
+//! has salt zero and a single-child concatenation passes its child's salt through.
+//! Nested concatenation grouping can therefore change a shuffle. Compiler pruning
+//! and flattening never change these salts. Modifying an excluded source can change
+//! a shuffle above the selection, even though that source contributes no records.
 //!
 //! # Validation and limits
 //!
@@ -164,9 +169,9 @@
 //! # Cost
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
-//! elements. Compiler visits return lengths and repeat levels to their parents.
-//! Compilation can revisit subtrees when flattening concatenations, deriving shuffle
-//! salts or folding selections that discard repeat scopes. Each mix builds independent profiles
+//! elements. Compiler visits return lengths, repeat levels and configuration salts to
+//! their parents. Compilation can revisit subtrees when flattening concatenations
+//! or folding selections that discard repeat scopes. Each mix builds independent profiles
 //! in `O(k)` time for `k` parts.
 //!
 //! For random access, [`Order::get`] follows the path from the root to a source:
