@@ -77,9 +77,9 @@ fn golden_orders() {
             0,
         ),
     ];
-    // Nested-repeat and shuffle(concat) entries were independently recomputed from
-    // the inside-out contexts, configuration salts and Feistel arithmetic for 0.4.0.
-    // Other entries retain their outputs.
+    // Nested-repeat, cycle-of-repeat and shuffle(concat) entries were independently
+    // recomputed from total epochs, configuration salts and Feistel arithmetic for
+    // 0.4.0. Other entries retain their outputs.
     const EXPECTED: [u64; 14] = [
         13510848840803686825,
         5734682759774056529,
@@ -92,8 +92,8 @@ fn golden_orders() {
         12216569398622504889,
         4113493865489899877,
         16159320458550980399,
-        11644812817423956709,
-        8438896446926226074,
+        5178620365869428389,
+        5043228978147298754,
         16685696649537605013,
     ];
     let actual: Vec<u64> = cases

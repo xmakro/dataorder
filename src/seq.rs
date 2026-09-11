@@ -69,9 +69,10 @@ pub enum Seq<T> {
     /// Repetition does not add shuffling. Any mix schedules inside restart each epoch.
     /// `x.repeat(1)` is `x`; `x.repeat(0)` is empty but still validates `inner`.
     ///
-    /// The first pass preserves all of `inner`, including nested epochs. Repetition levels
-    /// are numbered from the inside out, so an outer repeat does not change inner levels.
-    /// Later passes reseed the existing shuffles using this repeat's epoch and level.
+    /// Nested repeats accumulate one epoch number: `x.repeat(3).repeat(2)` has the
+    /// same order as `x.repeat(6)`. Adding an outer repeat preserves the first pass.
+    /// Selections retain original repeat counts for epoch numbering; see the crate's
+    /// [shuffle rules](crate#shuffles-and-repetitions).
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -81,8 +82,10 @@ pub enum Seq<T> {
     /// Exactly `len` positions of `inner`, repeating or truncating it as needed.
     ///
     /// Each additional epoch reseeds existing shuffles, as [`Repeat`](Seq::Repeat)
-    /// does. The entire first pass keeps its order, including nested epochs; increasing
-    /// `len` preserves the existing prefix.
+    /// does. Adding an outer cycle preserves the first pass, including nested epochs.
+    /// Increasing its length preserves the existing prefix when it is outermost.
+    /// Its repetition count includes a partial final pass; changing that count can
+    /// change shuffle epochs when the cycle is inside another repetition.
     /// When `len` fits within `inner`, this is equivalent to `inner.take(len)`.
     /// A positive `len` requires a non-empty child. `cycle_to(usize::MAX)` creates the
     /// longest supported order; it is still finite.

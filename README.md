@@ -139,6 +139,13 @@ Each input keeps its order; existing shuffles are reseeded for additional epochs
 Changing a part's count can change the mixed order's prefix. Keep the original
 configuration and concatenate additional data when the existing prefix must stay fixed.
 
+To change the mixture during training, resume each retained input with
+`.skip(consumed_from_that_input)` and keep the same order seed. Adding or nesting
+mixture inputs preserves each retained input's shuffle stream, including nested epochs.
+You can also keep the remaining old mixture as one input:
+`Seq::mix([old_mix.skip(consumed), new_data])`. This starts a new training phase;
+its positions start at zero.
+
 Schedules assign each part's elements positions on a **shared virtual clock** from
 0 to 1. Part lengths control **how many** elements each part contributes.
 Each curve is normalized independently, and the mix merges its virtual-time keys.
@@ -208,8 +215,10 @@ resume existing checkpoints with their original crate version.
   selected-away sources. Changing a source's salt or original length, or changing
   concatenation grouping, can change a shuffle above it. Compiler pruning has no
   effect on these salts.
-  Adding an outer repeat preserves the entire first pass, including nested epochs;
-  later outer passes reseed the shuffles inside it. See the
+  Nested repeats count total epochs: `.repeat(3).repeat(2)` matches `.repeat(6)`.
+  Adding an outer repeat preserves the entire first pass, including nested epochs.
+  Mixtures pass epoch numbers through without depending on sibling inputs.
+  Selections retain original repeat counts for epoch numbering. See the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`

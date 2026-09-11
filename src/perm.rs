@@ -67,12 +67,39 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// The key of a shuffle with `seed` inside context `ctx` (see [`epoch_ctx`]) over sources
+/// Runtime shuffle inputs: a fixed order seed and one accumulated epoch number.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Context {
+    pub(crate) seed: u64,
+    pub(crate) epoch: u64,
+}
+
+impl Context {
+    pub(crate) const fn new(seed: u64) -> Self {
+        Self { seed, epoch: 0 }
+    }
+
+    /// Flatten nested repetitions. Counts belong to the original configuration;
+    /// mixtures and selections do not change them. Arithmetic is modulo 2^64.
+    #[inline]
+    pub(crate) fn repeat(self, times: usize, epoch: usize) -> Self {
+        Self { epoch: self.epoch.wrapping_mul(times as u64).wrapping_add(epoch as u64), ..self }
+    }
+}
+
+/// The key of a shuffle with `seed` inside context `ctx` over sources
 /// with the given configuration `salt`: the three are hashed together, not merely
 /// xored, so no simple relation between them reproduces another triple's key. Not a
 /// security boundary: seeds are for reproducibility.
 #[inline]
-pub(crate) fn key(seed: u64, ctx: u64, salt: u64) -> Key {
+pub(crate) fn key(seed: u64, ctx: Context, salt: u64) -> Key {
+    // Preserve the original single-repeat seed arithmetic, now applied once to the
+    // accumulated epoch instead of repeatedly hashing at each enclosing repeat.
+    let ctx = if ctx.epoch == 0 {
+        ctx.seed
+    } else {
+        mix64(mix64(ctx.seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add(ctx.epoch.wrapping_mul(PHI)) ^ PHI)
+    };
     let a =
         mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
     let mut k = Key::UNSET;
@@ -91,20 +118,6 @@ pub(crate) fn source_salt(salt: u64, len: usize) -> u64 {
 /// Empty lists use zero; a single child passes through unchanged. Grouping matters.
 pub(crate) fn combine_salts(salts: impl IntoIterator<Item = u64>) -> u64 {
     salts.into_iter().reduce(|left, right| mix64(left.wrapping_add(PHI) ^ right)).unwrap_or(0)
-}
-
-/// Derives a shuffle context from the enclosing context, epoch and inside-out repeat level.
-/// Epoch 0 keeps `ctx`; later epochs mix in their index and level. The innermost repeats
-/// have level 1. An enclosing repeat has one more than its child's maximum repeat level,
-/// so adding it preserves the child's first pass while distinguishing later outer epochs
-/// from inner epochs. A single-level repeat keeps the historical depth-0 arithmetic.
-#[inline]
-pub(crate) fn epoch_ctx(ctx: u64, epoch: usize, level: u8) -> u64 {
-    debug_assert!(level > 0);
-    if epoch == 0 {
-        return ctx;
-    }
-    mix64(mix64(ctx ^ 0x3C6E_F372_FE94_F82B).wrapping_add((epoch as u64).wrapping_mul(PHI)) ^ u64::from(level).wrapping_mul(PHI))
 }
 
 /// One Feistel round: `(l, r)` becomes `(r, l ^ F(r))`, restricted to the left half's
@@ -150,7 +163,7 @@ mod tests {
     use crate::{Order, Seq};
 
     fn perm(n: usize, seed: u64) -> Vec<usize> {
-        let (shape, key) = (Shape::new(n), key(seed, 0, 0));
+        let (shape, key) = (Shape::new(n), key(seed, Context::new(0), 0));
         (0..n).map(|i| permute(shape, key, i)).collect()
     }
 
@@ -172,7 +185,7 @@ mod tests {
     fn huge_domain_is_a_bijection_locally() {
         // n near usize::MAX: the forward map must still be invertible; check distinct images of a
         // window and that the walk terminates.
-        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, 0, 0));
+        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, Context::new(0), 0));
         let mut images: Vec<usize> = (0..10_000).map(|i| permute(shape, key, i)).collect();
         images.sort_unstable();
         images.dedup();
@@ -185,20 +198,25 @@ mod tests {
         let a = perm(n, 1);
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
-        let (shape, k) = (Shape::new(n), key(1, epoch_ctx(0, 1, 1), 0));
+        let (shape, k) = (Shape::new(n), key(1, Context::new(0).repeat(2, 1), 0));
         let c: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
-        let k = key(1, 0, source_salt(7, n));
+        let k = key(1, Context::new(0), source_salt(7, n));
         let d: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
         assert_ne!(source_salt(0, 1000), source_salt(0, 999));
         let (a, b) = (source_salt(1, 10), source_salt(2, 10));
         assert_ne!(combine_salts([a, b]), combine_salts([b, a]));
-        // The first repetition keeps its context; contexts of nested repetitions do not collide.
-        assert_eq!(epoch_ctx(5, 0, 1), 5);
-        assert_ne!(epoch_ctx(0, 1, 1), 0);
-        assert_ne!(epoch_ctx(epoch_ctx(0, 0, 2), 1, 1), epoch_ctx(epoch_ctx(0, 1, 2), 0, 1));
+        // Nested repeats count the same epochs as one flat repeat.
+        for outer in 0..2 {
+            for inner in 0..3 {
+                let nested = Context::new(5).repeat(2, outer).repeat(3, inner);
+                let flat = Context::new(5).repeat(6, outer * 3 + inner);
+                assert_eq!(nested.epoch, (outer * 3 + inner) as u64);
+                assert_eq!(key(1, nested, 7), key(1, flat, 7));
+            }
+        }
     }
 
     /// Chi-square of `values` against a uniform expectation over `cells` cells.

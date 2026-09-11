@@ -94,7 +94,7 @@
 //! A shuffle visits every child position exactly once. Its permutation depends on:
 //!
 //! - The shuffle's seed and the order's seed.
-//! - The repetition context, derived from enclosing repeats, their epochs and inside-out levels.
+//! - The accumulated epoch number of its enclosing repetitions.
 //! - The input configuration's source salts, original source lengths and concatenation
 //!   grouping, before pruning or flattening.
 //!
@@ -111,15 +111,20 @@
 //! its original context. In contrast, concatenating three copies of `x.shuffle(seed)`
 //! repeats the same order. Repetition alone does not add a shuffle.
 //!
-//! Repetition levels are numbered from the inside out. A repeat with no retained repeats
-//! beneath it has level 1; an enclosing repeat has one more than the maximum child level.
-//! Levels are assigned after compiling the child: empty subtrees and repeats folded away
-//! by a prefix selection do not contribute. Slices of mixes and strides can retain repeats
-//! even when their selected positions do not reach them.
-//! Adding an outer repeat leaves inner levels unchanged, so its entire first pass keeps
-//! the child's order, including all nested epochs. Later outer passes reseed the shuffles
-//! inside it. Increasing `repeat(times)` or `cycle_to(len)` preserves the existing prefix.
-//! A single repetition, or a cycle within the existing length, introduces no repeat level.
+//! Epochs start at zero. Entering a repeat with count `times` and local epoch `e`
+//! computes `epoch = epoch * times + e`. Thus `x.repeat(3).repeat(2)` has the same
+//! order as `x.repeat(6)`. A cycle's count includes its partial final pass, if any.
+//! Mixtures pass the epoch through unchanged: adding, reordering or nesting mixture
+//! inputs does not reseed existing inputs, including those with nested repetitions.
+//! Their own configurations, enclosing repeat counts and the order seed must stay fixed.
+//!
+//! Adding an outer repeat preserves the entire first pass. Extending an outermost
+//! repeat or cycle preserves the existing prefix. Changing an inner repeat's count
+//! can change its epoch numbers in later enclosing passes.
+//! Selections keep original repeat counts, even when retaining only the first pass:
+//! for an `n`-element source `x`, `x.shuffle(1).repeat(3).take(n).repeat(2)` uses shuffle
+//! epochs 0 and 3. A single repetition leaves the epoch unchanged. Epoch arithmetic
+//! wraps modulo 2^64; output lengths must still fit in `usize`.
 //!
 //! Configuration salts are computed from the original tree. Each source contributes
 //! its salt and original length, even when empty. Unary operations pass that value
@@ -169,10 +174,9 @@
 //! # Cost
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
-//! elements. Compiler visits return lengths, repeat levels and configuration salts to
-//! their parents. Compilation can revisit subtrees when flattening concatenations
-//! or folding selections that discard repeat scopes. Each mix builds independent profiles
-//! in `O(k)` time for `k` parts.
+//! elements. Compiler visits return lengths and configuration salts to their parents.
+//! Compilation can revisit subtrees when flattening concatenations or folding selections.
+//! Each mix builds independent profiles in `O(k)` time for `k` parts.
 //!
 //! For random access, [`Order::get`] follows the path from the root to a source:
 //!

@@ -2,12 +2,21 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** flatten nested repetitions into one runtime epoch number. Each repeat
+  computes `parent_epoch * times + local_epoch`; mixtures pass it through unchanged.
+  Adding or nesting mixture inputs no longer lets sibling repeat depth alter existing
+  inputs' shuffles. Consecutive `.repeat(a).repeat(b)` matches `.repeat(a * b)` when
+  their lengths fit. Keep original repeat counts through selections, including a
+  cycle's partial final pass. Remove compiler repeat levels and their folding traversal.
+  Epoch arithmetic wraps modulo 2^64. Single-repeat outputs are unchanged; nested-repeat
+  outputs change. Resume older orders with their original crate version.
+
 - **Breaking:** derive shuffle salts from the original configuration during compilation.
   Sources contribute their salts and original lengths, including empty or discarded
   sources. Unary operations pass salts through; concatenations combine child salts in
   configuration order before flattening. Nested grouping can affect the result.
   Return salts with compiler summaries and remove the source-salt table and traversal
-  of pruned nodes. Single-source shuffle arithmetic and epoch reseeding are unchanged;
+  of pruned nodes. Single-source shuffle arithmetic is unchanged;
   shuffles over concatenations can change, including when selections retain only one
   source. Resume existing orders with their original crate version.
 
@@ -112,16 +121,6 @@
 - **Breaking:** remove `Cursor::remaining`; use `ExactSizeIterator::len()`
   (`cursor.len()`) to read the remaining element count.
 
-- Return lengths and `u8` repetition levels up recursive compiler and folding
-  visits. These summaries are temporary; repeat nodes retain their own level for
-  reseeding. Ordering outputs and public signatures are unchanged by this refactor.
-
-- **Breaking:** number repetition levels from the inside out instead of by enclosing
-  depth. Adding an outer repeat or extending a cycle now preserves the entire first
-  pass, including nested epochs. Later passes use the repeat's epoch and level to
-  reseed existing shuffles. Non-nested repetition and source salts are unchanged;
-  nested repetition orders change. Resume existing orders with their original crate
-  version. Remove the compiler's repeat-depth repair traversal.
 - Dataset examples derive salts from stable dataset names rather than storage paths.
 
 - Position cursors when constructed and when moved to empty ranges. Remove deferred
