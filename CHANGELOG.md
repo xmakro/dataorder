@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Eq` and `Hash` from `Seq`, `MixPart` and `Schedule`.
+  `PartialEq` now uses ordinary `f64` equality for schedule parameters: signed
+  zeros compare equal, and configurations containing NaN compare unequal even
+  to themselves. Remove the custom floating-point bit comparison. Ordering,
+  validation and serialized configurations are unchanged.
+
 - **Breaking:** rename `Schedule::fading` to `Schedule::fade` to pair with
   `Schedule::ramp`. Replace `fading(fade, off)` calls with `fade(fade, off)`.
   Parameters, validation, ordering and serialized configurations are unchanged.
@@ -64,7 +70,7 @@
   `ramp(start, full)` now return `Trapezoid` with `fade: 1.0` and `off: 1.0`.
   Replace serialized `DelayedLinear` variants with `Trapezoid`, preserving `start`
   and `full` and adding those two fields; the old variant is rejected.
-  Equivalent constructor and explicit trapezoid values now compare and hash
+  Equivalent constructor and explicit trapezoid values now compare
   alike; `Uniform` remains distinct. Ordering outputs are unchanged. Debug output
   and error messages that include these schedules now show `Trapezoid`.
 

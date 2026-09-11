@@ -241,7 +241,7 @@ Use `map_sources` or `try_map_sources` to resolve sources before compiling.
 Configurations support up to 16 levels (`MAX_DEPTH`); tree operations and ordinary
 Rust cleanup recurse with depth. Arbitrarily deep hand-built trees are unsupported.
 
-`Seq` can be cloned, compared, hashed and mapped to another dataset handle type with
+`Seq` can be cloned, compared and mapped to another dataset handle type with
 `map_sources` or `try_map_sources`. The optional `serde` feature adds configuration
 serialization. When using JSON, also enable `serde_json/float_roundtrip` to preserve
 schedule parameters.

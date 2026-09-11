@@ -1,9 +1,8 @@
 //! Public schedules and internal schedule validation errors.
 
 use super::MAX_TOTAL_LEN;
-use crate::{ErrorKind, float_bits};
+use crate::ErrorKind;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 /// Spreads a part's elements along a shared virtual clock from 0 to 1.
 ///
@@ -62,11 +61,12 @@ use std::hash::{Hash, Hasher};
 /// overflow derived coefficients. Use equal adjacent breakpoints for an abrupt
 /// change. These individual numerical limits are separate from schedule overlap.
 ///
-/// Equality and hashing compare variants and parameter bits, treating `-0.0` as
-/// `0.0`. Constructors such as [`delayed`](Self::delayed) and [`ramp`](Self::ramp)
+/// Equality compares variants and parameters using ordinary `f64` equality:
+/// `-0.0` equals `0.0`, and NaN equals nothing, including itself.
+/// Constructors such as [`delayed`](Self::delayed) and [`ramp`](Self::ramp)
 /// return [`Trapezoid`](Self::Trapezoid), so equal breakpoints compare equal.
 /// [`Uniform`](Self::Uniform) remains a distinct variant.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub enum Schedule {
@@ -157,29 +157,6 @@ impl Schedule {
     #[must_use]
     pub const fn trapezoid(start: f64, full: f64, fade: f64, off: f64) -> Self {
         Self::Trapezoid { start, full, fade, off }
-    }
-
-    /// The parameters, as the bits equality and hashing compare.
-    fn bits(&self) -> [u64; 4] {
-        match *self {
-            Self::Uniform => [0; 4],
-            Self::Trapezoid { start, full, fade, off } => [float_bits(start), float_bits(full), float_bits(fade), float_bits(off)],
-        }
-    }
-}
-
-impl PartialEq for Schedule {
-    fn eq(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other) && self.bits() == other.bits()
-    }
-}
-
-impl Eq for Schedule {}
-
-impl Hash for Schedule {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-        self.bits().hash(state);
     }
 }
 

@@ -14,9 +14,9 @@ use std::convert::Infallible;
 /// You can also construct enum variants directly. Builders store the configuration
 /// without validating it, loading records or generating indices.
 ///
-/// `Seq` supports cloning, comparison, hashing and, with the `serde` feature,
-/// serialization when `T` does. Schedule parameters are compared by their bits,
-/// treating `-0.0` as `0.0`. NaN parameters are rejected during validation.
+/// `Seq` supports cloning, comparison and, with the `serde` feature,
+/// serialization when `T` does. Schedule parameters use ordinary `f64` equality.
+/// NaN parameters are rejected during validation.
 ///
 /// # Errors
 ///
@@ -33,7 +33,7 @@ use std::convert::Infallible;
 /// Tree operations and ordinary Rust destruction recurse with tree depth;
 /// arbitrarily deep hand-built trees are unsupported. Stack use also depends on
 /// the size of `T`; prefer small dataset handles over large inline sources.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub enum Seq<T> {
@@ -342,7 +342,7 @@ impl<T> Seq<T> {
 
 /// A part of a [`Mix`](Seq::Mix): a sequence and its schedule. `(seq, schedule)` and a bare
 /// `seq` (uniform) convert into it.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
 pub struct MixPart<T> {
     /// The sequence.

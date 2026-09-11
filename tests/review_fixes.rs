@@ -150,25 +150,6 @@ fn sharding_preserves_global_partition_not_worker_mixture() {
 }
 
 #[test]
-fn equality_preserves_nan_payload_sign_and_signaling_bits() {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let hash = |x: &Schedule| {
-        let mut h = DefaultHasher::new();
-        x.hash(&mut h);
-        h.finish()
-    };
-    let bits = [0x7ff0000000000001, 0x7ff8000000000001, 0x7ff8000000000002, 0xfff8000000000001];
-    for (i, a) in bits.iter().enumerate() {
-        for (j, b) in bits.iter().enumerate() {
-            let (a, b) = (f64::from_bits(*a), f64::from_bits(*b));
-            assert_eq!(Schedule::delayed(a) == Schedule::delayed(b), i == j);
-        }
-    }
-    assert_eq!(Schedule::ramp(-0.0, 0.5), Schedule::ramp(0.0, 0.5));
-    assert_eq!(hash(&Schedule::ramp(-0.0, 0.5)), hash(&Schedule::ramp(0.0, 0.5)));
-}
-
-#[test]
 fn schedule_errors_describe_independent_profiles() {
     use dataorder::{MAX_MIX_LEN, ScheduleReason};
     for (schedule, reason) in [

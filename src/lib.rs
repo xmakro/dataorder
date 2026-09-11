@@ -50,7 +50,7 @@
 //!
 //! Implement [`Source`] for your dataset handles, or use slices, arrays or vectors.
 //! `Order` owns its sources and yields references to them. A `Seq` can be cloned,
-//! compared, hashed, [mapped to another source type](Seq::map_sources) and optionally
+//! compared, [mapped to another source type](Seq::map_sources) and optionally
 //! [serialized](#feature-flags). `Seq<T>` accepts any `T`; only constructing an
 //! `Order<T>` requires `T: Source`.
 //!
@@ -277,12 +277,6 @@ pub use interleave::Schedule;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};
 pub use source::{Source, salt};
-
-/// Float bits for equality and hashing, treating `-0.0` and `0.0` as equal.
-pub(crate) fn float_bits(x: f64) -> u64 {
-    let bits = x.to_bits();
-    if bits << 1 == 0 { 0 } else { bits }
-}
 
 /// Maximum configuration depth accepted by [`Order::new`], counting the root as level 1.
 ///

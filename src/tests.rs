@@ -850,10 +850,9 @@ fn empty_mix_parts_do_not_affect_the_order() {
     }
 }
 
-/// `Seq` is `Eq` and `Hash` by comparing floats bitwise, with the two zeros equal.
+/// Configuration comparisons use ordinary floating-point equality.
 #[test]
-fn seq_eq_and_hash() {
-    use std::collections::HashSet;
+fn seq_partial_eq() {
     let a = Seq::mix([(src(0, 5), Schedule::ramp(0.0, 0.5))]);
     let b = Seq::mix([(src(0, 5), Schedule::ramp(-0.0, 0.5))]);
     let c = Seq::mix([(src(0, 5), Schedule::ramp(0.1, 0.5))]);
@@ -861,11 +860,8 @@ fn seq_eq_and_hash() {
     assert_eq!(a, b);
     assert_eq!(a, trapezoid);
     assert_ne!(a, c);
-    let set: HashSet<Seq<Src>> = [a.clone(), b, c.clone(), trapezoid].into_iter().collect();
-    assert_eq!(set.len(), 2);
-    assert!(set.contains(&a) && set.contains(&c));
     let nan = Seq::mix([(src(0, 5), Schedule::delayed(f64::NAN))]);
-    assert_eq!(nan, nan.clone());
+    assert_ne!(nan, nan.clone());
     assert_eq!(Schedule::delayed(0.5), Schedule::ramp(0.5, 0.5));
     assert_eq!(Schedule::until(0.5), Schedule::fade(0.5, 0.5));
     assert_ne!(Schedule::until(0.5), Schedule::delayed(0.5));
