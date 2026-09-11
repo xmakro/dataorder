@@ -566,25 +566,22 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
             if len == 1 { slice(*child, offset, 1) } else { Node::Stride { step, offset, len, child } }
         }
         Node::Concat { offsets: mut at, mut children } => {
-            let first = at.partition_point(|&o| o <= start) - 1;
-            let last = at.partition_point(|&o| o < start + len) - 1;
-            let last_len = start + len - at[last];
-            let start = start - at[first];
-            children.truncate(last + 1);
-            children.drain(..first);
             at.clear();
-            let end = children.len() - 1;
-            let mut total = 0;
-            for (i, slot) in children.iter_mut().enumerate() {
-                let child = std::mem::replace(slot, Node::Empty);
-                let a = if i == 0 { start } else { 0 };
-                let b = if i == end { last_len } else { child.len() };
-                let child = slice(child, a, b - a);
-                at.push(total);
-                total += child.len();
-                *slot = child;
-            }
-            at.push(total);
+            let mut offset = 0;
+            children.retain_mut(|child| {
+                let base = offset;
+                offset += child.len();
+                let a = start.max(base);
+                let b = (start + len).min(offset);
+                if a >= b {
+                    return false;
+                }
+                at.push(a - start);
+                let node = std::mem::replace(child, Node::Empty);
+                *child = slice(node, a - base, b - a);
+                true
+            });
+            at.push(len);
             if children.len() == 1 { children.pop().unwrap() } else { Node::Concat { offsets: at, children } }
         }
         node => Node::Slice { start, len, child: Box::new(node) },

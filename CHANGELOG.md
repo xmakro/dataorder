@@ -2,6 +2,9 @@
 
 ## Unreleased (0.4.0)
 
+- Simplify concatenation pruning to one pass over child ranges, reusing the existing
+  vectors. Shuffle salts, epoch counts and output orders are unchanged.
+
 - **Breaking:** flatten nested repetitions into one runtime epoch number. Each repeat
   computes `parent_epoch * times + local_epoch`; mixtures pass it through unchanged.
   Adding or nesting mixture inputs no longer lets sibling repeat depth alter existing
