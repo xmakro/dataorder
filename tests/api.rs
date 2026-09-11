@@ -31,8 +31,7 @@ fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
 fn builders_accept_unresolved_sources() {
     // No trait bounds, including Source or Clone, are needed to build the tree.
     fn configuration<T>(first: T, second: T) -> Seq<T> {
-        Seq::concat([Seq::mix([Seq::source(first)]), Seq::mix([(Seq::source(second), Schedule::Uniform)])])
-            .shuffle(7)
+        Seq::concat([Seq::mix([Seq::source(first).shuffle(7)]), Seq::mix([(Seq::source(second), Schedule::Uniform)])])
             .repeat(2)
             .cycle_to(50)
             .skip(2)
@@ -57,6 +56,75 @@ fn builders_accept_unresolved_sources() {
     assert_eq!(order.len(), 3);
     assert_eq!(order.sources(), [10, 20]);
     assert!(order.iter().eq(expected.iter()));
+}
+
+#[test]
+fn shuffles_reject_mix_descendants_before_folding() {
+    let mix = || Seq::mix([Seq::source(10), Seq::source(20)]);
+    let cases = [
+        mix(),
+        Seq::mix([(Seq::source(10), Schedule::ramp(0.2, 0.6)), (Seq::source(20), Schedule::Uniform)]),
+        Seq::concat([Seq::source(5), mix()]),
+        mix().repeat(2),
+        mix().cycle_to(60),
+        mix().skip(1),
+        mix().take(5),
+        mix().step_by(2),
+        Seq::concat([mix().repeat(2), Seq::source(5)]).skip(1).take(50).step_by(3),
+        Seq::mix(std::iter::empty::<Seq<usize>>()),
+        Seq::mix([Seq::source(0), Seq::source(0)]),
+        Seq::mix([Seq::source(1)]),
+        Seq::mix([Seq::source(10)]),
+        mix().repeat(0),
+        mix().cycle_to(0),
+        mix().take(0),
+        mix().skip(30),
+        Seq::concat([Seq::source(5), mix()]).take(5),
+        Seq::concat([mix(), Seq::source(5)]).skip(30),
+    ];
+    for inner in cases {
+        // Build the variant directly and discard its output: validation must still
+        // reject the mix and report the shuffle's original configuration path.
+        let shuffled = Seq::Shuffle { seed: 7, inner: Box::new(inner) };
+        let error = Order::new(Seq::concat([Seq::source(1), shuffled.repeat(0)])).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
+        assert_eq!(error.path(), [1, 0]);
+        assert_eq!(error.to_string(), "cannot shuffle a sequence containing a mix; shuffle its inputs before mixing (at node 1/0)");
+    }
+}
+
+#[test]
+fn shuffle_restrictions_follow_ancestors_and_allow_mixed_siblings() {
+    let mix = || Seq::mix([Seq::source(10), Seq::source(20)]);
+    let error = Order::with_seed(mix().shuffle(1).shuffle(2), 3).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
+    assert_eq!(error.path(), [0]); // The nearest enclosing shuffle.
+
+    // Finishing an inner shuffle must restore the enclosing restriction.
+    let error = Order::new(Seq::concat([Seq::source(10).shuffle(1), mix()]).shuffle(2)).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
+    assert!(error.path().is_empty());
+
+    // After leaving a shuffle, later siblings may contain mixes. Nested scheduled
+    // mixes, shuffled concatenations, repeats and selections remain supported.
+    let seq = Seq::mix([
+        (Seq::concat([Seq::source(10), Seq::source(20).shuffle(1)]).repeat(2).shuffle(2).cycle_to(100), Schedule::Uniform),
+        (Seq::concat([Seq::source(10).shuffle(3).shuffle(4), mix()]).skip(2), Schedule::delayed(0.3)),
+    ])
+    .repeat(2)
+    .skip(1)
+    .step_by(3);
+    let order = Order::new(seq).unwrap();
+    assert!(order.iter().eq((0..order.len()).map(|pos| order.get(pos).unwrap())));
+}
+
+#[test]
+#[cfg(feature = "serde")]
+fn deserialized_shuffles_cannot_contain_mixes() {
+    let seq: Seq<usize> = serde_json::from_str(r#"{"Shuffle":{"seed":7,"inner":{"Mix":[]}}}"#).unwrap();
+    let error = Order::new(seq).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
+    assert!(error.path().is_empty());
 }
 
 #[test]
@@ -210,7 +278,7 @@ fn resets_replace_remaining_ranges_in_order_coordinates() {
     use std::ops::Bound::{Excluded, Included, Unbounded};
 
     let mix = Seq::mix([shard("a", 250).shuffle(1), shard("b", 150)]);
-    for seq in [shard("a", 400), mix.clone(), mix.shuffle(2)] {
+    for seq in [shard("a", 400), mix, Seq::concat([shard("a", 250), shard("b", 150)]).shuffle(2)] {
         let order = Order::new(seq).unwrap();
         let mut cursor = order.cursor(100..200).unwrap();
         assert_eq!(cursor.next(), order.get(100));

@@ -10,9 +10,8 @@
 
 use crate::error::BoundsError;
 use crate::interleave::{Interleave, Iter};
-use crate::order::{Item, Node, Order, get_with};
+use crate::order::{Item, Node, Order, get};
 use crate::perm::{self, Key, Shape};
-use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Bound, Range, RangeBounds};
 
@@ -255,16 +254,9 @@ impl<'a> NodeCursor<'a> {
                 NodeCursor::Concat { children, offsets, idx: 0, left: 0, ctx: 0, child: Box::new(NodeCursor::Empty) }
             }
             Node::Mix { il, children } => NodeCursor::Mix(Box::new(MixCursor::new(il, children))),
-            Node::Shuffle { seed, salt, shape, child } => NodeCursor::Shuffle(ShuffleCursor {
-                seed: *seed,
-                salt: *salt,
-                shape: *shape,
-                child,
-                key: Key::UNSET,
-                pos: 0,
-                ctx: 0,
-                mixes: None,
-            }),
+            Node::Shuffle { seed, salt, shape, child } => {
+                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, salt: *salt, shape: *shape, child, key: Key::UNSET, pos: 0, ctx: 0 })
+            }
             Node::Repeat { child_len, level, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
                 level: *level,
@@ -505,7 +497,7 @@ impl<'a> MixCursor<'a> {
     }
 }
 
-/// The cursor of a `Shuffle`: a position counter; the child is read by random access.
+/// The cursor of a `Shuffle`: a position counter; its mix-free child is read by random access.
 #[derive(Clone, Debug)]
 pub(crate) struct ShuffleCursor<'a> {
     seed: u64,
@@ -515,12 +507,6 @@ pub(crate) struct ShuffleCursor<'a> {
     key: Key,
     pos: usize,
     ctx: u64,
-    /// Sparse buffers for mixes reached by random traversal. Pointer keys identify
-    /// immutable interleaves borrowed for this cursor's lifetime; they are never dereferenced.
-    /// Box the map header too: shuffles that reach no mixes carry and drop only one
-    /// optional pointer. An inline map measurably slows fresh shuffled-source cursors.
-    #[allow(clippy::box_collection)]
-    mixes: Option<Box<BTreeMap<usize, Iter<'a>>>>,
 }
 
 impl ShuffleCursor<'_> {
@@ -532,19 +518,7 @@ impl ShuffleCursor<'_> {
         self.pos += 1;
         match self.child {
             Node::Source { src, offset, .. } => (*src, offset + p),
-            _ => self.get_composite(p),
+            _ => get(self.child, p, self.ctx),
         }
-    }
-
-    /// Keep the map traversal's stack frame out of the common shuffled-source path.
-    #[inline(never)]
-    fn get_composite(&mut self, p: usize) -> (u32, usize) {
-        get_with(self.child, p, self.ctx, |il, pos| {
-            let key = std::ptr::from_ref(il) as usize;
-            let mixes = self.mixes.get_or_insert_with(Box::default);
-            let iter = mixes.entry(key).or_insert_with(|| il.iter(0..0));
-            iter.seek(pos..pos + 1);
-            iter.step()
-        })
     }
 }

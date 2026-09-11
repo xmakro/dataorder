@@ -22,9 +22,9 @@ use std::convert::Infallible;
 ///
 /// [`Order::new`](crate::Order::new) reports invalid configurations as an
 /// [`Error`](crate::Error) with the path to the invalid node. This includes
-/// out-of-range skips and takes, zero steps, overflow, invalid schedules, and
-/// excessive depth. All sequence builders accept any `T` and defer these checks
-/// until the order is built.
+/// out-of-range skips and takes, zero steps, overflow, invalid schedules,
+/// excessive depth and shuffles containing mixes. All sequence builders accept
+/// any `T` and defer these checks until the order is built.
 ///
 /// # Depth
 ///
@@ -49,6 +49,11 @@ pub enum Seq<T> {
     /// cannot exceed [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     Mix(Vec<MixPart<T>>),
     /// Every position of `inner` once, in a seeded pseudorandom order.
+    ///
+    /// `inner` must contain no `Mix` nodes, including empty or single-part mixes
+    /// and mixes nested beneath other operations. Shuffle inputs before mixing.
+    /// [`Order::new`](crate::Order::new) rejects this combination with
+    /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
     /// The permutation depends on `seed`, the order's seed, enclosing repetitions,
     /// and the salts and lengths of retained sources. See the crate's
@@ -174,6 +179,10 @@ impl<T> Seq<T> {
 
     /// This sequence in the pseudorandom order selected by `seed`.
     ///
+    /// The sequence must contain no mixes, even beneath other operations or in
+    /// subtrees that would fold away. Shuffle each input before mixing instead.
+    /// This restriction is checked by [`Order::new`](crate::Order::new).
+    ///
     /// ```
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(100).shuffle(1))?;
@@ -280,9 +289,8 @@ impl<T> Seq<T> {
     /// Applying this to a completed mix partitions its global positions exactly
     /// once across workers. Worker lengths can differ by one, and their dataset
     /// mixtures need not be balanced: two equal interleaved parts split across
-    /// two workers send one part exclusively to each worker. Shuffling the mix
-    /// first breaks that pattern but scatters its scheduled phases and adds a
-    /// mix seek per element.
+    /// two workers send one part exclusively to each worker, even when both inputs
+    /// are shuffled.
     ///
     /// Each worker advances the mix past unselected positions, or seeks for long
     /// skips. Across `count` workers this can cost up to `count` times the global

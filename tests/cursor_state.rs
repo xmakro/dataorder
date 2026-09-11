@@ -15,7 +15,7 @@ impl Rng {
     }
 }
 
-fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
+fn configuration(r: &mut Rng, depth: usize, allow_mix: bool) -> (Seq<usize>, usize) {
     if depth == 0 || r.below(5) == 0 {
         let n = match r.below(5) {
             0 => usize::MAX,
@@ -25,8 +25,10 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
         };
         return (Seq::source(n), n);
     }
-    let (s, n) = configuration(r, depth - 1);
-    match r.below(9) {
+    let kind = r.below(9);
+    let (s, n) = configuration(r, depth - 1, allow_mix && kind != 0);
+    match kind {
+        7 | 8 if !allow_mix => (s, n),
         0 => (s.shuffle(r.next()), n),
         1 => {
             let k = r.below(5);
@@ -51,11 +53,11 @@ fn configuration(r: &mut Rng, depth: usize) -> (Seq<usize>, usize) {
             (s.skip(offset).step_by(step), len)
         }
         6 => {
-            let (t, m) = configuration(r, depth - 1);
+            let (t, m) = configuration(r, depth - 1, allow_mix);
             if let Some(len) = n.checked_add(m) { (Seq::concat([s, t]), len) } else { (s, n) }
         }
         7 => {
-            let (t, m) = configuration(r, depth - 1);
+            let (t, m) = configuration(r, depth - 1, allow_mix);
             let a = n.min(100);
             let schedule = match r.below(5) {
                 0 => Schedule::Uniform,
@@ -188,7 +190,7 @@ fn operation_sequences_match_random_access() {
     for _ in 0..if explicit.is_some() { 1 } else { 2000 } {
         let seed = explicit.unwrap_or_else(|| seeds.next());
         let mut r = Rng(seed);
-        let (seq, len) = configuration(&mut r, 7);
+        let (seq, len) = configuration(&mut r, 7, true);
         let order = Order::new(seq.clone()).unwrap();
         assert_eq!(order.len(), len, "seed={seed}, seq={seq:?}");
         let ops: Vec<_> = (0..100)
@@ -235,7 +237,7 @@ fn empty_ranges_resume_after_resets_skips_and_clones() {
         Seq::source(100).shuffle(11),
         mix(),
         mix().repeat(3).skip(2).step_by(7),
-        Seq::concat([mix(), mix().shuffle(7)]).skip(20),
+        Seq::concat([mix(), Seq::concat([Seq::source(100), Seq::source(50)]).shuffle(7)]).skip(20),
     ];
     for seq in sequences {
         let order = Order::with_seed(seq, 19).unwrap();
@@ -319,7 +321,7 @@ fn concat_children_keep_their_own_transform_parameters() {
             source(n, seed).repeat(3).skip(2).skip(1).step_by(3),
             source(n + 2, seed + 1).repeat(2).take(n + 3),
             Seq::concat([source(n, seed + 2), Seq::source(n + 3)]).skip(1).step_by(2),
-            Seq::mix([source(n, seed), source(n + 1, seed + 3)]).shuffle(seed + 4),
+            Seq::concat([source(n, seed), source(n + 1, seed + 3)]).shuffle(seed + 4),
         ])
     };
     let seq = Seq::concat([nested(1, 11), nested(55, 19), Seq::source(3), nested(99, 7)]).repeat(3);

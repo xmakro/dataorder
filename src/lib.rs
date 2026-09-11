@@ -98,6 +98,10 @@
 //! - The salts and original lengths of sources retained under the shuffle, in order
 //!   of appearance.
 //!
+//! A shuffle's input configuration must contain no mixes, including empty or single-part
+//! mixes and mixes nested under other operations. Shuffle each input before mixing.
+//! [`Order::new`] reports [`ErrorKind::ShuffleContainsMix`] at the enclosing shuffle.
+//!
 //! Give datasets stable [`Source::salt`] values to distinguish their shuffles when
 //! their lengths and seeds match. [`Order::set_seed`] changes the seed for all shuffles
 //! without rebuilding the order. Shuffles use a six-round Feistel permutation with
@@ -118,9 +122,8 @@
 //! A single repetition, or a cycle within the existing length, introduces no repeat level.
 //!
 //! Empty sources and subtrees do not contribute to a shuffle's salt. A skip or take
-//! also removes concatenation parts that it excludes entirely. Other combinations,
-//! such as a stride over a concatenation or a slice of a mix, can retain sources even
-//! when the selected positions do not reach them.
+//! also removes concatenation parts that it excludes entirely. A stride over a
+//! concatenation can retain sources even when the selected positions do not reach them.
 //!
 //! # Validation and limits
 //!
@@ -187,10 +190,8 @@
 //!
 //! Sequential iteration keeps cursor state. A mix uses `⌈log2 k⌉` tournament comparisons
 //! per element plus one key computation, with no comparisons once one part remains.
-//! A shuffle reads scattered child positions, so **shuffling a mix pays for a mix seek
-//! per element**. Its cursor retains seek buffers for every mix reached underneath
-//! that shuffle, allocating on the first visit and reusing them thereafter. Shuffle
-//! the parts before mixing when that is the order you need.
+//! A shuffle reads scattered child positions without allocating; its input cannot
+//! contain mixes. Shuffle the parts before mixing.
 //!
 //! Stepping through a sequence skips unselected child positions. Mixes advance their
 //! interleave for short skips and seek for longer ones. Sharding a mix across `count`

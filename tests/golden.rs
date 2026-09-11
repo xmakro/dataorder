@@ -68,11 +68,6 @@ fn golden_orders() {
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
         ("cycle of a shuffled repeat", src(0, 300).shuffle(5).repeat(2).cycle_to(1000), 0),
         (
-            "mix with a cycled concat part",
-            Seq::mix([Seq::concat([src(0, 200), src(1, 300)]).cycle_to(250), src(2, 50).shuffle(1).cycle_to(250)]).shuffle(2),
-            0,
-        ),
-        (
             "mix fading",
             Seq::mix([
                 (src(0, 1500).shuffle(1), Uniform),
@@ -84,7 +79,7 @@ fn golden_orders() {
     ];
     // Nested-repeat entries were independently recomputed from the inside-out
     // context and Feistel arithmetic for 0.4.0. Other entries retain their outputs.
-    const EXPECTED: [u64; 15] = [
+    const EXPECTED: [u64; 14] = [
         13510848840803686825,
         5734682759774056529,
         2152343650903757428,
@@ -98,7 +93,6 @@ fn golden_orders() {
         16159320458550980399,
         11644812817423956709,
         8438896446926226074,
-        14166974499237794981,
         16685696649537605013,
     ];
     let actual: Vec<u64> = cases

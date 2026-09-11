@@ -221,15 +221,11 @@ fn empty_parts_do_not_allocate_runtime_state() {
 }
 
 #[test]
-fn shuffles_reuse_every_reached_mix_including_concat_children() {
-    let mix = || Seq::mix((0..10).map(|_| Seq::source(100)));
-    let order = Order::new(Seq::concat([mix(), Seq::mix([mix(), mix()])]).repeat(3).shuffle(8)).unwrap();
+fn shuffled_compositions_do_not_allocate_during_iteration_or_reset() {
+    let part = || Seq::concat((0..10).map(|i| Seq::source(100).shuffle(i)));
+    let order = Order::new(Seq::concat([part().skip(3).step_by(2), part().cycle_to(1500)]).repeat(3).shuffle(8)).unwrap();
     let mut cursor = order.iter();
-    cursor.by_ref().for_each(drop); // Reach all cached mixes and exhaust the cursor.
     let mut clone = cursor.clone();
-    // A clone warms its own seek scratch before allocation-free reuse.
-    clone.reset(..).unwrap();
-    clone.by_ref().for_each(drop);
     for c in [&mut cursor, &mut clone] {
         let count = allocations(|| {
             c.reset(..).unwrap();
@@ -239,7 +235,7 @@ fn shuffles_reuse_every_reached_mix_including_concat_children() {
             c.reset(300..).unwrap();
             black_box(c.next());
         });
-        assert_eq!(count, 0, "a warmed shuffled composition allocated {count} times");
+        assert_eq!(count, 0, "a shuffled composition allocated {count} times");
         assert_eq!(c.next(), order.get(301));
     }
 }

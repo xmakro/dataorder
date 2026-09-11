@@ -135,9 +135,9 @@ impl<T: Source> Order<T> {
     /// ```
     ///
     /// # Errors
-    /// Skips and takes past the end, a zero step,
+    /// Skips and takes past the end, a zero step, shuffles containing mixes,
     /// lengths that overflow, nesting deeper than [`MAX_DEPTH`], and schedules the
-    /// mix rejects; see [`ErrorKind`]. The error names the node it was found at.
+    /// mix rejects; see [`ErrorKind`]. The error identifies the invalid node.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
         Self::with_seed(seq, 0)
     }
@@ -159,7 +159,7 @@ impl<T: Source> Order<T> {
     /// # Errors
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
-        let mut c = Compiler { sources: Vec::new(), salts: Vec::new(), path: Vec::new() };
+        let mut c = Compiler { sources: Vec::new(), salts: Vec::new(), path: Vec::new(), shuffle_path_len: None };
         let (root, _, _) = c.compile(seq, 1)?;
         Ok(Self { root, ctx: seed, sources: c.sources })
     }
@@ -312,18 +312,7 @@ impl<'a, T> IntoIterator for &'a Order<T> {
 }
 
 /// The element at `pos` of `node` in context `ctx`, as `(source index, index in it)`.
-pub(crate) fn get(node: &Node, pos: usize, ctx: u64) -> (u32, usize) {
-    get_with(node, pos, ctx, |il, pos| il.iter(pos..pos + 1).next().expect("dataorder: interleave yielded nothing"))
-}
-
-/// Random traversal with a caller-supplied mix seeker, allowing shuffles to retain
-/// buffers for every mix they reach, including mixes in different concat children.
-pub(crate) fn get_with<'a>(
-    mut node: &'a Node,
-    mut pos: usize,
-    mut ctx: u64,
-    mut mix: impl FnMut(&'a Interleave, usize) -> (usize, usize),
-) -> (u32, usize) {
+pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: u64) -> (u32, usize) {
     loop {
         match node {
             Node::Empty => unreachable!("dataorder: position in an empty sequence"),
@@ -334,7 +323,7 @@ pub(crate) fn get_with<'a>(
                 node = &children[i];
             }
             Node::Mix { il, children } => {
-                let (s, j) = mix(il, pos);
+                let (s, j) = il.iter(pos..pos + 1).next().expect("dataorder: interleave yielded nothing");
                 pos = j;
                 node = &children[s];
             }
@@ -373,6 +362,8 @@ struct Compiler<T> {
     salts: Vec<(u64, usize)>,
     /// Child indices from the root to the node being compiled, for error reports.
     path: Vec<usize>,
+    /// Path length of the nearest enclosing shuffle, for rejecting mix descendants.
+    shuffle_path_len: Option<usize>,
 }
 
 impl<T: Source> Compiler<T> {
@@ -461,13 +452,19 @@ impl<T: Source> Compiler<T> {
     }
 
     fn mix_parts(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
+        if let Some(len) = self.shuffle_path_len {
+            return Err(Error::new(ErrorKind::ShuffleContainsMix, self.path[..len].to_vec()));
+        }
         let schedule: Vec<Schedule> = parts.iter().map(|p| p.schedule).collect();
         let children = self.children(parts.into_iter().map(|p| p.seq), depth)?;
         self.mix(children, &schedule)
     }
 
     fn shuffle(&mut self, seed: u64, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let (child, len, level) = self.child(0, inner, depth)?;
+        let enclosing = self.shuffle_path_len.replace(self.path.len());
+        let child = self.child(0, inner, depth);
+        self.shuffle_path_len = enclosing;
+        let (child, len, level) = child?;
         if len <= 1 {
             return Ok((child, len, level));
         }

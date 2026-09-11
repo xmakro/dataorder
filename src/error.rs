@@ -129,6 +129,9 @@ pub enum ErrorKind {
     },
     /// A `StepBy` with `step == 0`.
     ZeroStep,
+    /// A shuffle contains a mix anywhere in its input configuration, even if the mix
+    /// would fold away. The error path identifies the nearest enclosing shuffle.
+    ShuffleContainsMix,
     /// A sequence length exceeds `usize::MAX`, including at an intermediate node.
     LengthOverflow,
     /// More than 2³² sources.
@@ -167,6 +170,7 @@ impl fmt::Display for ErrorKind {
             Self::SkipOutOfRange { n, len } => write!(f, "cannot skip {n} of {len} positions"),
             Self::TakeOutOfRange { n, len } => write!(f, "cannot take {n} of {len} positions"),
             Self::ZeroStep => write!(f, "step is zero"),
+            Self::ShuffleContainsMix => write!(f, "cannot shuffle a sequence containing a mix; shuffle its inputs before mixing"),
             Self::LengthOverflow => write!(f, "sequence length exceeds usize::MAX"),
             Self::TooManySources => write!(f, "more than 2^32 sources"),
             Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),

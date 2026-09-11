@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** reject shuffles whose input configuration contains any mix, including
+  empty or single-part mixes and mixes beneath concatenations, repetitions or selections.
+  `Order::new` reports `ErrorKind::ShuffleContainsMix` at the nearest enclosing shuffle.
+  Shuffle each input before mixing instead. Remove the shuffled cursor's mix-seek cache
+  and the callback-based random traversal. Accepted configurations keep their ordering.
+
 - **Breaking:** remove `Eq` and `Hash` from `Seq`, `MixPart` and `Schedule`.
   `PartialEq` now uses ordinary `f64` equality for schedule parameters: signed
   zeros compare equal, and configurations containing NaN compare unequal even

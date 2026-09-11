@@ -111,7 +111,7 @@ so you can nest mixes and concatenations.
 | Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
 | Choose exact counts for each dataset | `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count), …])` |
 | Control when a sequence contributes records | `Seq::mix`, with a `Schedule` for each part |
-| Shuffle positions | `.shuffle(seed)` |
+| Shuffle positions in a sequence containing no mixes | `.shuffle(seed)` |
 | Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
 | Repeat or truncate to an exact length | `.cycle_to(len)` |
 | Keep a range of positions | `.skip(start).take(len)` |
@@ -187,8 +187,10 @@ resume existing checkpoints with their original crate version.
 
 ## Things to know
 
-- **Composition matters.** Shuffle each input sequence before mixing for efficient
-  iteration. To make a schedule span several epochs, repeat its input sequence;
+- **Composition matters.** Shuffle each input sequence before mixing. `Order::new`
+  rejects a shuffle containing any mix, including empty or single-part mixes and
+  mixes nested beneath other operations, with `ErrorKind::ShuffleContainsMix`.
+  To make a schedule span several epochs, repeat its input sequence;
   repeating the whole mix restarts its schedules each epoch.
 - **Workers partition positions.** Apply `.skip(index).step_by(count)` to the
   completed sequence to divide its positions without overlap. Check `index < count`
@@ -196,8 +198,7 @@ resume existing checkpoints with their original crate version.
   if workers past its end should receive no positions. The global schedule is preserved
   collectively; each worker need not receive a balanced dataset mix. Two equal
   interleaved datasets split across two workers send one dataset to each worker,
-  even when both inputs are shuffled. Shuffling the completed mix breaks that pattern
-  but scatters its scheduled phases and adds a mix seek per element. Sharding the input sequences
+  even when both inputs are shuffled. Sharding the input sequences
   before mixing produces a different order and can change how virtual time maps
   to output positions. Shard lengths can differ by one; callers needing equal worker lengths
   must choose their truncation or padding policy.

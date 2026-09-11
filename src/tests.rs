@@ -38,8 +38,8 @@ fn salts(seq: &Seq<Src>, out: &mut Vec<(u64, usize)>) {
 }
 
 /// [`salts`] of the sources that positions `range` of `seq` can reach. Skips and takes narrow
-/// the range, concatenations hand each part its share of it, and a mix with one nonempty
-/// part passes it through. Other nodes keep their children's whole range.
+/// the range and concatenations hand each part its share of it. Other nodes keep
+/// their children's whole range. Shuffle inputs cannot contain mixes.
 fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, usize)>) {
     if range.is_empty() {
         return;
@@ -60,14 +60,7 @@ fn reachable(seq: &Seq<Src>, range: std::ops::Range<usize>, out: &mut Vec<(u64, 
         }
         Seq::Skip { n, inner } => reachable(inner, range.start + n..range.end + n, out),
         Seq::Take { inner, .. } => reachable(inner, range, out),
-        Seq::Mix(parts) => {
-            let mut nonempty = parts.iter().filter(|p| !eval(&p.seq, 0).unwrap().is_empty());
-            if let (Some(part), None) = (nonempty.next(), nonempty.next()) {
-                reachable(&part.seq, range, out);
-            } else {
-                parts.iter().for_each(|p| whole(&p.seq, out));
-            }
-        }
+        Seq::Mix(_) => unreachable!("shuffle inputs cannot contain mixes"),
         Seq::StepBy { step: 1, inner } => reachable(inner, range, out),
         Seq::Cycle { len, inner } => cycled(inner, *len, out),
         Seq::Shuffle { inner, .. } | Seq::Repeat { inner, .. } | Seq::StepBy { inner, .. } => whole(inner, out),
@@ -304,15 +297,16 @@ fn cycle_of(seq: &Seq<Src>, len: usize, n: usize) -> Seq<Src> {
     Seq::Take { n: len, inner: Box::new(inner) }
 }
 
-fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
+fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize], allow_mix: bool) -> Seq<Src> {
     if depth == 0 || rng.below(5) == 0 {
         let id = rng.below(lens.len());
         return src(id as u32, lens[id]);
     }
-    let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens)).collect::<Vec<_>>();
+    let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens, allow_mix)).collect::<Vec<_>>();
     match rng.below(9) {
+        1 | 2 | 7 if !allow_mix => Seq::concat(parts(rng, depth - 1)),
         8 => {
-            let inner = random_seq(rng, depth - 1, lens);
+            let inner = random_seq(rng, depth - 1, lens, allow_mix);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
             inner.cycle_to(if n == 0 { 0 } else { rng.below(70) })
         }
@@ -335,10 +329,10 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
             };
             (p, schedule)
         })),
-        3 => random_seq(rng, depth - 1, lens).shuffle(rng.next()),
-        4 => random_seq(rng, depth - 1, lens).repeat(rng.below(4)),
+        3 => random_seq(rng, depth - 1, lens, false).shuffle(rng.next()),
+        4 => random_seq(rng, depth - 1, lens, allow_mix).repeat(rng.below(4)),
         5 => {
-            let inner = random_seq(rng, depth - 1, lens);
+            let inner = random_seq(rng, depth - 1, lens, allow_mix);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
             let start = rng.below(n + 1);
             match rng.below(3) {
@@ -348,7 +342,7 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize]) -> Seq<Src> {
             }
         }
         _ => {
-            let inner = random_seq(rng, depth - 1, lens);
+            let inner = random_seq(rng, depth - 1, lens, allow_mix);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
             inner.skip(rng.below(n + 1)).step_by(1 + rng.below(4))
         }
@@ -363,7 +357,7 @@ fn random_configurations_match_reference() {
     let lens = [0usize, 1, 2, 3, 7, 13, 40];
     let (mut checked, mut skipped) = (0, 0);
     for round in 0..800 {
-        let seq = random_seq(&mut rng, 4, &lens);
+        let seq = random_seq(&mut rng, 4, &lens, true);
         let seed = rng.next();
         let order = match Order::with_seed(seq.clone(), seed) {
             Ok(o) => o,
@@ -432,7 +426,7 @@ fn large_configurations_match_reference() {
     let mut rng = Rng(0xFEED_FACE_CAFE_BEEF);
     let lens = [50usize, 333, 1000, 2000];
     for round in 0..40 {
-        let seq = random_seq(&mut rng, 5, &lens);
+        let seq = random_seq(&mut rng, 5, &lens, true);
         let order = match Order::new(seq.clone()) {
             Ok(o) => o,
             Err(e) if e.is_schedule() => continue,
@@ -561,9 +555,6 @@ fn repeat_levels_are_assigned_from_the_inside_out() {
         ("cycle of repeat", x().repeat(2).cycle_to(35), 2),
     ];
     for (name, seq, inner_level) in cases {
-        // A shuffle above the child makes the outer context observable even when a
-        // selection has kept only one position of an inner shuffled epoch.
-        let seq = seq.shuffle(19);
         assert_eq!(LevelView::of(&seq).level(), inner_level, "reference level: {name}");
         for seed in [0, 51] {
             let repeated = Order::with_seed(seq.clone().repeat(3), seed).unwrap();
@@ -731,8 +722,8 @@ fn cycles() {
     assert_ne!(ids(Order::new(Seq::concat([src(0, 100), src(1, 50)]).cycle_to(200).shuffle(1)).unwrap().iter())[..100], base[..]);
     // A cycled concat part is narrowed to the requested count before mixing.
     let part = || Seq::concat([src(0, 100), src(1, 50)]);
-    let narrowed = Order::new(Seq::mix([part().cycle_to(75), src(2, 75)]).shuffle(1)).unwrap();
-    let plain = Order::new(Seq::mix([src(0, 100).take(75), src(2, 75)]).shuffle(1)).unwrap();
+    let narrowed = Order::new(Seq::mix([part().cycle_to(75).shuffle(1), src(2, 75)])).unwrap();
+    let plain = Order::new(Seq::mix([src(0, 100).take(75).shuffle(1), src(2, 75)])).unwrap();
     assert_eq!(ids(narrowed.iter()), ids(plain.iter()));
 }
 
@@ -772,8 +763,6 @@ fn empty_parts_do_not_affect_shuffles_above() {
     same(Seq::concat([x(), src(1, 0)]).shuffle(1));
     same(Seq::concat([src(0, 0), x()]).shuffle(1));
     same(Seq::concat([src(1, 0), x(), src(2, 7).repeat(0), src(3, 7).take(0), src(4, 3).skip(3), src(5, 2).skip(2).step_by(1)]).shuffle(1));
-    same(Seq::mix([x(), src(1, 0), Seq::concat([src(2, 5).skip(5), src(3, 0)])]).shuffle(1));
-    same(Seq::mix([x()]).shuffle(1));
     same(x().step_by(1).shuffle(1));
     // A part of a concatenation that a skip or take cuts away entirely does not count
     // either, however the concatenation nests; a part it touches counts.
