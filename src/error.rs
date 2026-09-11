@@ -134,6 +134,9 @@ pub enum ErrorKind {
     ShuffleContainsMix,
     /// A sequence length exceeds `usize::MAX`, including at an intermediate node.
     LengthOverflow,
+    /// A product of nested repeat counts exceeds `usize::MAX`. Counts are checked
+    /// before selections, including a cycle's partial final pass.
+    EpochOverflow,
     /// More than 2³² sources.
     TooManySources,
     /// A mix has 2³¹ − 1 parts or more.
@@ -172,6 +175,7 @@ impl fmt::Display for ErrorKind {
             Self::ZeroStep => write!(f, "step is zero"),
             Self::ShuffleContainsMix => write!(f, "cannot shuffle a sequence containing a mix; shuffle its inputs before mixing"),
             Self::LengthOverflow => write!(f, "sequence length exceeds usize::MAX"),
+            Self::EpochOverflow => write!(f, "nested repeat counts exceed usize::MAX"),
             Self::TooManySources => write!(f, "more than 2^32 sources"),
             Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),
             Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),

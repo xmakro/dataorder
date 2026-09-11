@@ -2,8 +2,8 @@
 //!
 //! Shuffle and mix billions of records without storing a full index array. Ordering
 //! memory grows with the sources and sequence structure, not the number of records.
-//! Each lookup returns an [`Item`] with a source ordinal, source reference and record
-//! index, leaving record loading to you.
+//! Each lookup returns an [`Item`] with a source ordinal, source reference, record
+//! index and epoch, leaving record loading to you.
 //!
 //! - **Shuffle on demand:** each shuffled index takes O(1) time on average and O(1) space.
 //! - **Seek into a mix:** counting and binary searches locate each part's position
@@ -39,6 +39,7 @@
 //! assert_eq!(item.source_ordinal, 0);
 //! assert_eq!(*item.source, 1_000_000_000);
 //! assert!(item.record_index < 1_000_000_000);
+//! assert_eq!(item.epoch, 1);
 //! assert_eq!(item, order.get(resume).unwrap());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -123,8 +124,14 @@
 //! can change its epoch numbers in later enclosing passes.
 //! Selections keep original repeat counts, even when retaining only the first pass:
 //! for an `n`-element source `x`, `x.shuffle(1).repeat(3).take(n).repeat(2)` uses shuffle
-//! epochs 0 and 3. A single repetition leaves the epoch unchanged. Epoch arithmetic
-//! wraps modulo 2^64; output lengths must still fit in `usize`.
+//! epochs 0 and 3. A single repetition leaves the epoch unchanged.
+//! Epoch numbers use `usize` and never wrap. For each nonempty sequence, the product
+//! of original repeat counts along any source path must fit in `usize`, even after
+//! selections. Compilation reports [`ErrorKind::EpochOverflow`] when this bound fails.
+//! This bound is used for validation; sibling inputs do not affect epoch numbering.
+//! [`Item::epoch`] reports this accumulated epoch at the source, even for unshuffled
+//! records. Mixture inputs can be in different epochs at the same time. A shuffle
+//! around a repeated sequence can draw its records and epochs out of order.
 //!
 //! Configuration salts are computed from the original tree. Each source contributes
 //! its salt and original length, even when empty. Unary operations pass that value
@@ -148,7 +155,7 @@
 //! have valid parameters and satisfy their individual numerical limits; see
 //! [`Schedule`] and [`ErrorKind`] for the full rules.
 //!
-//! Lengths and positions use `usize` throughout. Every sequence node must fit in
+//! Lengths, positions and epochs use `usize` throughout. Every sequence node must fit in
 //! `usize`, even if a parent truncates or discards it. Seeds, salts and shuffle
 //! arithmetic use fixed-width `u64` values for reproducibility across platforms.
 //! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
@@ -174,7 +181,7 @@
 //! # Cost
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
-//! elements. Compiler visits return lengths and configuration salts to their parents.
+//! elements. Compiler visits return lengths, configuration salts and epoch bounds to their parents.
 //! Compilation can revisit subtrees when flattening concatenations or folding selections.
 //! Each mix builds independent profiles in `O(k)` time for `k` parts.
 //!

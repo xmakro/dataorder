@@ -135,8 +135,8 @@ impl<'a, T> Iterator for Cursor<'a, T> {
             return None;
         }
         self.pos += 1;
-        let (s, i) = self.root.next();
-        Some(Item { source_ordinal: s as usize, source: &self.order.sources[s as usize], record_index: i })
+        let (s, i, epoch) = self.root.next();
+        Some(Item { source_ordinal: s as usize, source: &self.order.sources[s as usize], record_index: i, epoch })
     }
 
     /// Skips `n` elements without visiting them, then yields the next.
@@ -208,6 +208,7 @@ pub(crate) enum NodeCursor<'a> {
         src: u32,
         offset: usize,
         next: usize,
+        epoch: usize,
     },
     /// Only the current child has a cursor. Changing children replaces its state.
     Concat {
@@ -249,7 +250,7 @@ impl<'a> NodeCursor<'a> {
     fn new(node: &'a Node) -> Self {
         match node {
             Node::Empty => NodeCursor::Empty,
-            Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: 0 },
+            Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: 0, epoch: 0 },
             Node::Concat { offsets, children } => {
                 NodeCursor::Concat { children, offsets, idx: 0, left: 0, ctx: Context::new(0), child: Box::new(NodeCursor::Empty) }
             }
@@ -282,7 +283,10 @@ impl<'a> NodeCursor<'a> {
     fn seek(&mut self, pos: usize, ctx: Context) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: seek in an empty sequence"),
-            NodeCursor::Source { offset, next, .. } => *next = *offset + pos,
+            NodeCursor::Source { offset, next, epoch, .. } => {
+                *next = *offset + pos;
+                *epoch = ctx.epoch;
+            }
             NodeCursor::Concat { children, offsets, idx, left, ctx: c, child } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
                 if i != *idx || matches!(**child, Self::Empty) {
@@ -317,13 +321,13 @@ impl<'a> NodeCursor<'a> {
 
     /// The next element. Must not be called past the end.
     #[inline]
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self) -> (u32, usize, usize) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
-            NodeCursor::Source { src, next, .. } => {
+            NodeCursor::Source { src, next, epoch, .. } => {
                 let i = *next;
                 *next += 1;
-                (*src, i)
+                (*src, i, *epoch)
             }
             NodeCursor::Concat { children, offsets, idx, left, ctx, child } => {
                 if *left == 0 {
@@ -457,7 +461,7 @@ impl<'a> MixCursor<'a> {
 
     /// Inlined into dispatch to avoid a function call for each element.
     #[inline(always)]
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self) -> (u32, usize, usize) {
         let (s, j) = self.iter.step();
         self.pos += 1;
         if self.next_j[s] != j {
@@ -519,11 +523,11 @@ impl ShuffleCursor<'_> {
     /// Not inlined into the dispatcher: the permutation and the descent are the bulk of
     /// the code, and every other node kind would pay their prologue at each level.
     #[inline(never)]
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self) -> (u32, usize, usize) {
         let p = perm::permute(self.shape, self.key, self.pos);
         self.pos += 1;
         match self.child {
-            Node::Source { src, offset, .. } => (*src, offset + p),
+            Node::Source { src, offset, .. } => (*src, offset + p, self.ctx.epoch),
             _ => get(self.child, p, self.ctx),
         }
     }

@@ -82,12 +82,12 @@ impl Rng {
 
 /// Materializes `seq` by the definitions in the crate docs.
 fn eval(seq: &Seq<Src>, seed: u64) -> Result<Vec<(u32, usize)>, Error> {
-    eval_epoch(seq, seed, 0)
+    Ok(eval_epoch(seq, seed, 0)?.into_iter().map(|(id, i, _)| (id, i)).collect())
 }
 
-fn eval_epoch(seq: &Seq<Src>, run_seed: u64, epoch: u64) -> Result<Vec<(u32, usize)>, Error> {
+fn eval_epoch(seq: &Seq<Src>, run_seed: u64, epoch: usize) -> Result<Vec<(u32, usize, usize)>, Error> {
     Ok(match seq {
-        Seq::Source(s) => (0..s.len).map(|i| (s.id, i)).collect(),
+        Seq::Source(s) => (0..s.len).map(|i| (s.id, i, epoch)).collect(),
         Seq::Concat(parts) => {
             let mut out = Vec::new();
             for p in parts {
@@ -122,7 +122,7 @@ fn eval_epoch(seq: &Seq<Src>, run_seed: u64, epoch: u64) -> Result<Vec<(u32, usi
             let mut out = eval_epoch(inner, run_seed, epoch)?;
             out.clear();
             for e in 0..*times {
-                out.extend(eval_epoch(inner, run_seed, epoch.wrapping_mul(*times as u64).wrapping_add(e as u64))?);
+                out.extend(eval_epoch(inner, run_seed, epoch * times + e)?);
             }
             out
         }
@@ -229,14 +229,17 @@ fn random_configurations_match_reference() {
             }
             Err(e) => panic!("round {round}: {e} for {seq:?}"),
         };
-        let reference = eval(&seq, seed).unwrap();
+        let annotated = eval_epoch(&seq, seed, 0).unwrap();
+        let reference: Vec<_> = annotated.iter().map(|&(id, i, _)| (id, i)).collect();
         let n = reference.len();
         assert_eq!(order.len(), n, "round {round}: {seq:?}");
         for (i, &r) in reference.iter().enumerate() {
-            let crate::Item { source: s, record_index: idx, .. } = order.get(i).unwrap();
+            let crate::Item { source: s, record_index: idx, epoch, .. } = order.get(i).unwrap();
             assert_eq!((s.id, idx), r, "round {round}: get({i}) of {seq:?}");
+            assert_eq!(epoch, annotated[i].2, "round {round}: epoch at {i} of {seq:?}");
         }
         assert_eq!(ids(order.cursor(0..n).unwrap()), reference, "round {round}: {seq:?}");
+        assert!(order.iter().map(|item| item.epoch).eq(annotated.iter().map(|&(_, _, epoch)| epoch)), "round {round}: epochs of {seq:?}");
         for _ in 0..4 {
             let a = rng.below(n + 1);
             let b = a + rng.below(n - a + 1);
@@ -292,12 +295,14 @@ fn large_configurations_match_reference() {
             Err(e) if e.is_schedule() => continue,
             Err(e) => panic!("round {round}: {e}"),
         };
-        let reference = eval(&seq, 0).unwrap();
+        let annotated = eval_epoch(&seq, 0, 0).unwrap();
+        let reference: Vec<_> = annotated.iter().map(|&(id, i, _)| (id, i)).collect();
         let n = reference.len();
         if n == 0 || n > 200_000 {
             continue;
         }
         assert_eq!(ids(order.cursor(0..n).unwrap()), reference, "round {round}: {seq:?}");
+        assert!(order.iter().map(|item| item.epoch).eq(annotated.iter().map(|&(_, _, epoch)| epoch)), "round {round}: epochs of {seq:?}");
         for _ in 0..8 {
             let a = rng.below(n + 1);
             let b = (a + rng.below(500)).min(n);
@@ -380,22 +385,6 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
     assert_eq!(ids(later.iter()), ids(reseeded.iter()));
     later.set_seed(0);
     assert_eq!(ids(later.iter()), ids(order.iter()));
-}
-
-/// Selections can keep the output length small while epoch products exceed u64.
-#[test]
-fn accumulated_epochs_wrap_at_u64() {
-    let n = 17;
-    let times = usize::MAX / n;
-    let seq = src(7, n).shuffle(3).repeat(times).take(1).repeat(usize::MAX);
-    let order = Order::with_seed(seq, 51).unwrap();
-    for pos in [0, 1, usize::MAX / 2, usize::MAX - 1] {
-        let epoch = ((pos as u128 * times as u128) % (1u128 << 64)) as u64;
-        let ctx = perm::Context { seed: 51, epoch };
-        let expected = perm::permute(Shape::new(n), perm::key(3, ctx, perm::source_salt(7, n)), 0);
-        assert_eq!(order.get(pos).unwrap().record_index, expected);
-        assert_eq!(order.cursor(pos..).unwrap().next().unwrap().record_index, expected);
-    }
 }
 
 #[test]

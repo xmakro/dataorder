@@ -80,8 +80,8 @@ impl Node {
 /// even when source values are equal or zero-sized. It is local to the order, not a
 /// persistent dataset ID. The item borrows its source and is cheap to copy.
 ///
-/// Equality compares `source_ordinal` and `record_index` first, then compares source
-/// values only when both indices match. Source comparison uses `T`'s equality
+/// Equality compares `source_ordinal`, `record_index` and `epoch` first, then compares
+/// source values only when all three match. Source comparison uses `T`'s equality
 /// implementation, so its cost depends on the source type.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Item<'a, T> {
@@ -89,6 +89,11 @@ pub struct Item<'a, T> {
     pub source_ordinal: usize,
     /// Index of the record within this source, not its position in the order.
     pub record_index: usize,
+    /// Zero-based accumulated repetition epoch at the source, or zero without repeats.
+    /// Counts nested repetitions; see the crate's
+    /// [epoch rules](crate#shuffles-and-repetitions). Selections preserve the original
+    /// epoch. A shuffle around a repeat can draw epochs out of order.
+    pub epoch: usize,
     /// The source handle owned by the order.
     pub source: &'a T,
 }
@@ -134,8 +139,8 @@ impl<T: Source> Order<T> {
     ///
     /// # Errors
     /// Skips and takes past the end, a zero step, shuffles containing mixes,
-    /// lengths that overflow, nesting deeper than [`MAX_DEPTH`], and schedules the
-    /// mix rejects; see [`ErrorKind`]. The error identifies the invalid node.
+    /// lengths or nested repeat counts that overflow, nesting deeper than [`MAX_DEPTH`],
+    /// and schedules the mix rejects; see [`ErrorKind`]. The error identifies the invalid node.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
         Self::with_seed(seq, 0)
     }
@@ -235,8 +240,8 @@ impl<T> Order<T> {
         if pos >= self.len() {
             return None;
         }
-        let (s, i) = get(&self.root, pos, Context::new(self.seed));
-        Some(Item { source_ordinal: s as usize, source: &self.sources[s as usize], record_index: i })
+        let (s, i, epoch) = get(&self.root, pos, Context::new(self.seed));
+        Some(Item { source_ordinal: s as usize, source: &self.sources[s as usize], record_index: i, epoch })
     }
 
     /// Returns a cursor over the whole order, starting at position 0.
@@ -309,12 +314,12 @@ impl<'a, T> IntoIterator for &'a Order<T> {
     }
 }
 
-/// The element at `pos` of `node` in context `ctx`, as `(source index, index in it)`.
-pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, usize) {
+/// The element at `pos` of `node`, as `(source index, record index, accumulated epoch)`.
+pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, usize, usize) {
     loop {
         match node {
             Node::Empty => unreachable!("dataorder: position in an empty sequence"),
-            Node::Source { src, offset, .. } => return (*src, offset + pos),
+            Node::Source { src, offset, .. } => return (*src, offset + pos, ctx.epoch),
             Node::Concat { offsets, children } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
                 pos -= offsets[i];
@@ -347,12 +352,15 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, us
     }
 }
 
-/// Summaries returned by compilation. The salt describes the original configuration;
-/// the node and length describe the folded result.
+/// Summaries returned by compilation. Salt and the epoch bound follow the original
+/// configuration; the node and length describe the folded result.
 struct Compiled {
     node: Node,
     len: usize,
     salt: u64,
+    /// Maximum product of original repeat counts along a source path, used only
+    /// to validate epoch arithmetic. Zero for an empty sequence.
+    epoch_count: usize,
 }
 
 struct Compiler<T> {
@@ -389,13 +397,13 @@ impl<T: Source> Compiler<T> {
     }
 
     /// `depth` counts configuration nodes from the root. Each visit returns its node,
-    /// length and configuration salt to the parent.
-    /// Every node must fit in `usize` before its parent can fold or truncate it.
+    /// length, configuration salt and epoch bound to the parent.
+    /// Lengths and nested repeat counts must fit before a parent can truncate them.
     fn compile(&mut self, seq: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         if depth > MAX_DEPTH {
             return Err(self.err(ErrorKind::TooDeep));
         }
-        match seq {
+        let mut compiled = match seq {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, depth),
             Seq::Mix(parts) => self.mix_parts(parts, depth),
@@ -405,7 +413,11 @@ impl<T: Source> Compiler<T> {
             Seq::Skip { n, inner } => self.skip(n, *inner, depth),
             Seq::Take { n, inner } => self.take(n, *inner, depth),
             Seq::StepBy { step, inner } => self.stepped(step, *inner, depth),
+        }?;
+        if compiled.len == 0 {
+            compiled.epoch_count = 0;
         }
+        Ok(compiled)
     }
 
     fn source(&mut self, source: T) -> Result<Compiled, Error> {
@@ -414,13 +426,14 @@ impl<T: Source> Compiler<T> {
         let salt = perm::source_salt(source.salt(), len);
         self.sources.push(source);
         let node = if len == 0 { Node::Empty } else { Node::Source { src, offset: 0, len } };
-        Ok(Compiled { node, len, salt })
+        Ok(Compiled { node, len, salt, epoch_count: 1 })
     }
 
     /// Flatten concats using their existing offsets and the summaries returned by visits.
     fn concat(&mut self, parts: Vec<Seq<T>>, depth: u32) -> Result<Compiled, Error> {
         let parts = self.children(parts, depth)?;
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
+        let epoch_count = parts.iter().map(|part| part.epoch_count).max().unwrap_or(0);
         let mut children = Vec::new();
         let mut offsets = Vec::new();
         let mut len = 0usize;
@@ -446,7 +459,7 @@ impl<T: Source> Compiler<T> {
             1 => children.pop().unwrap(),
             _ => Node::Concat { offsets, children },
         };
-        Ok(Compiled { node, len, salt })
+        Ok(Compiled { node, len, salt, epoch_count })
     }
 
     fn mix_parts(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
@@ -471,8 +484,9 @@ impl<T: Source> Compiler<T> {
 
     /// A single repetition leaves both positions and epoch numbers unchanged.
     fn repeat(&mut self, times: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node: child, len: child_len, salt } = self.child(0, inner, depth)?;
+        let Compiled { node: child, len: child_len, salt, epoch_count } = self.child(0, inner, depth)?;
         let len = times.checked_mul(child_len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
+        let epoch_count = times.checked_mul(epoch_count).ok_or_else(|| self.err(ErrorKind::EpochOverflow))?;
         let node = if len == 0 {
             Node::Empty
         } else if times == 1 {
@@ -480,44 +494,46 @@ impl<T: Source> Compiler<T> {
         } else {
             Node::Repeat { child_len, len, times, child: Box::new(child) }
         };
-        Ok(Compiled { node, len, salt })
+        Ok(Compiled { node, len, salt, epoch_count })
     }
 
     fn cycled(&mut self, len: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len: child_len, salt } = self.child(0, inner, depth)?;
+        let Compiled { node, len: child_len, salt, mut epoch_count } = self.child(0, inner, depth)?;
         if len > 0 && child_len == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
         let node = if len <= child_len {
             slice(node, 0, len)
         } else {
-            Node::Repeat { child_len, len, times: len.div_ceil(child_len), child: Box::new(node) }
+            let times = len.div_ceil(child_len);
+            epoch_count = times.checked_mul(epoch_count).ok_or_else(|| self.err(ErrorKind::EpochOverflow))?;
+            Node::Repeat { child_len, len, times, child: Box::new(node) }
         };
-        Ok(Compiled { node, len, salt })
+        Ok(Compiled { node, len, salt, epoch_count })
     }
 
     fn skip(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
+        let Compiled { node, len, salt, epoch_count } = self.child(0, inner, depth)?;
         if n > len {
             return Err(self.err(ErrorKind::SkipOutOfRange { n, len }));
         }
-        Ok(Compiled { node: slice(node, n, len - n), len: len - n, salt })
+        Ok(Compiled { node: slice(node, n, len - n), len: len - n, salt, epoch_count })
     }
 
     fn take(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
+        let Compiled { node, len, salt, epoch_count } = self.child(0, inner, depth)?;
         if n > len {
             return Err(self.err(ErrorKind::TakeOutOfRange { n, len }));
         }
-        Ok(Compiled { node: slice(node, 0, n), len: n, salt })
+        Ok(Compiled { node: slice(node, 0, n), len: n, salt, epoch_count })
     }
 
     fn stepped(&mut self, step: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         if step == 0 {
             return Err(self.err(ErrorKind::ZeroStep));
         }
-        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
-        Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt })
+        let Compiled { node, len, salt, epoch_count } = self.child(0, inner, depth)?;
+        Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt, epoch_count })
     }
 
     /// Validate schedules even when the mix folds away.
@@ -528,6 +544,7 @@ impl<T: Source> Compiler<T> {
         }
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
         let lens: Vec<usize> = parts.iter().map(|part| part.len).collect();
+        let epoch_count = parts.iter().map(|part| part.epoch_count).max().unwrap_or(0);
         let mut il = Interleave::with_schedule(&lens, schedule).map_err(|e| {
             let (kind, part) = e.into_kind();
             self.err_at(kind, part)
@@ -542,7 +559,7 @@ impl<T: Source> Compiler<T> {
             1 => children.pop().unwrap(),
             _ => Node::Mix { il, children },
         };
-        Ok(Compiled { node, len, salt })
+        Ok(Compiled { node, len, salt, epoch_count })
     }
 }
 

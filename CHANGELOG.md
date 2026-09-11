@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** expose `Item::epoch: usize`, the zero-based accumulated repetition epoch
+  at the returned source. Random access and cursors report it for shuffled and
+  unshuffled inputs. Item equality includes the epoch; struct literals and exhaustive
+  patterns must account for the new field. Epochs never wrap: validate original nested
+  repeat-count products against `usize::MAX` and report `EpochOverflow` during compilation.
+  Record ordering is unchanged for configurations within this bound.
+
 - Simplify concatenation pruning to one pass over child ranges, reusing the existing
   vectors. Shuffle salts, epoch counts and output orders are unchanged.
 
@@ -11,8 +18,7 @@
   inputs' shuffles. Consecutive `.repeat(a).repeat(b)` matches `.repeat(a * b)` when
   their lengths fit. Keep original repeat counts through selections, including a
   cycle's partial final pass. Remove compiler repeat levels and their folding traversal.
-  Epoch arithmetic wraps modulo 2^64. Single-repeat outputs are unchanged; nested-repeat
-  outputs change. Resume older orders with their original crate version.
+  Single-repeat outputs are unchanged; nested-repeat outputs change. Resume older orders with their original crate version.
 
 - **Breaking:** derive shuffle salts from the original configuration during compilation.
   Sources contribute their salts and original lengths, including empty or discarded
@@ -44,8 +50,8 @@
   Update mapping calls to use the new names. Ordering, callback behavior and
   serialized configurations are unchanged.
 
-- Compare `Item` source ordinals and record indices before source values, avoiding
-  source comparisons when either index differs. Document that equality includes
+- Compare `Item` source ordinals, record indices and epochs before source values, avoiding
+  source comparisons when any of them differ. Document that equality includes
   source values and that their comparison cost depends on the source type.
 
 - **Breaking:** rename `ErrorKind::TooSteep` to `ErrorKind::ScheduleTooSteep`.
@@ -53,7 +59,7 @@
   fields, error paths, display messages and ordering behavior are unchanged.
 
 - Correct the `Source` documentation to describe the returned `Item`, including
-  its source ordinal, source reference and record index.
+  its source ordinal, source reference, record index and epoch.
 
 - **Breaking:** rename `Seq::cycle(len)` to `Seq::cycle_to(len)` to make its
   exact finite target length explicit. Replace `.cycle(len)` calls with
@@ -163,7 +169,7 @@
   length, use `skip(index.min(len))` when those workers should be empty.
   Serialized `Shard` configurations are rejected.
 
-- **Breaking:** use `Item { source_ordinal, source, record_index }` for both
+- **Breaking:** use `Item { source_ordinal, source, record_index, epoch }` for both
   `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,
   `Order::source_index`, `Cursor::indexed` and `IndexedCursor`. Every result
   identifies its source explicitly, including equal and zero-sized handles.

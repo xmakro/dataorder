@@ -1,6 +1,6 @@
 //! Stateful cursor properties: reproduce with DATAORDER_STATE_SEED=<decimal seed>.
 //! Failure histories are minimized by deleting operations before being reported.
-use dataorder::{Order, Schedule, Seq};
+use dataorder::{ErrorKind, Order, Schedule, Seq};
 
 struct Rng(u64);
 impl Rng {
@@ -187,11 +187,19 @@ fn minimize(mut ops: Vec<Op>, fails: impl Fn(&[Op]) -> bool) -> Vec<Op> {
 fn operation_sequences_match_random_access() {
     let explicit = std::env::var("DATAORDER_STATE_SEED").ok().map(|s| s.parse::<u64>().expect("decimal seed"));
     let mut seeds = Rng(0xcafe_ba5e_dead_beef);
+    let mut checked = 0;
     for _ in 0..if explicit.is_some() { 1 } else { 2000 } {
         let seed = explicit.unwrap_or_else(|| seeds.next());
         let mut r = Rng(seed);
         let (seq, len) = configuration(&mut r, 7, true);
-        let order = Order::new(seq.clone()).unwrap();
+        let order = match Order::new(seq.clone()) {
+            Ok(order) => order,
+            // Large selections can fit in usize while their original nested
+            // repeat counts do not. Such configurations are rejected up front.
+            Err(err) if matches!(err.kind(), ErrorKind::EpochOverflow) => continue,
+            Err(err) => panic!("{err}: {seq:?}"),
+        };
+        checked += 1;
         assert_eq!(order.len(), len, "seed={seed}, seq={seq:?}");
         let ops: Vec<_> = (0..100)
             .map(|_| {
@@ -219,6 +227,7 @@ fn operation_sequences_match_random_access() {
             panic!("DATAORDER_STATE_SEED={seed}: {error}\nconfiguration={seq:?}\nminimized operations={reduced:?}");
         }
     }
+    assert!(explicit.is_some() || checked >= 1000, "only {checked} valid configurations checked");
 }
 
 #[test]

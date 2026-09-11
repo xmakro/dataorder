@@ -71,7 +71,7 @@ const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Context {
     pub(crate) seed: u64,
-    pub(crate) epoch: u64,
+    pub(crate) epoch: usize,
 }
 
 impl Context {
@@ -80,10 +80,10 @@ impl Context {
     }
 
     /// Flatten nested repetitions. Counts belong to the original configuration;
-    /// mixtures and selections do not change them. Arithmetic is modulo 2^64.
+    /// mixtures and selections do not change them. Compilation bounds their products.
     #[inline]
     pub(crate) fn repeat(self, times: usize, epoch: usize) -> Self {
-        Self { epoch: self.epoch.wrapping_mul(times as u64).wrapping_add(epoch as u64), ..self }
+        Self { epoch: self.epoch * times + epoch, ..self }
     }
 }
 
@@ -98,7 +98,7 @@ pub(crate) fn key(seed: u64, ctx: Context, salt: u64) -> Key {
     let ctx = if ctx.epoch == 0 {
         ctx.seed
     } else {
-        mix64(mix64(ctx.seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add(ctx.epoch.wrapping_mul(PHI)) ^ PHI)
+        mix64(mix64(ctx.seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((ctx.epoch as u64).wrapping_mul(PHI)) ^ PHI)
     };
     let a =
         mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
@@ -213,7 +213,7 @@ mod tests {
             for inner in 0..3 {
                 let nested = Context::new(5).repeat(2, outer).repeat(3, inner);
                 let flat = Context::new(5).repeat(6, outer * 3 + inner);
-                assert_eq!(nested.epoch, (outer * 3 + inner) as u64);
+                assert_eq!(nested.epoch, outer * 3 + inner);
                 assert_eq!(key(1, nested, 7), key(1, flat, 7));
             }
         }
