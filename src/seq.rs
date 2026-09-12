@@ -56,7 +56,7 @@ pub enum Seq<T> {
     /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
     /// The permutation depends on the order's seed
-    /// and the input configuration's source salts, original lengths and concat grouping.
+    /// and the input configuration's source salts, original lengths, shuffled layers and concat grouping.
     /// Empty or discarded sources still contribute. See the crate's
     /// [shuffle rules](crate#shuffles-and-repetitions) for details.
     Shuffle {
@@ -201,6 +201,7 @@ impl<T> Seq<T> {
     /// This sequence in a pseudorandom order selected by the order's seed and input salt.
     /// Produces the same order as `repeat_shuffled(1)`. Select the run with
     /// [`Order::with_seed`](crate::Order::with_seed) or [`Order::set_seed`](crate::Order::set_seed).
+    /// Nested shuffled layers use distinct derived keys without reseeding their inputs.
     ///
     /// The sequence must contain no mixes, even beneath other operations or in
     /// subtrees that would fold away. Shuffle each input before mixing instead.

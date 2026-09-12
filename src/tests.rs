@@ -35,11 +35,11 @@ fn config_salt(seq: &Seq<Src>) -> u64 {
         Seq::Source(s) => perm::source_salt(s.salt(), s.len),
         Seq::Concat(parts) => perm::combine_salts(parts.iter().map(config_salt)),
         Seq::Mix(_) => unreachable!("shuffle inputs cannot contain mixes"),
-        Seq::Shuffle { inner, .. }
-        | Seq::Repeat { inner, .. }
+        Seq::Shuffle { inner } | Seq::ShuffledRepeat { inner, .. } | Seq::ShuffledCycle { inner, .. } => {
+            perm::shuffled_salt(config_salt(inner))
+        }
+        Seq::Repeat { inner, .. }
         | Seq::Cycle { inner, .. }
-        | Seq::ShuffledRepeat { inner, .. }
-        | Seq::ShuffledCycle { inner, .. }
         | Seq::Skip { inner, .. }
         | Seq::Take { inner, .. }
         | Seq::StepBy { inner, .. } => config_salt(inner),
@@ -630,18 +630,10 @@ fn discarded_sources_contribute_to_shuffle_salts() {
     ] {
         different(seq);
     }
-    // Unary operations pass the original source's salt through even when they
+    // Plain unary operations pass the original source's salt through even when they
     // produce no elements. Each configuration below selects exactly x's records.
     let expected = ids(Order::new(Seq::concat([x(), src(1, 50)]).take(100).shuffle()).unwrap().iter());
-    for empty in [
-        src(1, 50).repeat(0),
-        src(1, 50).cycle_to(0),
-        src(1, 50).take(0),
-        src(1, 50).skip(50),
-        src(1, 50).skip(50).step_by(2),
-        src(1, 50).take(0).shuffle(),
-        src(1, 50).shuffle().take(0),
-    ] {
+    for empty in [src(1, 50).repeat(0), src(1, 50).cycle_to(0), src(1, 50).take(0), src(1, 50).skip(50), src(1, 50).skip(50).step_by(2)] {
         let seq = Seq::concat([x(), empty]).shuffle();
         assert_eq!(ids(Order::new(seq).unwrap().iter()), expected);
     }
@@ -650,7 +642,29 @@ fn discarded_sources_contribute_to_shuffle_salts() {
     assert_ne!(ids(Order::new(changed_length).unwrap().iter()), expected);
 }
 
-/// Configuration grouping survives concat flattening; unary wrappers preserve the salt.
+/// Shuffled layers remain part of the original configuration even when folded away.
+#[test]
+fn discarded_shuffled_layers_contribute_to_outer_shuffle_salts() {
+    for n in [0, 1, 50] {
+        let outer = |empty| Seq::concat([src(0, 100), empty]).shuffle();
+        let expected = ids(Order::new(outer(src(1, n).shuffle().take(0))).unwrap().iter());
+        let plain = ids(Order::new(outer(src(1, n).take(0))).unwrap().iter());
+        assert_ne!(expected, plain);
+        for empty in [
+            src(1, n).take(0).shuffle(),
+            src(1, n).shuffle().repeat(0),
+            src(1, n).repeat_shuffled(0),
+            src(1, n).cycle_to_shuffled(0),
+            src(1, n).repeat_shuffled(1).take(0),
+            src(1, n).cycle_to_shuffled(n).take(0),
+        ] {
+            assert_eq!(ids(Order::new(outer(empty)).unwrap().iter()), expected);
+        }
+        assert_ne!(ids(Order::new(outer(src(1, n).shuffle().shuffle().take(0))).unwrap().iter()), expected);
+    }
+}
+
+/// Configuration grouping survives concat flattening; plain unary wrappers preserve the salt.
 #[test]
 fn configuration_grouping_controls_shuffle_salts() {
     let flat = Seq::concat([src(0, 100), src(1, 100), src(2, 100)]);

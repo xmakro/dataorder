@@ -144,6 +144,9 @@ for example, `.shuffle().repeat(3)` repeats the same permutation three times.
 `.shuffle()` produces the same order as `.repeat_shuffled(1)`. Set the seed for all
 shuffled operations with `Order::with_seed(seq, seed)` or `order.set_seed(seed)`;
 source salts distinguish datasets within that run.
+Each shuffled layer derives a new salt for enclosing shuffles, so nested shuffles
+use distinct keys. The input's permutation stays fixed; equal permutations can still
+occur by chance, especially with few records.
 Changing a part's count can change the mixed order's prefix. Keep the original
 configuration and concatenate additional data when the existing prefix must stay fixed.
 
@@ -220,9 +223,11 @@ resume existing checkpoints with their original crate version.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
   Shuffle salts follow the original source configuration, including empty and
-  selected-away sources. Changing a source's salt or original length, or changing
-  concatenation grouping, can change a shuffle above it. Compiler pruning has no
-  effect on these salts.
+  selected-away sources. Each shuffle, shuffled repeat or shuffled cycle advances
+  the salt once, even if its runtime node folds away. Plain repetitions and selections
+  pass it through unchanged. Changing a source's salt or original length, shuffled
+  layers, or concatenation grouping can change a shuffle above it. Compiler pruning
+  has no effect on these salts.
   Nested plain repeats compose: `.repeat(3).repeat(2)` matches `.repeat(6)`.
   Adding an outer repeat preserves the entire first pass, including nested epochs.
   The order seed passes down unchanged; each shuffled repeat uses only its local

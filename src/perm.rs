@@ -92,6 +92,13 @@ pub(crate) fn source_salt(salt: u64, len: usize) -> u64 {
     mix64(mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ (len as u64).wrapping_mul(PHI))
 }
 
+/// Advance the configuration salt after a shuffled layer. Key derivation mixes this
+/// offset, giving enclosing shuffles distinct keys without changing the child's key.
+/// All shuffled operations use the same step, independent of their output lengths.
+pub(crate) fn shuffled_salt(salt: u64) -> u64 {
+    salt.wrapping_add(PHI)
+}
+
 /// Combines child configuration salts in order, before flattening or dropping children.
 /// Empty lists use zero; a single child passes through unchanged. Grouping matters.
 pub(crate) fn combine_salts(salts: impl IntoIterator<Item = u64>) -> u64 {

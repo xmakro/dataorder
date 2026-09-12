@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** derive distinct keys for nested shuffled layers. Each shuffle,
+  shuffled repeat and shuffled cycle advances its configuration salt for enclosing
+  shuffles, including when folded away. Equivalent one-pass forms remain
+  interchangeable, and children keep their own permutations. Orders with no nested
+  shuffled layers are unchanged. The public API and serialized format are unchanged.
+  Resume older orders with their original crate version.
+
 - **Breaking:** remove the per-shuffle seed. Use `.shuffle()` and select the run
   with `Order::with_seed` or `Order::set_seed`; source salts distinguish datasets.
   Remove `seed` from `Seq::Shuffle` and its serialized form; old seeded `Shuffle`

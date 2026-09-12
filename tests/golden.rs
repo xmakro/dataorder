@@ -79,14 +79,19 @@ fn golden_orders() {
         ("shuffled repeat", src(0, 777).repeat_shuffled(3), 0),
         ("shuffled repeat, seeded order", src(0, 777).repeat_shuffled(3), 42),
         ("shuffled cycle", src(0, 300).cycle_to_shuffled(1000), 0),
+        ("double shuffle", src(0, 1000).shuffle().shuffle(), 42),
+        ("shuffle, shuffled repeat", src(0, 37).shuffle().repeat_shuffled(3), 42),
+        ("shuffled repeat, shuffled cycle", src(0, 37).repeat_shuffled(2).cycle_to_shuffled(100), 42),
     ];
     // Captured from the prior implementation with every shuffle seed set to zero,
-    // before removing the per-shuffle seed. Shuffled repeat/cycle entries are unchanged.
-    const EXPECTED: [u64; 17] = [
+    // before removing the per-shuffle seed. Nested cases (shuffle(concat) and the last
+    // three) were independently calculated with Python integer Feistel arithmetic
+    // and the configuration salt step for each shuffled layer. Other cases are unchanged.
+    const EXPECTED: [u64; 20] = [
         9636474030837673273,
         99794755355777013,
         9286240989508410160,
-        4516933780095520549,
+        2325999265252126505,
         2169467847850813516,
         6077391615804054636,
         4777681411854005729,
@@ -100,6 +105,9 @@ fn golden_orders() {
         3667822865842139108,
         4895949453059197240,
         10785437813920805584,
+        3556920425061620029,
+        7959941557936061057,
+        17791197923179096559,
     ];
     let actual: Vec<u64> = cases
         .iter()

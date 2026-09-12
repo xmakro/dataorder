@@ -367,7 +367,7 @@ impl Compiled {
         } else {
             Node::Repeat { child_len, len, shuffle, child: Box::new(child) }
         };
-        Self { node, len, salt }
+        Self { node, len, salt: if shuffled { perm::shuffled_salt(salt) } else { salt } }
     }
 }
 
@@ -481,6 +481,7 @@ impl<T: Source> Compiler<T> {
         if child.len > 1 {
             child.node = Node::Shuffle { salt: child.salt, shape: Shape::new(child.len), child: Box::new(child.node) };
         }
+        child.salt = perm::shuffled_salt(child.salt);
         Ok(child)
     }
 

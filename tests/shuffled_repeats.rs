@@ -19,6 +19,54 @@ fn check_access(order: &Order<usize>) {
 }
 
 #[test]
+fn nested_shuffles_do_not_reuse_the_inner_permutation() {
+    // Two applications of the same two-element permutation always cancel. Fresh
+    // layers should produce both orders, independently of the first layer's order.
+    let mut pairs = [[0; 2]; 2];
+    for seed in 0..256 {
+        let once = Order::with_seed(Seq::source(2).shuffle(), seed).unwrap();
+        let twice = Order::with_seed(Seq::source(2).shuffle().shuffle(), seed).unwrap();
+        pairs[once.get(0).unwrap().record_index][twice.get(0).unwrap().record_index] += 1;
+        check_access(&twice);
+    }
+    for count in pairs.into_iter().flatten() {
+        assert!((32..=96).contains(&count), "correlated shuffle layers: {pairs:?}");
+    }
+
+    for seed in [0, 42, u64::MAX] {
+        let once = Order::with_seed(Seq::source(37).shuffle(), seed).unwrap();
+        let p = indices(&once);
+        let squared: Vec<_> = p.iter().map(|&i| p[i]).collect();
+        let twice = Order::with_seed(Seq::source(37).shuffle().shuffle(), seed).unwrap();
+        let actual = indices(&twice);
+        assert_ne!(actual, squared);
+        assert_ne!(actual, p);
+        let mut sorted = actual;
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..37).collect::<Vec<_>>());
+        check_access(&twice);
+    }
+}
+
+#[test]
+fn one_pass_shuffles_are_interchangeable_inside_outer_shuffles() {
+    for n in [2, 37] {
+        for seed in [0, 42, u64::MAX] {
+            let expected = Order::with_seed(Seq::source(n).shuffle().shuffle().repeat_shuffled(2), seed).unwrap();
+            for inner in [Seq::source(n).shuffle(), Seq::source(n).repeat_shuffled(1), Seq::source(n).cycle_to_shuffled(n)] {
+                // These wrappers can fold away; the shuffled layer must survive them.
+                let inner = Seq::concat([inner.skip(0).take(n).step_by(1).repeat(1).cycle_to(n)]);
+                for outer in [inner.clone().shuffle(), inner.clone().repeat_shuffled(1), inner.cycle_to_shuffled(n)] {
+                    let order = Order::with_seed(outer.repeat_shuffled(2), seed).unwrap();
+                    assert!(order.iter().eq(expected.iter()));
+                    check_access(&order);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn repeating_a_selected_shuffle_keeps_the_selected_records() {
     for seed in [0, 1, 42, u64::MAX] {
         for times in [1, 3] {

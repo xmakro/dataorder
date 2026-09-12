@@ -96,8 +96,8 @@
 //! A shuffle visits every child position exactly once. Its permutation depends on:
 //!
 //! - The order's seed.
-//! - The input configuration's source salts, original source lengths and concatenation
-//!   grouping, before pruning or flattening.
+//! - The input configuration's source salts, original source lengths, shuffled layers
+//!   and concatenation grouping, before pruning or flattening.
 //!
 //! A shuffle's input configuration must contain no mixes, including empty or single-part
 //! mixes and mixes nested under other operations. Shuffle each input before mixing.
@@ -118,7 +118,10 @@
 //! `x.shuffle()` produces the same order as `x.repeat_shuffled(1)`.
 //! Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed for all shuffled operations.
 //! Nested shuffles and shuffled repetitions keep their own permutations; enclosing
-//! repeats never reseed them. Every child receives the unchanged order seed, with
+//! repeats never reseed them. Each shuffled layer derives a new configuration salt
+//! for enclosing shuffles, so `x.shuffle().shuffle()` uses distinct permutation keys.
+//! Distinct keys can still produce the same permutation, especially for small inputs.
+//! Every child receives the unchanged order seed, with
 //! no enclosing epoch. The shuffled variants reject mixes in their inputs,
 //! just like `shuffle`. A shortened final pass takes a prefix of its full permutation.
 //!
@@ -138,8 +141,11 @@
 //! permutes the same selected pair on both outer passes.
 //!
 //! Configuration salts are computed from the original tree. Each source contributes
-//! its salt and original length, even when empty. Unary operations pass that value
-//! through unchanged, including selections or repetitions that discard all elements.
+//! its salt and original length, even when empty. Plain repetitions and selections
+//! pass that value through unchanged. Each shuffle, shuffled repeat or shuffled cycle
+//! advances the salt once, independent of its count or output length, even when its
+//! runtime node is folded away. These three operations use the same salt step, so
+//! their equivalent one-pass forms remain interchangeable inside larger sequences.
 //! A concatenation combines its children's salts in order; an empty concatenation
 //! has salt zero and a single-child concatenation passes its child's salt through.
 //! Nested concatenation grouping can therefore change a shuffle. Compiler pruning
