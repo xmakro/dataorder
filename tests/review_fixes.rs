@@ -26,6 +26,11 @@ fn checked_access_preserves_cursor_on_errors() {
     assert_eq!(order.cursor((Bound::Excluded(usize::MAX), Bound::Unbounded)).unwrap_err(), BoundsError::Overflow);
     assert_eq!(order.cursor(10..9).unwrap_err(), BoundsError::Reversed { start: 10, end: 9 });
     assert_eq!(order.cursor(..18).unwrap_err(), BoundsError::OutOfBounds { end: 18, len: 17 });
+    // A start past the end is out of bounds, not reversed, even with an unbounded end.
+    assert_eq!(order.cursor(18..).unwrap_err(), BoundsError::StartOutOfBounds { start: 18, len: 17 });
+    assert_eq!(order.cursor(18..20).unwrap_err(), BoundsError::StartOutOfBounds { start: 18, len: 17 });
+    assert_eq!(order.cursor(18..).unwrap_err().to_string(), "range start 18 out of range for 17 positions");
+    assert_eq!(order.cursor(17..).unwrap().count(), 0);
     let mut c = order.cursor(3..10).unwrap();
     c.next(); // Initialize the cursor before testing rollback.
     let expected = c.clone().collect::<Vec<_>>();
@@ -39,6 +44,9 @@ fn checked_access_preserves_cursor_on_errors() {
     assert_eq!(c.offset(), 4);
     assert_eq!(c.clone().collect::<Vec<_>>(), expected);
     assert_eq!(c.reset(12..4), Err(BoundsError::Reversed { start: 12, end: 4 }));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset(18..), Err(BoundsError::StartOutOfBounds { start: 18, len: 17 }));
     assert_eq!(c.offset(), 4);
     assert_eq!(c.clone().collect::<Vec<_>>(), expected);
     c.reset(17..17).unwrap();

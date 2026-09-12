@@ -186,6 +186,11 @@ pub(crate) fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Resul
         Bound::Excluded(&e) => e,
         Bound::Unbounded => len,
     };
+    // Check the start before the range's direction: with an unbounded end, a start
+    // past the order would otherwise read as a reversed range.
+    if start > len {
+        return Err(BoundsError::StartOutOfBounds { start, len });
+    }
     if start > end {
         return Err(BoundsError::Reversed { start, end });
     }

@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- Add `BoundsError::StartOutOfBounds` for ranges that start beyond the order.
+  `cursor(start..)` and `reset(start..)` with `start` past the end reported a reversed
+  range, because the unbounded end resolved to the order's length before the start
+  was checked. The start is now checked before the range's direction and end.
+  Ordering is unchanged.
+
 - Store each shuffled node's first-pass key in the compiled order and derive the keys
   of later passes only when a cursor enters them. Random access into a shuffle, and
   every shuffle nested under another, no longer derive a key per element.

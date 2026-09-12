@@ -178,6 +178,13 @@ impl fmt::Display for ErrorKind {
 pub enum BoundsError {
     /// An exclusive start or an inclusive end at `usize::MAX` cannot be advanced by one.
     Overflow,
+    /// A range starts beyond the order, including `start..` with `start > len`.
+    StartOutOfBounds {
+        /// Requested inclusive start.
+        start: usize,
+        /// Order length.
+        len: usize,
+    },
     /// The exclusive end precedes the start.
     Reversed {
         /// Inclusive start.
@@ -185,7 +192,7 @@ pub enum BoundsError {
         /// Exclusive end.
         end: usize,
     },
-    /// A range extends beyond the order.
+    /// A range ends beyond the order.
     OutOfBounds {
         /// Requested exclusive end.
         end: usize,
@@ -198,6 +205,7 @@ impl fmt::Display for BoundsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Overflow => write!(f, "range bound overflows usize"),
+            Self::StartOutOfBounds { start, len } => write!(f, "range start {start} out of range for {len} positions"),
             Self::Reversed { start, end } => write!(f, "range {start}..{end} ends before it starts"),
             Self::OutOfBounds { end, len } => write!(f, "range end {end} out of range for {len} positions"),
         }
