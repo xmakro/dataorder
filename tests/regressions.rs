@@ -1,142 +1,102 @@
-//! Adversarial inputs from the numerical and compilation review. Run potential hangs and
-//! stack aborts in a subprocess so a regression fails with a bounded diagnostic.
+//! Adversarial inputs from the numerical and compilation review.
 
 use dataorder::{ErrorKind, Order, Schedule, Seq, Source};
-use std::process::Command;
-use std::time::{Duration, Instant};
-
-fn isolated(case: &str) {
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "isolated_case", "--nocapture"])
-        .env("DATAORDER_REGRESSION_CASE", case)
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "{case}: subprocess {status}");
-            return;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("{case}: subprocess exceeded 15 seconds");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
 
 #[test]
 fn finite_profiles_and_seeks_terminate() {
-    isolated("profiles");
-}
-
-#[test]
-fn large_inline_sources_fit_a_thread_stack() {
-    isolated("stack");
-}
-
-#[test]
-fn isolated_case() {
-    let Ok(case) = std::env::var("DATAORDER_REGRESSION_CASE") else { return };
-    match case.as_str() {
-        "map" => std::thread::Builder::new()
-            .stack_size(2 << 20)
-            .spawn(|| {
-                let deep = || (0..14).fold(Seq::source("later"), |s, _| s.take(1));
-                // Success, an untouched deep sibling, and an already mapped deep sibling.
-                drop(deep().map_sources(|_| 1usize));
-                for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
-                    let mut calls = Vec::new();
-                    let result = seq.try_map_sources(|name| {
-                        calls.push(name);
-                        if name == "missing" { Err(()) } else { Ok(1usize) }
-                    });
-                    assert!(result.is_err());
-                    assert_eq!(calls.last(), Some(&"missing"));
-                    assert!(calls.len() <= 2);
+    for full in [f64::from_bits(1), 1e-309, 1e-308] {
+        let seq = Seq::mix([(Seq::source(100), Schedule::Uniform), (Seq::source(100), Schedule::ramp(0.0, full))]);
+        let error = Order::new(seq).unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::InvalidSchedule { .. }));
+        assert_eq!(error.path(), &[1]);
+    }
+    for d in [1e-8, 1e-12, 1e-16, 1e-20, 1e-300] {
+        let order =
+            Order::new(Seq::mix([(Seq::source(300), Schedule::Uniform), (Seq::source(100), Schedule::trapezoid(0.0, d, d, 1.0))])).unwrap();
+        let all: Vec<_> = order.iter().map(|item| (*item.source, item.record_index)).collect();
+        for p in 0..order.len() {
+            assert_eq!(
+                all[p],
+                {
+                    let dataorder::Item { source: &s, record_index: i, .. } = order.get(p).unwrap();
+                    (s, i)
+                },
+                "d={d}, p={p}"
+            );
+            let drawn = all[..p].iter().filter(|&&(s, _)| s == 100).count();
+            // In the limiting fading shape: p = 300*t + 100*(2*t-t*t).
+            let t = 2.0 * p as f64 / (500.0 + (250_000.0 - 400.0 * p as f64).sqrt());
+            assert!((drawn as f64 - 100.0 * (2.0 * t - t * t)).abs() < 2.0, "d={d}, p={p}, drawn={drawn}");
+        }
+    }
+    #[cfg(target_pointer_width = "64")]
+    {
+        // These profiles formerly overflowed the shared remainder builder.
+        let n = (1usize << 46) - 1;
+        let order = Order::new(Seq::mix([(Seq::source(1), Schedule::Uniform), (Seq::source(n), Schedule::ramp(0.0, 1e-296))])).unwrap();
+        let at = (n + 1) / 4;
+        let window: Vec<_> = order.cursor(at - 8..at + 8).unwrap().map(|item| (*item.source, item.record_index)).collect();
+        assert!(window.iter().any(|&(s, _)| s == 1));
+        for (j, expected) in window.into_iter().enumerate() {
+            let dataorder::Item { source: &s, record_index: i, .. } = order.get(at - 8 + j).unwrap();
+            assert_eq!((s, i), expected);
+        }
+    }
+    #[cfg(target_pointer_width = "64")]
+    for n in [1_000_000_000_000usize, (1 << 46) - 1] {
+        let order = Order::new(Seq::mix([(Seq::source(n), Schedule::Uniform), (Seq::source(1), Schedule::fade(0.0, 1.0))])).unwrap();
+        for start in [0, n / 4, n / 2 - 16, 3 * (n / 4), n - 16] {
+            for (p, dataorder::Item { source: &s, record_index: i, .. }) in (start..).zip(order.cursor(start..).unwrap().take(16)) {
+                assert_eq!((s, i), {
+                    let dataorder::Item { source: &s, record_index: i, .. } = order.get(p).unwrap();
+                    (s, i)
+                });
+                // The singleton's stagger is 3/4, whose fading quantile is 1/2.
+                if p < n / 2 - 2 {
+                    assert_eq!((s, i), (n, p));
                 }
-                let seq = Seq::concat([Seq::source("missing"), deep()]);
-                assert!(std::panic::catch_unwind(|| seq.map_sources::<usize, _>(|_| panic!("mapping failed"))).is_err());
-            })
-            .unwrap()
-            .join()
-            .unwrap(),
-        "stack" => std::thread::Builder::new()
-            .stack_size(2 << 20)
-            .spawn(|| {
-                let chain = |depth| (1..depth).fold(Seq::source([0u8; 8192]), |s, _| s.take(8192));
-                let order = Order::new(chain(16)).unwrap();
-                assert_eq!(order.len(), 8192);
-                assert_eq!(order.get(8191).unwrap().record_index, 8191);
-            })
-            .unwrap()
-            .join()
-            .unwrap(),
-        "profiles" => {
-            for full in [f64::from_bits(1), 1e-309, 1e-308] {
-                let seq = Seq::mix([(Seq::source(100), Schedule::Uniform), (Seq::source(100), Schedule::ramp(0.0, full))]);
-                let error = Order::new(seq).unwrap_err();
-                assert!(matches!(error.kind(), ErrorKind::InvalidSchedule { .. }));
-                assert_eq!(error.path(), &[1]);
-            }
-            for d in [1e-8, 1e-12, 1e-16, 1e-20, 1e-300] {
-                let order =
-                    Order::new(Seq::mix([(Seq::source(300), Schedule::Uniform), (Seq::source(100), Schedule::trapezoid(0.0, d, d, 1.0))]))
-                        .unwrap();
-                let all: Vec<_> = order.iter().map(|item| (*item.source, item.record_index)).collect();
-                for p in 0..order.len() {
-                    assert_eq!(
-                        all[p],
-                        {
-                            let dataorder::Item { source: &s, record_index: i, .. } = order.get(p).unwrap();
-                            (s, i)
-                        },
-                        "d={d}, p={p}"
-                    );
-                    let drawn = all[..p].iter().filter(|&&(s, _)| s == 100).count();
-                    // In the limiting fading shape: p = 300*t + 100*(2*t-t*t).
-                    let t = 2.0 * p as f64 / (500.0 + (250_000.0 - 400.0 * p as f64).sqrt());
-                    assert!((drawn as f64 - 100.0 * (2.0 * t - t * t)).abs() < 2.0, "d={d}, p={p}, drawn={drawn}");
-                }
-            }
-            #[cfg(target_pointer_width = "64")]
-            {
-                // These profiles formerly overflowed the shared remainder builder.
-                let n = (1usize << 46) - 1;
-                let order =
-                    Order::new(Seq::mix([(Seq::source(1), Schedule::Uniform), (Seq::source(n), Schedule::ramp(0.0, 1e-296))])).unwrap();
-                let at = (n + 1) / 4;
-                let window: Vec<_> = order.cursor(at - 8..at + 8).unwrap().map(|item| (*item.source, item.record_index)).collect();
-                assert!(window.iter().any(|&(s, _)| s == 1));
-                for (j, expected) in window.into_iter().enumerate() {
-                    let dataorder::Item { source: &s, record_index: i, .. } = order.get(at - 8 + j).unwrap();
-                    assert_eq!((s, i), expected);
-                }
-            }
-            #[cfg(target_pointer_width = "64")]
-            for n in [1_000_000_000_000usize, (1 << 46) - 1] {
-                let order =
-                    Order::new(Seq::mix([(Seq::source(n), Schedule::Uniform), (Seq::source(1), Schedule::fade(0.0, 1.0))])).unwrap();
-                for start in [0, n / 4, n / 2 - 16, 3 * (n / 4), n - 16] {
-                    for (p, dataorder::Item { source: &s, record_index: i, .. }) in (start..).zip(order.cursor(start..).unwrap().take(16)) {
-                        assert_eq!((s, i), {
-                            let dataorder::Item { source: &s, record_index: i, .. } = order.get(p).unwrap();
-                            (s, i)
-                        });
-                        // The singleton's stagger is 3/4, whose fading quantile is 1/2.
-                        if p < n / 2 - 2 {
-                            assert_eq!((s, i), (n, p));
-                        }
-                        if p > n / 2 + 2 {
-                            assert_eq!((s, i), (n, p - 1));
-                        }
-                    }
+                if p > n / 2 + 2 {
+                    assert_eq!((s, i), (n, p - 1));
                 }
             }
         }
-        _ => panic!("unknown regression case"),
     }
+}
+
+/// Compilation recurses with configuration depth and the size of `T`; a chain of large
+/// inline sources must still fit an ordinary thread stack.
+#[test]
+fn large_inline_sources_fit_a_thread_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let chain = |depth| (1..depth).fold(Seq::source([0u8; 8192]), |s, _| s.take(8192));
+            let order = Order::new(chain(16)).unwrap();
+            assert_eq!(order.len(), 8192);
+            assert_eq!(order.get(8191).unwrap().record_index, 8191);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn mapping_stops_on_callback_errors_and_panics() {
+    let deep = || (0..14).fold(Seq::source("later"), |s, _| s.take(1));
+    // Success, an untouched deep sibling, and an already mapped deep sibling.
+    drop(deep().map_sources(|_| 1usize));
+    for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
+        let mut calls = Vec::new();
+        let result = seq.try_map_sources(|name| {
+            calls.push(name);
+            if name == "missing" { Err(()) } else { Ok(1usize) }
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.last(), Some(&"missing"));
+        assert!(calls.len() <= 2);
+    }
+    let seq = Seq::concat([Seq::source("missing"), deep()]);
+    assert!(std::panic::catch_unwind(|| seq.map_sources::<usize, _>(|_| panic!("mapping failed"))).is_err());
 }
 
 #[derive(Clone, Debug)]
@@ -220,9 +180,4 @@ fn json_preserves_float_bits_and_large_scheduled_orders() {
                 .eq(b.cursor(n - 100..).unwrap().map(|item| (item.source_ordinal, item.record_index)))
         );
     }
-}
-
-#[test]
-fn mapping_stops_on_callback_errors_and_panics() {
-    isolated("map");
 }
