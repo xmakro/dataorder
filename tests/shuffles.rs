@@ -1,5 +1,7 @@
-//! Repetition owns its permutation; it never changes permutations in its input.
-use dataorder::{ErrorKind, Order, Seq};
+//! Shuffles through the public API: nested layers keep their own permutations, a repetition
+//! never changes its input's permutations, and configuration salts follow the original
+//! configuration.
+use dataorder::{ErrorKind, Order, Seq, Source};
 
 fn indices(order: &Order<usize>) -> Vec<usize> {
     order.iter().map(|item| item.record_index).collect()
@@ -210,5 +212,37 @@ fn mapping_and_serialization_preserve_shuffled_variants() {
         let back: Seq<usize> = serde_json::from_str(json).unwrap();
         assert_eq!(seq, back);
         assert!(Order::new(seq).unwrap().iter().eq(Order::new(back).unwrap().iter()));
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Named {
+    salt: u64,
+    len: usize,
+}
+impl Source for Named {
+    fn len(&self) -> usize {
+        self.len
+    }
+    fn salt(&self) -> u64 {
+        self.salt
+    }
+}
+
+#[test]
+fn nested_slice_boundaries_preserve_configuration_salts() {
+    let s = |salt| Seq::source(Named { salt, len: 10 });
+    let make = |removed| Seq::concat([Seq::concat([s(removed), s(1), s(2)]).skip(1), s(3)]).skip(15);
+    let tail = |removed| Seq::concat([s(1), Seq::concat([s(2), s(3), s(removed)]).take(29)]).take(25);
+    for (a, b) in [(make(0), make(999)), (tail(0), tail(999))] {
+        let a = Order::new(a.shuffle()).unwrap();
+        let b = Order::new(b.shuffle()).unwrap();
+        let mut a_items: Vec<_> = a.iter().map(|item| (item.source.salt, item.record_index)).collect();
+        let mut b_items: Vec<_> = b.iter().map(|item| (item.source.salt, item.record_index)).collect();
+        assert_ne!(a_items, b_items);
+        a_items.sort_unstable();
+        b_items.sort_unstable();
+        assert_eq!(a_items, b_items);
+        assert_eq!(a.sources().len(), 4);
     }
 }

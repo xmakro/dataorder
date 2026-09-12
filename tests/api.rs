@@ -1,7 +1,8 @@
 //! The public surface, used as a downstream crate would: building configurations by hand,
-//! matching on non-exhaustive enums, errors with paths, cursors, sources.
+//! matching on non-exhaustive enums, errors with paths, items, cursors, sources, mapping
+//! and serialization.
 
-use dataorder::{Cursor, Error, ErrorKind, MixPart, Order, Schedule, Seq, Source};
+use dataorder::{Cursor, Error, ErrorKind, Item, MixPart, Order, Schedule, Seq, Source};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shard {
@@ -56,6 +57,25 @@ fn builders_accept_unresolved_sources() {
     assert_eq!(order.len(), 3);
     assert_eq!(order.sources(), [10, 20]);
     assert!(order.iter().eq(expected.iter()));
+}
+
+#[test]
+fn mapping_stops_on_callback_errors_and_panics() {
+    let deep = || (0..14).fold(Seq::source("later"), |s, _| s.take(1));
+    // Success, an untouched deep sibling, and an already mapped deep sibling.
+    drop(deep().map_sources(|_| 1usize));
+    for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
+        let mut calls = Vec::new();
+        let result = seq.try_map_sources(|name| {
+            calls.push(name);
+            if name == "missing" { Err(()) } else { Ok(1usize) }
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.last(), Some(&"missing"));
+        assert!(calls.len() <= 2);
+    }
+    let seq = Seq::concat([Seq::source("missing"), deep()]);
+    assert!(std::panic::catch_unwind(|| seq.map_sources::<usize, _>(|_| panic!("mapping failed"))).is_err());
 }
 
 #[test]
@@ -165,6 +185,15 @@ fn workers_partition_short_sequences_with_explicit_offsets() {
     assert_eq!(Order::new(Seq::source(3).skip(4).step_by(workers)).unwrap_err().kind(), &ErrorKind::SkipOutOfRange { n: 4, len: 3 });
 }
 
+#[test]
+fn sharding_preserves_global_partition_not_worker_mixture() {
+    let seq = Seq::mix([Seq::source(4).shuffle(), Seq::source(4).shuffle()]);
+    for worker in 0..2 {
+        let order = Order::new(seq.clone().skip(worker).step_by(2)).unwrap();
+        assert!(order.iter().all(|item| item.source_ordinal == worker));
+    }
+}
+
 #[cfg(feature = "serde")]
 #[test]
 fn unresolved_position_operations_round_trip() {
@@ -211,6 +240,22 @@ fn hand_built_configuration() {
     assert_eq!(order.sources().iter().map(|s| s.name).collect::<Vec<_>>(), ["a", "b", "c"]);
     let sources = order.into_sources();
     assert_eq!(sources.len(), 3);
+}
+
+#[test]
+fn empty_compaction_preserves_identity_and_error_paths() {
+    let order = Order::new(Seq::mix([Seq::source(0), Seq::source(3), Seq::source(0), Seq::source(3)])).unwrap();
+    assert_eq!(order.sources(), &[0, 3, 0, 3]);
+    assert_eq!(order.iter().map(|item| item.source_ordinal).collect::<Vec<_>>(), [1, 3, 1, 3, 1, 3]);
+    let error = Order::new(Seq::mix([
+        (Seq::source(0), Schedule::Uniform),
+        (Seq::source(3), Schedule::Uniform),
+        (Seq::source(0), Schedule::delayed(f64::NAN)),
+        (Seq::source(3), Schedule::Uniform),
+    ]))
+    .unwrap_err();
+    assert_eq!(error.path(), &[2]);
+    assert!(matches!(error.kind(), ErrorKind::InvalidSchedule { .. }));
 }
 
 #[test]
@@ -315,6 +360,96 @@ fn cursors_reset_skip_and_clone() {
 }
 
 #[test]
+fn items_distinguish_zero_sized_sources() {
+    #[derive(Debug, PartialEq)]
+    struct Zero;
+    impl Source for Zero {
+        fn len(&self) -> usize {
+            4
+        }
+    }
+    let order = Order::new(Seq::mix([Seq::source(Zero), Seq::source(Zero)])).unwrap();
+    let expected: Vec<_> = (0..4).flat_map(|i| [(0, i), (1, i)]).collect();
+    let mut cursor = order.iter();
+    assert_eq!(cursor.clone().map(|item| (item.source_ordinal, item.record_index)).collect::<Vec<_>>(), expected);
+    for (pos, &(s, i)) in expected.iter().enumerate() {
+        assert_eq!(order.get(pos), Some(Item { source_ordinal: s, source: &Zero, record_index: i }));
+    }
+    assert_eq!(cursor.nth(3), Some(Item { source_ordinal: 1, source: &Zero, record_index: 1 }));
+    assert_eq!(cursor.offset(), 4);
+    assert!(cursor.reset(9..).is_err());
+    assert!(cursor.reset(..9).is_err());
+    assert_eq!(cursor.offset(), 4);
+    cursor.reset(0..).unwrap();
+    assert_eq!(cursor.next(), Some(Item { source_ordinal: 0, source: &Zero, record_index: 0 }));
+    assert_eq!(cursor.clone().last(), Some(Item { source_ordinal: 1, source: &Zero, record_index: 3 }));
+    assert_eq!(cursor.clone().count(), 7);
+    cursor.reset(2..4).unwrap();
+    assert_eq!(cursor.nth(usize::MAX), None);
+    assert_eq!(cursor.offset(), 4);
+    assert_eq!(cursor.next(), None);
+    cursor.reset(..).unwrap();
+    cursor.reset(2..).unwrap();
+    assert_eq!(cursor.offset(), 2);
+}
+
+#[test]
+fn items_copy_without_cloning_source_handles() {
+    struct Handle(usize);
+    impl Source for Handle {
+        fn len(&self) -> usize {
+            self.0
+        }
+    }
+    let order = Order::new(Seq::concat([Seq::source(Handle(0)), Seq::source(Handle(4)), Seq::source(Handle(4))])).unwrap();
+    for (pos, item) in (&order).into_iter().enumerate() {
+        // Handle has neither Copy nor Clone; copying an item only copies its reference.
+        for copy in [item, item, order.get(pos).unwrap()] {
+            assert_eq!(copy.source_ordinal, 1 + pos / 4);
+            assert_eq!(copy.record_index, pos % 4);
+            assert!(std::ptr::eq(copy.source, &order.sources()[copy.source_ordinal]));
+        }
+    }
+}
+
+#[test]
+fn item_equality_checks_metadata_before_source_values() {
+    use std::cell::Cell;
+
+    #[derive(Debug)]
+    struct ComparedSource<'a> {
+        value: u8,
+        comparisons: &'a Cell<usize>,
+    }
+
+    impl PartialEq for ComparedSource<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            self.comparisons.set(self.comparisons.get() + 1);
+            self.value == other.value
+        }
+    }
+
+    let comparisons = Cell::new(0);
+    let source = ComparedSource { value: 1, comparisons: &comparisons };
+    let equal_source = ComparedSource { value: 1, comparisons: &comparisons };
+    let different_source = ComparedSource { value: 2, comparisons: &comparisons };
+    let item = Item { source_ordinal: 0, source: &source, record_index: 2 };
+
+    for other in [Item { source_ordinal: 1, ..item }, Item { record_index: 3, ..item }] {
+        assert_ne!(item, other);
+        assert_eq!(comparisons.get(), 0, "different metadata must skip source comparison");
+    }
+
+    // Matching metadata compares source values, including when both references point to the same source.
+    for (source, equal) in [(&source, true), (&equal_source, true), (&different_source, false)] {
+        comparisons.set(0);
+        let other = Item { source, ..item };
+        assert_eq!(item == other, equal);
+        assert_eq!(comparisons.get(), 1);
+    }
+}
+
+#[test]
 fn sources_through_pointers_and_lengths() {
     use std::rc::Rc;
     use std::sync::Arc;
@@ -342,6 +477,23 @@ fn sources_through_pointers_and_lengths() {
     assert_eq!(letters.len(), 5);
     assert_eq!(Order::new(Seq::source(&[1u8, 2, 3][..])).unwrap().len(), 3);
     assert_eq!(Order::new(Seq::source([0u8; 4])).unwrap().len(), 4);
+}
+
+/// Compilation recurses with configuration depth and the size of `T`; a chain of large
+/// inline sources must still fit an ordinary thread stack.
+#[test]
+fn large_inline_sources_fit_a_thread_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let chain = |depth| (1..depth).fold(Seq::source([0u8; 8192]), |s, _| s.take(8192));
+            let order = Order::new(chain(16)).unwrap();
+            assert_eq!(order.len(), 8192);
+            assert_eq!(order.get(8191).unwrap().record_index, 8191);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[cfg(feature = "serde")]
@@ -409,5 +561,28 @@ fn serde_round_trips_nested_configurations() {
         let back: Seq<usize> = serde_json::from_str(&json).unwrap();
         assert_eq!(back, seq, "{variant}");
         assert_eq!(Order::new(back).unwrap().len(), 10);
+    }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn json_preserves_float_bits_and_large_scheduled_orders() {
+    let d = 0.18620199577071722;
+    let seq = Seq::mix([(Seq::source(300usize), Schedule::Uniform), (Seq::source(100), Schedule::delayed(d))]);
+    let back: Seq<usize> = serde_json::from_str(&serde_json::to_string(&seq).unwrap()).unwrap();
+    assert_eq!(seq, back);
+    #[cfg(target_pointer_width = "64")]
+    {
+        let n = 70_368_744_176_807;
+        let seq = Seq::mix([(Seq::source(n - 100), Schedule::Uniform), (Seq::source(100), Schedule::delayed(d))]);
+        let back: Seq<usize> = serde_json::from_str(&serde_json::to_string(&seq).unwrap()).unwrap();
+        assert_eq!(seq, back);
+        let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
+        assert!(
+            a.cursor(n - 100..)
+                .unwrap()
+                .map(|item| (item.source_ordinal, item.record_index))
+                .eq(b.cursor(n - 100..).unwrap().map(|item| (item.source_ordinal, item.record_index)))
+        );
     }
 }

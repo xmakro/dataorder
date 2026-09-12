@@ -1,6 +1,9 @@
-//! Stateful cursor properties: reproduce with DATAORDER_STATE_SEED=<decimal seed>.
-//! Failure histories are minimized by deleting operations before being reported.
-use dataorder::{Order, Schedule, Seq};
+//! Cursor behavior: a stateful property test against random access, then targeted cases
+//! for resets, empty ranges, boundaries, clones and failed operations. Reproduce a property
+//! failure with DATAORDER_STATE_SEED=<decimal seed>; failure histories are minimized by
+//! deleting operations before being reported.
+use dataorder::{BoundsError, Order, Schedule, Seq};
+use std::ops::Bound;
 
 struct Rng(u64);
 impl Rng {
@@ -369,4 +372,60 @@ fn selections_resume_after_skips_and_exhaustion() {
             assert_eq!(cursor.by_ref().map(|item| item.record_index).collect::<Vec<_>>(), expected);
         }
     }
+}
+
+#[test]
+fn standard_iterator_position_is_available() {
+    let order = Order::new(Seq::source(10)).unwrap();
+    let mut cursor = order.iter();
+    assert_eq!(cursor.position(|item| item.record_index == 3), Some(3));
+    assert_eq!(cursor.offset(), 4);
+    assert_eq!(cursor.position(|item| item.record_index == 6), Some(2));
+    assert_eq!(cursor.offset(), 7);
+}
+
+#[test]
+#[allow(clippy::reversed_empty_ranges)]
+fn checked_access_preserves_cursor_on_errors() {
+    let order = Order::new(Seq::mix([Seq::source(10).shuffle(), Seq::source(7)])).unwrap();
+    assert_eq!(order.get(16), (&order).into_iter().nth(16));
+    assert_eq!(order.get(17), None);
+    assert_eq!(order.get(usize::MAX), None);
+    let empty = Order::new(Seq::source(0)).unwrap();
+    assert_eq!(empty.get(0), None);
+    assert_eq!((&empty).into_iter().next(), None);
+    assert_eq!(order.cursor(..=usize::MAX).unwrap_err(), BoundsError::Overflow);
+    assert_eq!(order.cursor((Bound::Excluded(usize::MAX), Bound::Unbounded)).unwrap_err(), BoundsError::Overflow);
+    assert_eq!(order.cursor(10..9).unwrap_err(), BoundsError::Reversed { start: 10, end: 9 });
+    assert_eq!(order.cursor(..18).unwrap_err(), BoundsError::OutOfBounds { end: 18, len: 17 });
+    // A start past the end is out of bounds, not reversed, even with an unbounded end.
+    assert_eq!(order.cursor(18..).unwrap_err(), BoundsError::StartOutOfBounds { start: 18, len: 17 });
+    assert_eq!(order.cursor(18..20).unwrap_err(), BoundsError::StartOutOfBounds { start: 18, len: 17 });
+    assert_eq!(order.cursor(18..).unwrap_err().to_string(), "range start 18 out of range for 17 positions");
+    assert_eq!(order.cursor(17..).unwrap().count(), 0);
+    let mut c = order.cursor(3..10).unwrap();
+    c.next(); // Initialize the cursor before testing rollback.
+    let expected = c.clone().collect::<Vec<_>>();
+    assert_eq!(c.reset(..=usize::MAX), Err(BoundsError::Overflow));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset((Bound::Excluded(usize::MAX), Bound::Unbounded)), Err(BoundsError::Overflow));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset(2..18), Err(BoundsError::OutOfBounds { end: 18, len: 17 }));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset(12..4), Err(BoundsError::Reversed { start: 12, end: 4 }));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    assert_eq!(c.reset(18..), Err(BoundsError::StartOutOfBounds { start: 18, len: 17 }));
+    assert_eq!(c.offset(), 4);
+    assert_eq!(c.clone().collect::<Vec<_>>(), expected);
+    c.reset(17..17).unwrap();
+    assert_eq!(c.next(), None);
+    c.reset(..).unwrap();
+    assert_eq!(c.next(), order.get(0));
+    let huge = Order::new(Seq::source(usize::MAX)).unwrap();
+    assert_eq!(huge.cursor(usize::MAX - 1..).unwrap().next().unwrap().record_index, usize::MAX - 1);
+    assert_eq!(huge.cursor(usize::MAX..).unwrap().count(), 0);
 }
