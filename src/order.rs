@@ -1,12 +1,13 @@
 //! Validation, compilation and random access.
 //!
 //! The compiler separates source handles from the configuration, then builds a tree
-//! with lengths, concat offsets, interleave profiles and shuffle salts. [`get`]
-//! follows that tree to resolve a position without keeping iteration state.
+//! with lengths, concat offsets, interleave profiles, shuffle salts and first-pass
+//! shuffle keys. [`get`] follows that tree to resolve a position without keeping
+//! iteration state.
 
 use crate::cursor::{Cursor, resolve_range};
 use crate::interleave::{Interleave, Schedule};
-use crate::perm::{self, Shape};
+use crate::perm::{self, Key, Shape};
 use crate::seq::MixPart;
 use crate::{BoundsError, Error, ErrorKind, MAX_MIX_LEN, Seq, Source};
 use std::fmt;
@@ -38,9 +39,9 @@ pub(crate) enum Node {
     Repeat {
         child_len: usize,
         len: usize,
-        /// The input configuration's salt, computed before pruning, when this node
-        /// shuffles each pass; nested shuffles stay fixed.
-        shuffle: Option<u64>,
+        /// The permutation inputs when this node shuffles each pass; nested shuffles
+        /// stay fixed.
+        shuffle: Option<Shuffled>,
         child: Box<Self>,
     },
     /// Child positions `offset + i × step` for `i < len`. A unit step is a plain
@@ -61,6 +62,38 @@ impl Node {
             Self::Concat { offsets, .. } => *offsets.last().unwrap(),
             Self::Mix { il, .. } => il.len(),
         }
+    }
+
+    /// Re-derives every shuffled node's first-pass key under a new order seed.
+    fn reseed(&mut self, seed: u64) {
+        match self {
+            Self::Empty | Self::Source { .. } => {}
+            Self::Concat { children, .. } | Self::Mix { children, .. } => children.iter_mut().for_each(|child| child.reseed(seed)),
+            Self::Repeat { shuffle, child, .. } => {
+                if let Some(shuffled) = shuffle {
+                    shuffled.key = perm::key(seed, 0, shuffled.salt);
+                }
+                child.reseed(seed);
+            }
+            Self::Stride { child, .. } => child.reseed(seed),
+        }
+    }
+}
+
+/// The permutation inputs of a shuffled repetition: the input configuration's salt,
+/// computed before pruning, and the key of its first pass under the order's seed.
+/// A plain shuffle is one pass, so its stored key serves every random access into it
+/// and every shuffle nested under another; later passes of a repetition derive their
+/// keys from the salt when entered.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Shuffled {
+    pub(crate) salt: u64,
+    pub(crate) key: Key,
+}
+
+impl Shuffled {
+    fn new(salt: u64, seed: u64) -> Self {
+        Self { salt, key: perm::key(seed, 0, salt) }
     }
 }
 
@@ -147,7 +180,7 @@ impl<T: Source> Order<T> {
     /// # Errors
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
-        let mut c = Compiler { sources: Vec::new(), path: Vec::new(), shuffle_path_len: None };
+        let mut c = Compiler { seed, sources: Vec::new(), path: Vec::new(), shuffle_path_len: None };
         let Compiled { node: root, .. } = c.compile(seq)?;
         Ok(Self { root, seed, sources: c.sources })
     }
@@ -173,8 +206,9 @@ impl<T> Order<T> {
     }
 
     /// Changes the seed used by all shuffles, without rebuilding the order.
-    /// Takes constant time: shuffle keys are derived during access and iteration.
-    /// Previously cloned orders keep their own seeds.
+    /// Re-derives the first-pass key stored for each shuffled node, in time
+    /// proportional to the number of shuffled nodes. Previously cloned orders keep
+    /// their own seeds.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -187,6 +221,7 @@ impl<T> Order<T> {
     /// ```
     pub fn set_seed(&mut self, seed: u64) {
         self.seed = seed;
+        self.root.reseed(seed);
     }
 
     /// Source handles in order of appearance in the original configuration.
@@ -321,8 +356,9 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (usize, u
                 // back into an unconditional division.
                 let pass = if len <= child_len { 0 } else { pos / child_len };
                 pos -= pass * child_len;
-                if let Some(salt) = shuffle {
-                    pos = perm::permute(Shape::new(*child_len), perm::key(order_seed, pass, *salt), pos);
+                if let Some(shuffled) = shuffle {
+                    let key = if pass == 0 { shuffled.key } else { perm::key(order_seed, pass, shuffled.salt) };
+                    pos = perm::permute(Shape::new(*child_len), key, pos);
                 }
                 node = child;
             }
@@ -346,9 +382,9 @@ impl Compiled {
     /// Build a repetition after validating its input and target length.
     /// A positive target length requires a nonempty input. A single plain pass
     /// needs no node; a single shuffled pass over more than one element is a shuffle.
-    fn repeat_to(self, len: usize, shuffled: bool) -> Self {
+    fn repeat_to(self, len: usize, shuffled: bool, seed: u64) -> Self {
         let Self { node: child, len: child_len, salt } = self;
-        let shuffle = (shuffled && child_len > 1).then_some(salt.value);
+        let shuffle = (shuffled && child_len > 1).then(|| Shuffled::new(salt.value, seed));
         let node = if len == 0 || (len <= child_len && shuffle.is_none()) {
             slice(child, 0, len)
         } else {
@@ -359,6 +395,8 @@ impl Compiled {
 }
 
 struct Compiler<T> {
+    /// The order seed, under which shuffled nodes store their first-pass keys.
+    seed: u64,
     sources: Vec<T>,
     /// Child indices from the root to the node being compiled, for error reports.
     path: Vec<usize>,
@@ -463,7 +501,7 @@ impl<T: Source> Compiler<T> {
     fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool) -> Result<Compiled, Error> {
         let child = self.repeat_child(inner, shuffled)?;
         let len = times.checked_mul(child.len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
-        Ok(child.repeat_to(len, shuffled))
+        Ok(child.repeat_to(len, shuffled, self.seed))
     }
 
     fn cycled(&mut self, len: usize, inner: Seq<T>, shuffled: bool) -> Result<Compiled, Error> {
@@ -471,7 +509,7 @@ impl<T: Source> Compiler<T> {
         if len > 0 && child.len == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
-        Ok(child.repeat_to(len, shuffled))
+        Ok(child.repeat_to(len, shuffled, self.seed))
     }
 
     fn skip(&mut self, n: usize, inner: Seq<T>) -> Result<Compiled, Error> {

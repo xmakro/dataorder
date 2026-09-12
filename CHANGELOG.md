@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- Store each shuffled node's first-pass key in the compiled order and derive the keys
+  of later passes only when a cursor enters them. Random access into a shuffle, and
+  every shuffle nested under another, no longer derive a key per element.
+  `Order::set_seed` re-derives the stored keys in time proportional to the number of
+  shuffled nodes. Ordering and the public API are unchanged.
+
 - **Breaking:** replace `Seq::ShuffledRepeat` and `Seq::ShuffledCycle` with a
   `shuffled` field on `Seq::Repeat` and `Seq::Cycle`. The `repeat_shuffled` and
   `cycle_to_shuffled` builders are unchanged. Serialized `Repeat` and `Cycle` nodes

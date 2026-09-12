@@ -13,7 +13,7 @@
 
 use crate::error::BoundsError;
 use crate::interleave::{Interleave, Iter};
-use crate::order::{Item, Node, Order, get};
+use crate::order::{Item, Node, Order, Shuffled, get};
 use crate::perm::{self, Key, Shape};
 use std::fmt;
 use std::ops::{Bound, Range, RangeBounds};
@@ -244,7 +244,9 @@ impl<'a> NodeCursor<'a> {
             Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: 0 },
             Node::Concat { offsets, children } => NodeCursor::Concat(ConcatCursor::new(children, offsets)),
             Node::Mix { il, children } => NodeCursor::Mix(Box::new(MixCursor::new(il, children))),
-            Node::Repeat { child_len, shuffle: Some(salt), child, .. } => NodeCursor::Shuffle(ShuffleCursor::new(child, *child_len, *salt)),
+            Node::Repeat { child_len, shuffle: Some(shuffle), child, .. } => {
+                NodeCursor::Shuffle(ShuffleCursor::new(child, *child_len, shuffle))
+            }
             Node::Repeat { child_len, shuffle: None, child, .. } => NodeCursor::Repeat(RepeatCursor::new(child, *child_len)),
             Node::Stride { step: 1, offset, child, .. } => NodeCursor::Slice { start: *offset, child: Box::new(NodeCursor::new(child)) },
             Node::Stride { step, offset, len, child } => {
@@ -519,12 +521,13 @@ impl<'a> MixCursor<'a> {
 }
 
 /// The cursor of a shuffled repetition, including a shuffle with one pass. Each pass
-/// permutes the child's positions with its own derived key; the mix-free child is read
-/// by random access. Walking or skipping to a pass boundary leaves `pos == shape.n`;
-/// `next` enters the following pass and derives its key only then.
+/// permutes the child's positions with its own key: the first pass's is stored in the
+/// node, and later passes derive theirs from the salt. The mix-free child is read by
+/// random access. Walking or skipping to a pass boundary leaves `pos == shape.n`;
+/// `next` enters the following pass and switches keys only then.
 #[derive(Clone, Debug)]
 pub(crate) struct ShuffleCursor<'a> {
-    salt: u64,
+    shuffle: &'a Shuffled,
     shape: Shape,
     child: &'a Node,
     /// The key of `pass`, once positioned.
@@ -535,8 +538,8 @@ pub(crate) struct ShuffleCursor<'a> {
 }
 
 impl<'a> ShuffleCursor<'a> {
-    fn new(child: &'a Node, child_len: usize, salt: u64) -> Self {
-        Self { salt, shape: Shape::new(child_len), child, key: Key::UNSET, pass: UNSEEKED, pos: 0 }
+    fn new(child: &'a Node, child_len: usize, shuffle: &'a Shuffled) -> Self {
+        Self { shuffle, shape: Shape::new(child_len), child, key: Key::UNSET, pass: UNSEEKED, pos: 0 }
     }
 
     /// Moves to `pos` within `pass`. The order seed cannot change while a cursor
@@ -548,13 +551,13 @@ impl<'a> ShuffleCursor<'a> {
         self.pos = pos;
     }
 
-    /// Derives the key of a new pass. Kept out of line so that the per-element step
+    /// Switches to the key of a new pass. Kept out of line so that the per-element step
     /// and the seeks within a pass stay small.
     #[cold]
     #[inline(never)]
     fn rekey(&mut self, pass: usize, order_seed: u64) {
         self.pass = pass;
-        self.key = perm::key(order_seed, pass, self.salt);
+        self.key = if pass == 0 { self.shuffle.key } else { perm::key(order_seed, pass, self.shuffle.salt) };
     }
 
     fn seek(&mut self, pos: usize, order_seed: u64) {
