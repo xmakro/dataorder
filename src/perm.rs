@@ -40,9 +40,8 @@
 //!   fingerprint, so regrouping or adding empty concatenations changes nothing
 //!   ([`combine_salts`]).
 //!
-//! `permute`, its rounds and `key` are `#[inline(always)]`: the shuffle step is one small
-//! function and the permutation is most of it, and an inlined derivation keeps the round
-//! keys in registers instead of returning them through memory.
+//! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small
+//! function and the permutation is most of it.
 
 /// Shape of the domain: `n` and the widths and masks of the two Feistel halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,7 +89,6 @@ const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Ordinary shuffles use pass zero. The seed and the salt are each mixed before the
 /// three are hashed together, so no simple relation between them reproduces another
 /// combination's key. Not a security boundary: seeds are for reproducibility.
-#[inline(always)]
 pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
     let a = mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add(mix64(salt)).wrapping_add((pass as u64).wrapping_mul(PHI)));
     let mut k = Key::UNSET;

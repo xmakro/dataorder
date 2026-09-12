@@ -7,9 +7,6 @@
 //! through traversal. Nodes cache derived shuffle keys, not copies of the order seed.
 //!
 //! Mix parts and the current concat child are initialized only when entered.
-//! Mix and shuffle steps have separate structs so their inlining can be controlled:
-//! the small mix step is inlined into dispatch, while the larger shuffle step stays
-//! out of line to avoid adding overhead to other node kinds.
 
 use crate::error::BoundsError;
 use crate::interleave::{Interleave, Iter};
@@ -132,7 +129,6 @@ impl<T> Clone for Cursor<'_, T> {
 impl<'a, T> Iterator for Cursor<'a, T> {
     type Item = Item<'a, T>;
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos == self.end {
             return None;
@@ -204,13 +200,10 @@ pub(crate) fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Resul
 /// or a shuffle cursor's pass before it is positioned.
 const UNSEEKED: usize = usize::MAX;
 
-/// Per-node iteration state. An explicit tag avoids decoding a tag stored in a
-/// field's unused bit patterns on every dispatch.
-/// `Empty` doubles as "not built yet" for the children of
+/// Per-node iteration state. `Empty` doubles as "not built yet" for the children of
 /// a `Concat` or `Mix`, whose real children are never empty (a concat drops them, a mix
 /// never draws from them).
 #[derive(Clone, Debug)]
-#[repr(u8)]
 pub(crate) enum NodeCursor<'a> {
     Empty,
     Source {
@@ -282,7 +275,6 @@ impl<'a> NodeCursor<'a> {
     }
 
     /// The next element. Must not be called past the end.
-    #[inline]
     fn next(&mut self, order_seed: u64) -> (usize, usize) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
@@ -362,8 +354,6 @@ impl<'a> ConcatCursor<'a> {
         self.child.seek(pos - self.offsets[i], order_seed);
     }
 
-    /// Keep the ordinary child step inlined into node dispatch.
-    #[inline(always)]
     fn next(&mut self, order_seed: u64) -> (usize, usize) {
         if self.left == 0 {
             self.idx += 1;
@@ -417,8 +407,6 @@ impl<'a> RepeatCursor<'a> {
         self.child.seek(r, order_seed);
     }
 
-    /// Keep the ordinary child step inlined into node dispatch.
-    #[inline(always)]
     fn next(&mut self, order_seed: u64) -> (usize, usize) {
         if self.left == 0 {
             self.left = self.child_len;
@@ -478,8 +466,6 @@ impl<'a> MixCursor<'a> {
         self.next_j.fill(UNSEEKED);
     }
 
-    /// Inlined into dispatch to avoid a function call for each element.
-    #[inline(always)]
     fn next(&mut self, order_seed: u64) -> (usize, usize) {
         let (s, j) = self.iter.step();
         self.pos += 1;
@@ -492,10 +478,7 @@ impl<'a> MixCursor<'a> {
 
     /// Positions part `s` at `j`, initializing its cursor if necessary.
     /// A known child position can only be behind `j`, so it can skip forward. After
-    /// a mix seek the position is unknown and needs a full seek. Keeping this slow
-    /// path out of line reduces overhead in the ordinary mix step.
-    #[cold]
-    #[inline(never)]
+    /// a mix seek the position is unknown and needs a full seek.
     fn seek_child(&mut self, s: usize, j: usize, order_seed: u64) {
         let at = self.next_j[s];
         if at != UNSEEKED && at < j {
@@ -548,22 +531,15 @@ impl<'a> ShuffleCursor<'a> {
         Self { shuffle, shape: Shape::new(child_len), child, key: Key::UNSET, pass: UNSEEKED, pos: 0 }
     }
 
-    /// Moves to `pos` within `pass`. The order seed cannot change while a cursor
-    /// borrows its order, so a pass keeps its derived key across moves within it.
+    /// Moves to `pos` within `pass`, switching keys when the pass changes. The order
+    /// seed cannot change while a cursor borrows its order, so a pass keeps its
+    /// derived key across moves within it.
     fn position(&mut self, pass: usize, pos: usize, order_seed: u64) {
         if pass != self.pass {
-            self.rekey(pass, order_seed);
+            self.pass = pass;
+            self.key = if pass == 0 { self.shuffle.key } else { perm::key(order_seed, pass, self.shuffle.salt) };
         }
         self.pos = pos;
-    }
-
-    /// Switches to the key of a new pass. Kept out of line so that the per-element step
-    /// and the seeks within a pass stay small.
-    #[cold]
-    #[inline(never)]
-    fn rekey(&mut self, pass: usize, order_seed: u64) {
-        self.pass = pass;
-        self.key = if pass == 0 { self.shuffle.key } else { perm::key(order_seed, pass, self.shuffle.salt) };
     }
 
     fn seek(&mut self, pos: usize, order_seed: u64) {
@@ -571,29 +547,12 @@ impl<'a> ShuffleCursor<'a> {
         self.position(pos / n, pos % n, order_seed);
     }
 
-    /// Not inlined into the dispatcher: the permutation and the descent are the bulk of
-    /// the code, and every other node kind would pay their prologue at each level.
-    /// Entering a pass is a tail call, so the ordinary step needs no frame of its own.
-    #[inline(never)]
+    /// The next element, entering the following pass at a pass boundary.
     fn next(&mut self, order_seed: u64) -> (usize, usize) {
         debug_assert!(self.pass != UNSEEKED, "dataorder: next before positioning a shuffle");
         if self.pos == self.shape.n {
-            return self.next_pass(order_seed);
+            self.position(self.pass + 1, 0, order_seed);
         }
-        self.step(order_seed)
-    }
-
-    /// Enters the following pass and takes its first element.
-    #[cold]
-    #[inline(never)]
-    fn next_pass(&mut self, order_seed: u64) -> (usize, usize) {
-        self.position(self.pass + 1, 0, order_seed);
-        self.step(order_seed)
-    }
-
-    /// The element at `pos` of the current pass.
-    #[inline(always)]
-    fn step(&mut self, order_seed: u64) -> (usize, usize) {
         let p = perm::permute(self.shape, self.key, self.pos);
         self.pos += 1;
         match self.child {

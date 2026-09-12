@@ -4,7 +4,6 @@
 //! between segments. Integrating the rate gives the fraction of a part drawn by
 //! each virtual time. `quantile` inverts that share to compute an element's key.
 //! Its result must stay monotone under rounding for exact seeks to work.
-//! It is explicitly inlined because every iteration step computes a key.
 //!
 //! Keep lookup's multiply and add operations separate to preserve reproducible
 //! rounding. Each independently normalized profile has at most five segments.
@@ -63,7 +62,7 @@ impl Profile {
     /// Inverts share `y` to virtual time, using the left endpoint of a flat interval.
     /// Each segment's inverse uses monotone operations; clamping to its endpoints
     /// preserves monotonicity across segments too. Rising segments always start at
-    /// rate zero.
+    /// rate zero. Inlined for the same reason as [`Interleave::key`](super::Interleave::key).
     #[inline(always)]
     pub(crate) fn quantile(&self, y: f64) -> f64 {
         // The last segment whose starting share is strictly below `y`, or the first

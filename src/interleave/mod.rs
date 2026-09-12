@@ -121,13 +121,18 @@ impl Interleave {
         self.profiles.len() > 1
     }
 
-    /// Rate profile of `part`.
+    /// Rate profile of `part`. Inlined for the same reason as [`Interleave::key`].
     #[inline(always)]
     fn profile(&self, part: usize) -> &Profile {
         &self.profiles[self.parts[part].profile]
     }
 
     /// Virtual time of element `j` of `part`.
+    ///
+    /// A seek computes hundreds of keys while counting, rebuilding the tournament and
+    /// replaying. Leaving the inlining of this chain (`profile`, `key`, `quantile`,
+    /// `slot` and `advance`) to the compiler made mix seeks and random access about a
+    /// tenth slower, while walks did not change.
     #[inline(always)]
     fn key(&self, part: usize, j: usize) -> f64 {
         let s = &self.parts[part];

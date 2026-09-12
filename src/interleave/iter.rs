@@ -1,7 +1,7 @@
 //! Exact seeks and sequential iteration over a mix.
 //! [`Iter::seek`] counts elements before the target, builds the remaining heads and
-//! replays a bounded number of steps. [`advance`] emits the next head. Explicit
-//! inlining keeps this small step inside the outer cursor's mix step.
+//! replays a bounded number of steps. [`advance`] emits the next head. [`slot`] and
+//! [`advance`] are inlined for the same reason as [`Interleave::key`].
 
 use super::Interleave;
 use super::tournament::TournamentTree;
@@ -50,7 +50,6 @@ impl<'a> Iter<'a> {
 
     /// The next element of an iterator that is not exhausted (checked in debug builds
     /// only): the walk without the `Option`.
-    #[inline(always)]
     pub(crate) fn step(&mut self) -> (usize, usize) {
         debug_assert!(self.remaining > 0, "interleave: iterator exhausted");
         self.remaining -= 1;
@@ -61,7 +60,6 @@ impl<'a> Iter<'a> {
 impl Iterator for Iter<'_> {
     type Item = (usize, usize);
 
-    #[inline(always)]
     fn next(&mut self) -> Option<(usize, usize)> {
         if self.remaining == 0 {
             return None;
