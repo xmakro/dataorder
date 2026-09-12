@@ -199,7 +199,7 @@ fn operation_sequences_match_random_access() {
         let seed = explicit.unwrap_or_else(|| seeds.next());
         let mut r = Rng(seed);
         let (seq, len) = configuration(&mut r, 7, true);
-        let order = Order::new(seq.clone()).unwrap_or_else(|err| panic!("{err}: {seq:?}"));
+        let order = Order::with_seed(seq.clone(), seed).unwrap_or_else(|err| panic!("{err}: {seq:?}"));
         assert_eq!(order.len(), len, "seed={seed}, seq={seq:?}");
         let ops: Vec<_> = (0..100)
             .map(|_| {

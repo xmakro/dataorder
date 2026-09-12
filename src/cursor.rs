@@ -3,6 +3,9 @@
 //! tree to avoid seeking for every element. A shuffle uses random access for its
 //! scattered child positions.
 //!
+//! The order seed stays in the immutably borrowed order and is passed unchanged
+//! through traversal. Nodes cache derived shuffle keys, not copies of the order seed.
+//!
 //! Mix parts and the current concat child are initialized only when entered.
 //! Mix and shuffle steps have separate structs so their inlining can be controlled:
 //! the small mix step is inlined into dispatch, while the larger shuffle step stays
@@ -101,7 +104,7 @@ impl<'a, T> Cursor<'a, T> {
         // subsequent move into the order is backward and seeks the tree anew.
         if pos < self.order.root.len() {
             if pos > self.pos {
-                self.root.skip(pos - self.pos);
+                self.root.skip(pos - self.pos, self.order.seed);
             } else if pos < self.pos {
                 self.root.seek(pos, self.order.seed);
             }
@@ -135,7 +138,7 @@ impl<'a, T> Iterator for Cursor<'a, T> {
             return None;
         }
         self.pos += 1;
-        let (src, index) = self.root.next();
+        let (src, index) = self.root.next(self.order.seed);
         Some(Item { source_ordinal: src as usize, source: &self.order.sources[src as usize], record_index: index })
     }
 
@@ -215,7 +218,6 @@ pub(crate) enum NodeCursor<'a> {
         offsets: &'a [usize],
         idx: usize,
         left: usize,
-        order_seed: u64,
         child: Box<Self>,
     },
     // Keep the largest state out of every inline child slot. This adds one allocation
@@ -228,7 +230,6 @@ pub(crate) enum NodeCursor<'a> {
     Repeat {
         child_len: usize,
         left: usize,
-        order_seed: u64,
         child: Box<Self>,
     },
     Slice {
@@ -251,32 +252,18 @@ impl<'a> NodeCursor<'a> {
             Node::Empty => NodeCursor::Empty,
             Node::Source { src, offset, .. } => NodeCursor::Source { src: *src, offset: *offset, next: 0 },
             Node::Concat { offsets, children } => {
-                NodeCursor::Concat { children, offsets, idx: 0, left: 0, order_seed: 0, child: Box::new(NodeCursor::Empty) }
+                NodeCursor::Concat { children, offsets, idx: 0, left: 0, child: Box::new(NodeCursor::Empty) }
             }
             Node::Mix { il, children } => NodeCursor::Mix(Box::new(MixCursor::new(il, children))),
-            Node::Shuffle { seed, salt, shape, child } => NodeCursor::Shuffle(ShuffleCursor {
-                seed: *seed,
-                salt: *salt,
-                shape: *shape,
-                child,
-                key: Key::UNSET,
-                pos: 0,
-                order_seed: 0,
-            }),
+            Node::Shuffle { seed, salt, shape, child } => {
+                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, salt: *salt, shape: *shape, child, key: Key::UNSET, pos: 0 })
+            }
             Node::Repeat { child_len, shuffle: Some(salt), child, .. } => NodeCursor::ShuffledRepeat(Box::new(ShuffledRepeatCursor {
-                shuffle: ShuffleCursor {
-                    seed: 0,
-                    salt: *salt,
-                    shape: Shape::new(*child_len),
-                    child,
-                    key: Key::UNSET,
-                    pos: 0,
-                    order_seed: 0,
-                },
+                shuffle: ShuffleCursor { seed: 0, salt: *salt, shape: Shape::new(*child_len), child, key: Key::UNSET, pos: 0 },
                 pass: 0,
             })),
             Node::Repeat { child_len, shuffle: None, child, .. } => {
-                NodeCursor::Repeat { child_len: *child_len, left: 0, order_seed: 0, child: Box::new(NodeCursor::new(child)) }
+                NodeCursor::Repeat { child_len: *child_len, left: 0, child: Box::new(NodeCursor::new(child)) }
             }
             Node::Slice { start, child, .. } => NodeCursor::Slice { start: *start, child: Box::new(NodeCursor::new(child)) },
             Node::Stride { step, offset, len, child } => {
@@ -293,30 +280,26 @@ impl<'a> NodeCursor<'a> {
             NodeCursor::Source { offset, next, .. } => {
                 *next = *offset + pos;
             }
-            NodeCursor::Concat { children, offsets, idx, left, order_seed: seed, child } => {
+            NodeCursor::Concat { children, offsets, idx, left, child } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
                 if i != *idx || matches!(**child, Self::Empty) {
                     **child = Self::new(&children[i]);
                 }
                 *idx = i;
                 *left = offsets[i + 1] - pos;
-                *seed = order_seed;
                 child.seek(pos - offsets[i], order_seed);
             }
-            NodeCursor::Mix(mix) => mix.seek(pos, order_seed),
+            NodeCursor::Mix(mix) => mix.seek(pos),
             NodeCursor::Shuffle(sh) => {
                 sh.key = perm::key(sh.seed, order_seed, 0, sh.salt);
                 sh.pos = pos;
-                sh.order_seed = order_seed;
             }
             NodeCursor::ShuffledRepeat(sh) => {
-                sh.shuffle.order_seed = order_seed;
-                sh.position(pos / sh.shuffle.shape.n, pos % sh.shuffle.shape.n);
+                sh.position(pos / sh.shuffle.shape.n, pos % sh.shuffle.shape.n, order_seed);
             }
-            NodeCursor::Repeat { child_len, left, order_seed: seed, child } => {
+            NodeCursor::Repeat { child_len, left, child } => {
                 let r = pos % *child_len;
                 *left = *child_len - r;
-                *seed = order_seed;
                 child.seek(r, order_seed);
             }
             NodeCursor::Slice { start, child } => child.seek(*start + pos, order_seed),
@@ -329,7 +312,7 @@ impl<'a> NodeCursor<'a> {
 
     /// The next element. Must not be called past the end.
     #[inline]
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (u32, usize) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
             NodeCursor::Source { src, next, .. } => {
@@ -337,33 +320,33 @@ impl<'a> NodeCursor<'a> {
                 *next += 1;
                 (*src, i)
             }
-            NodeCursor::Concat { children, offsets, idx, left, order_seed, child } => {
+            NodeCursor::Concat { children, offsets, idx, left, child } => {
                 if *left == 0 {
                     *idx += 1;
                     *left = offsets[*idx + 1] - offsets[*idx];
                     **child = Self::new(&children[*idx]);
-                    child.seek(0, *order_seed);
+                    child.seek(0, order_seed);
                 }
                 *left -= 1;
-                child.next()
+                child.next(order_seed)
             }
-            NodeCursor::Mix(mix) => mix.next(),
-            NodeCursor::Shuffle(sh) => sh.next(),
-            NodeCursor::ShuffledRepeat(sh) => sh.next(),
-            NodeCursor::Repeat { child_len, left, order_seed, child } => {
+            NodeCursor::Mix(mix) => mix.next(order_seed),
+            NodeCursor::Shuffle(sh) => sh.next(order_seed),
+            NodeCursor::ShuffledRepeat(sh) => sh.next(order_seed),
+            NodeCursor::Repeat { child_len, left, child } => {
                 if *left == 0 {
                     *left = *child_len;
-                    child.seek(0, *order_seed);
+                    child.seek(0, order_seed);
                 }
                 *left -= 1;
-                child.next()
+                child.next(order_seed)
             }
-            NodeCursor::Slice { child, .. } => child.next(),
+            NodeCursor::Slice { child, .. } => child.next(order_seed),
             NodeCursor::Stride { step, left, child, .. } => {
                 *left -= 1;
-                let r = child.next();
+                let r = child.next(order_seed);
                 if *left > 0 {
-                    child.skip(*step - 1);
+                    child.skip(*step - 1, order_seed);
                 }
                 r
             }
@@ -374,16 +357,16 @@ impl<'a> NodeCursor<'a> {
     /// child skips; beyond it the cursor lands in the target one directly, or, exactly on a
     /// boundary, stays there and lets the next [`next`](NodeCursor::next) enter the following
     /// one, as the walk does.
-    fn skip(&mut self, m: usize) {
+    fn skip(&mut self, m: usize, order_seed: u64) {
         if m == 0 {
             return;
         }
         match self {
             NodeCursor::Empty => unreachable!("dataorder: skip in an empty sequence"),
             NodeCursor::Source { next, .. } => *next += m,
-            NodeCursor::Concat { children, offsets, idx, left, order_seed, child } => {
+            NodeCursor::Concat { children, offsets, idx, left, child } => {
                 if m <= *left {
-                    child.skip(m);
+                    child.skip(m, order_seed);
                     *left -= m;
                 } else {
                     let pos = offsets[*idx + 1] - *left + m;
@@ -394,7 +377,7 @@ impl<'a> NodeCursor<'a> {
                     // At a boundary, defer building a child until it is entered.
                     **child = if *left == 0 { Self::Empty } else { Self::new(&children[i]) };
                     if *left > 0 {
-                        child.seek(pos - offsets[i], *order_seed);
+                        child.seek(pos - offsets[i], order_seed);
                     }
                 }
             }
@@ -405,11 +388,11 @@ impl<'a> NodeCursor<'a> {
                 let n = sh.shuffle.shape.n;
                 let pos = sh.pass * n + sh.shuffle.pos + m;
                 // At the endpoint, defer entering another epoch until next() needs it.
-                sh.position((pos - 1) / n, (pos - 1) % n + 1);
+                sh.position((pos - 1) / n, (pos - 1) % n + 1, order_seed);
             }
-            NodeCursor::Repeat { child_len, left, order_seed, child } => {
+            NodeCursor::Repeat { child_len, left, child } => {
                 if m <= *left {
-                    child.skip(m);
+                    child.skip(m, order_seed);
                     *left -= m;
                 } else {
                     let r = (m - *left) % *child_len;
@@ -417,17 +400,17 @@ impl<'a> NodeCursor<'a> {
                         *left = 0;
                     } else {
                         *left = *child_len - r;
-                        child.seek(r, *order_seed);
+                        child.seek(r, order_seed);
                     }
                 }
             }
-            NodeCursor::Slice { child, .. } => child.skip(m),
+            NodeCursor::Slice { child, .. } => child.skip(m, order_seed),
             NodeCursor::Stride { step, left, child, .. } => {
                 *left -= m;
                 // Land on the next element of the stride, or just past the last skipped one
                 // when the stride is exhausted (the child may not extend a full step further).
                 let steps = if *left > 0 { m * *step } else { (m - 1) * *step + 1 };
-                child.skip(steps);
+                child.skip(steps, order_seed);
             }
         }
     }
@@ -447,7 +430,6 @@ pub(crate) struct MixCursor<'a> {
     pos: usize,
     next_j: Vec<usize>,
     cursors: Vec<NodeCursor<'a>>,
-    order_seed: u64,
 }
 
 impl<'a> MixCursor<'a> {
@@ -459,27 +441,25 @@ impl<'a> MixCursor<'a> {
             pos: 0,
             next_j: vec![UNSEEKED; children.len()],
             cursors: children.iter().map(|_| NodeCursor::Empty).collect(),
-            order_seed: 0,
         }
     }
 
-    fn seek(&mut self, pos: usize, order_seed: u64) {
+    fn seek(&mut self, pos: usize) {
         self.iter.seek(pos..self.il.len());
         self.pos = pos;
         self.next_j.fill(UNSEEKED);
-        self.order_seed = order_seed;
     }
 
     /// Inlined into dispatch to avoid a function call for each element.
     #[inline(always)]
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (u32, usize) {
         let (s, j) = self.iter.step();
         self.pos += 1;
         if self.next_j[s] != j {
-            self.seek_child(s, j);
+            self.seek_child(s, j, order_seed);
         }
         self.next_j[s] = j + 1;
-        self.cursors[s].next()
+        self.cursors[s].next(order_seed)
     }
 
     /// Positions part `s` at `j`, initializing its cursor if necessary.
@@ -488,16 +468,16 @@ impl<'a> MixCursor<'a> {
     /// path out of line reduces overhead in the ordinary mix step.
     #[cold]
     #[inline(never)]
-    fn seek_child(&mut self, s: usize, j: usize) {
+    fn seek_child(&mut self, s: usize, j: usize, order_seed: u64) {
         let at = self.next_j[s];
         if at != UNSEEKED && at < j {
-            self.cursors[s].skip(j - at);
+            self.cursors[s].skip(j - at, order_seed);
             return;
         }
         if matches!(self.cursors[s], NodeCursor::Empty) {
             self.cursors[s] = NodeCursor::new(&self.children[s]);
         }
-        self.cursors[s].seek(j, self.order_seed);
+        self.cursors[s].seek(j, order_seed);
     }
 
     /// Skips by walking short distances and seeking longer ones.
@@ -527,19 +507,18 @@ pub(crate) struct ShuffleCursor<'a> {
     child: &'a Node,
     key: Key,
     pos: usize,
-    order_seed: u64,
 }
 
 impl ShuffleCursor<'_> {
     /// Not inlined into the dispatcher: the permutation and the descent are the bulk of
     /// the code, and every other node kind would pay their prologue at each level.
     #[inline(never)]
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (u32, usize) {
         let p = perm::permute(self.shape, self.key, self.pos);
         self.pos += 1;
         match self.child {
             Node::Source { src, offset, .. } => (*src, offset + p),
-            _ => get(self.child, p, self.order_seed),
+            _ => get(self.child, p, order_seed),
         }
     }
 }
@@ -552,16 +531,16 @@ pub(crate) struct ShuffledRepeatCursor<'a> {
 }
 
 impl ShuffledRepeatCursor<'_> {
-    fn position(&mut self, pass: usize, pos: usize) {
+    fn position(&mut self, pass: usize, pos: usize, order_seed: u64) {
         self.pass = pass;
         self.shuffle.pos = pos;
-        self.shuffle.key = perm::key(0, self.shuffle.order_seed, pass, self.shuffle.salt);
+        self.shuffle.key = perm::key(0, order_seed, pass, self.shuffle.salt);
     }
 
-    fn next(&mut self) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (u32, usize) {
         if self.shuffle.pos == self.shuffle.shape.n {
-            self.position(self.pass + 1, 0);
+            self.position(self.pass + 1, 0, order_seed);
         }
-        self.shuffle.next()
+        self.shuffle.next(order_seed)
     }
 }
