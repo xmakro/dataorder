@@ -29,7 +29,7 @@ fn configuration(r: &mut Rng, depth: usize, allow_mix: bool) -> (Seq<usize>, usi
     let (s, n) = configuration(r, depth - 1, allow_mix && !matches!(kind, 0 | 9 | 10));
     match kind {
         7 | 8 if !allow_mix => (s, n),
-        0 => (s.shuffle(r.next()), n),
+        0 => (s.shuffle(), n),
         9 => {
             let k = r.below(5);
             if let Some(len) = n.checked_mul(k) { (s.repeat_shuffled(k), len) } else { (s, n) }
@@ -83,7 +83,7 @@ fn configuration(r: &mut Rng, depth: usize, allow_mix: bool) -> (Seq<usize>, usi
             }
             let total = r.below(300);
             let first = total / 4;
-            (Seq::mix([s.cycle_to(first), Seq::source(7).shuffle(r.next()).cycle_to(total - first)]), total)
+            (Seq::mix([s.cycle_to(first), Seq::source(7).shuffle().cycle_to(total - first)]), total)
         }
     }
 }
@@ -238,14 +238,14 @@ fn failure_history_shrinking_keeps_only_relevant_operations() {
 
 #[test]
 fn empty_ranges_resume_after_resets_skips_and_clones() {
-    let mix = || Seq::mix([Seq::source(100).shuffle(1), Seq::source(50).shuffle(2)]);
+    let mix = || Seq::mix([Seq::source(100).shuffle(), Seq::source(50).shuffle()]);
     let sequences = [
         Seq::source(0),
         Seq::source(100),
-        Seq::source(100).shuffle(11),
+        Seq::source(100).shuffle(),
         mix(),
         mix().repeat(3).skip(2).step_by(7),
-        Seq::concat([mix(), Seq::concat([Seq::source(100), Seq::source(50)]).shuffle(7)]).skip(20),
+        Seq::concat([mix(), Seq::concat([Seq::source(100), Seq::source(50)]).shuffle()]).skip(20),
     ];
     for seq in sequences {
         let order = Order::with_seed(seq, 19).unwrap();
@@ -323,16 +323,16 @@ fn boundary_skip_initializes_target_child_before_backward_seek() {
 
 #[test]
 fn concat_children_keep_their_own_transform_parameters() {
-    let source = |n, seed| Seq::source(n).shuffle(seed);
-    let nested = |seed, n| {
+    let source = |n| Seq::source(n).shuffle();
+    let nested = |n| {
         Seq::mix([
-            source(n, seed).repeat(3).skip(2).skip(1).step_by(3),
-            source(n + 2, seed + 1).repeat(2).take(n + 3),
-            Seq::concat([source(n, seed + 2), Seq::source(n + 3)]).skip(1).step_by(2),
-            Seq::concat([source(n, seed), source(n + 1, seed + 3)]).shuffle(seed + 4),
+            source(n).repeat(3).skip(2).skip(1).step_by(3),
+            source(n + 2).repeat(2).take(n + 3),
+            Seq::concat([source(n), Seq::source(n + 3)]).skip(1).step_by(2),
+            Seq::concat([source(n), source(n + 1)]).shuffle(),
         ])
     };
-    let seq = Seq::concat([nested(1, 11), nested(55, 19), Seq::source(3), nested(99, 7)]).repeat(3);
+    let seq = Seq::concat([nested(11), nested(19), Seq::source(3), nested(7)]).repeat(3);
     let order = Order::with_seed(seq, 42).unwrap();
     let expected: Vec<_> = (0..order.len()).map(|pos| order.get(pos).unwrap()).collect();
     assert_eq!(order.iter().collect::<Vec<_>>(), expected);
@@ -350,7 +350,7 @@ fn concat_children_keep_their_own_transform_parameters() {
 #[test]
 fn selections_resume_after_skips_and_exhaustion() {
     // Keep the slice around a repeat so the contiguous selection's cursor is exercised.
-    let seq = Seq::source(7).shuffle(13).repeat(5);
+    let seq = Seq::source(7).shuffle().repeat(5);
     let base = Order::new(seq.clone()).unwrap();
     let all: Vec<_> = base.iter().map(|item| item.record_index).collect();
     for step in [1, 2, 8, usize::MAX] {

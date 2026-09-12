@@ -19,7 +19,7 @@ impl Source for Dataset {
 }
 
 fn source(id: u64, len: usize) -> Seq<Dataset> {
-    Seq::source(Dataset { id, len }).shuffle(7)
+    Seq::source(Dataset { id, len }).shuffle()
 }
 
 fn records(order: &Order<Dataset>) -> Vec<(u64, usize)> {
@@ -51,7 +51,7 @@ fn check_access(order: &Order<Dataset>, expected: &[(u64, usize)]) {
 fn nested_repeats_match_flat_repeats() {
     for base in [
         source(0, 37),
-        Seq::concat([source(0, 37), source(1, 19).repeat(2)]).shuffle(11),
+        Seq::concat([source(0, 37), source(1, 19).repeat(2)]).shuffle(),
         Seq::mix([(source(0, 37).repeat(2), Schedule::Uniform), (source(1, 19), Schedule::delayed(0.3))]),
     ] {
         for seed in [0, 51, u64::MAX] {

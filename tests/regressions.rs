@@ -176,8 +176,8 @@ fn nested_slice_boundaries_preserve_configuration_salts() {
     let make = |removed| Seq::concat([Seq::concat([s(removed), s(1), s(2)]).skip(1), s(3)]).skip(15);
     let tail = |removed| Seq::concat([s(1), Seq::concat([s(2), s(3), s(removed)]).take(29)]).take(25);
     for (a, b) in [(make(0), make(999)), (tail(0), tail(999))] {
-        let a = Order::new(a.shuffle(1)).unwrap();
-        let b = Order::new(b.shuffle(1)).unwrap();
+        let a = Order::new(a.shuffle()).unwrap();
+        let b = Order::new(b.shuffle()).unwrap();
         let mut a_items: Vec<_> = a.iter().map(|item| (item.source.salt, item.record_index)).collect();
         let mut b_items: Vec<_> = b.iter().map(|item| (item.source.salt, item.record_index)).collect();
         assert_ne!(a_items, b_items);

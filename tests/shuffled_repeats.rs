@@ -41,10 +41,10 @@ fn repeating_a_selected_shuffle_keeps_the_selected_records() {
 #[test]
 fn plain_repeats_preserve_even_nested_shuffled_inputs() {
     for base in [
-        Seq::source(37).shuffle(7),
+        Seq::source(37).shuffle(),
         Seq::source(37).repeat_shuffled(3),
         Seq::source(37).cycle_to_shuffled(83),
-        Seq::source(37).repeat_shuffled(3).skip(17).take(70).shuffle(11),
+        Seq::source(37).repeat_shuffled(3).skip(17).take(70).shuffle(),
         Seq::mix([Seq::source(37).repeat_shuffled(3), Seq::source(19).cycle_to_shuffled(45)]),
     ] {
         for seed in [0, 42, u64::MAX] {
@@ -96,7 +96,7 @@ fn shuffled_passes_are_permutations_and_cycles_preserve_their_prefix() {
 
 #[test]
 fn shuffled_repetition_preserves_the_immediate_input_multiset() {
-    for base in [Seq::source(37).shuffle(7).take(19), Seq::source(37).shuffle(7).repeat_shuffled(2), Seq::source(37).cycle_to_shuffled(51)]
+    for base in [Seq::source(37).shuffle().take(19), Seq::source(37).shuffle().repeat_shuffled(2), Seq::source(37).cycle_to_shuffled(51)]
     {
         let input = Order::with_seed(base.clone(), 42).unwrap();
         let n = input.len();

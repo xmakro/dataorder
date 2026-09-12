@@ -20,7 +20,7 @@
 //! seeds and lengths, including powers of two and lengths on either side. Passing these
 //! tests is evidence of statistical quality, not a guarantee for every seed and length.
 //!
-//! Seeds, a local shuffle pass and source salt are combined into one 64-bit word,
+//! The order seed, a local shuffle pass and configuration salt are combined into one 64-bit word,
 //! which determines all six round keys. A [`Key`] stores 384 bits, but has only
 //! 64 bits of independent input. This is for reproducible ordering, not cryptography.
 //!
@@ -67,19 +67,19 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// The key of a shuffle with `seed`, `order_seed`, local `pass` and configuration
+/// The key of a shuffle with `order_seed`, local `pass` and configuration
 /// `salt`. Ordinary shuffles use pass zero. These inputs are hashed together, not merely
 /// xored, so no simple relation between them reproduces another combination's key. Not a
 /// security boundary: seeds are for reproducibility.
 #[inline]
-pub(crate) fn key(seed: u64, order_seed: u64, pass: usize, salt: u64) -> Key {
+pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
     let pass_seed = if pass == 0 {
         order_seed
     } else {
         mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
     };
     let a = mix64(
-        mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B,
+        mix64(0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B,
     );
     let mut k = Key::UNSET;
     for (i, rk) in k.rk.iter_mut().enumerate() {
@@ -142,7 +142,7 @@ mod tests {
     use crate::{Order, Seq};
 
     fn perm(n: usize, seed: u64) -> Vec<usize> {
-        let (shape, key) = (Shape::new(n), key(seed, 0, 0, 0));
+        let (shape, key) = (Shape::new(n), key(seed, 0, 0));
         (0..n).map(|i| permute(shape, key, i)).collect()
     }
 
@@ -164,7 +164,7 @@ mod tests {
     fn huge_domain_is_a_bijection_locally() {
         // n near usize::MAX: the forward map must still be invertible; check distinct images of a
         // window and that the walk terminates.
-        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, 0, 0, 0));
+        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, 0, 0));
         let mut images: Vec<usize> = (0..10_000).map(|i| permute(shape, key, i)).collect();
         images.sort_unstable();
         images.dedup();
@@ -177,11 +177,11 @@ mod tests {
         let a = perm(n, 1);
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
-        let (shape, k) = (Shape::new(n), key(1, 0, 1, 0));
+        let (shape, k) = (Shape::new(n), key(1, 1, 0));
         let c: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
-        let k = key(1, 0, 0, source_salt(7, n));
+        let k = key(1, 0, source_salt(7, n));
         let d: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
         assert_ne!(source_salt(0, 1000), source_salt(0, 999));
@@ -250,7 +250,7 @@ mod tests {
     }
 
     fn public_perm(n: usize, seed: u64) -> Vec<usize> {
-        let order = Order::new(Seq::source(n).shuffle(seed)).unwrap();
+        let order = Order::with_seed(Seq::source(n).shuffle(), seed).unwrap();
         order.iter().map(|item| item.record_index).collect()
     }
 

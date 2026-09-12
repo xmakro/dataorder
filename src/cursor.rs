@@ -72,7 +72,7 @@ impl<'a, T> Cursor<'a, T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(10).shuffle(1))?;
+    /// let order = Order::new(Seq::source(10).shuffle())?;
     /// let all: Vec<usize> = order.iter().map(|item| item.record_index).collect();
     /// let mut cursor = order.cursor(2..6)?;
     /// cursor.reset(4..6)?; // Keep the chosen endpoint explicitly.
@@ -255,11 +255,11 @@ impl<'a> NodeCursor<'a> {
                 NodeCursor::Concat { children, offsets, idx: 0, left: 0, child: Box::new(NodeCursor::Empty) }
             }
             Node::Mix { il, children } => NodeCursor::Mix(Box::new(MixCursor::new(il, children))),
-            Node::Shuffle { seed, salt, shape, child } => {
-                NodeCursor::Shuffle(ShuffleCursor { seed: *seed, salt: *salt, shape: *shape, child, key: Key::UNSET, pos: 0 })
+            Node::Shuffle { salt, shape, child } => {
+                NodeCursor::Shuffle(ShuffleCursor { salt: *salt, shape: *shape, child, key: Key::UNSET, pos: 0 })
             }
             Node::Repeat { child_len, shuffle: Some(salt), child, .. } => NodeCursor::ShuffledRepeat(Box::new(ShuffledRepeatCursor {
-                shuffle: ShuffleCursor { seed: 0, salt: *salt, shape: Shape::new(*child_len), child, key: Key::UNSET, pos: 0 },
+                shuffle: ShuffleCursor { salt: *salt, shape: Shape::new(*child_len), child, key: Key::UNSET, pos: 0 },
                 pass: 0,
             })),
             Node::Repeat { child_len, shuffle: None, child, .. } => {
@@ -291,7 +291,7 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.seek(pos),
             NodeCursor::Shuffle(sh) => {
-                sh.key = perm::key(sh.seed, order_seed, 0, sh.salt);
+                sh.key = perm::key(order_seed, 0, sh.salt);
                 sh.pos = pos;
             }
             NodeCursor::ShuffledRepeat(sh) => {
@@ -501,7 +501,6 @@ impl<'a> MixCursor<'a> {
 /// The cursor of a `Shuffle`: a position counter; its mix-free child is read by random access.
 #[derive(Clone, Debug)]
 pub(crate) struct ShuffleCursor<'a> {
-    seed: u64,
     salt: u64,
     shape: Shape,
     child: &'a Node,
@@ -534,7 +533,7 @@ impl ShuffledRepeatCursor<'_> {
     fn position(&mut self, pass: usize, pos: usize, order_seed: u64) {
         self.pass = pass;
         self.shuffle.pos = pos;
-        self.shuffle.key = perm::key(0, order_seed, pass, self.shuffle.salt);
+        self.shuffle.key = perm::key(order_seed, pass, self.shuffle.salt);
     }
 
     fn next(&mut self, order_seed: u64) -> (u32, usize) {

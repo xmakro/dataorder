@@ -95,7 +95,7 @@
 //!
 //! A shuffle visits every child position exactly once. Its permutation depends on:
 //!
-//! - The shuffle's seed and the order's seed.
+//! - The order's seed.
 //! - The input configuration's source salts, original source lengths and concatenation
 //!   grouping, before pruning or flattening.
 //!
@@ -104,18 +104,19 @@
 //! [`Order::new`] reports [`ErrorKind::ShuffleContainsMix`] at the enclosing shuffle.
 //!
 //! Give datasets stable [`Source::salt`] values to distinguish their shuffles when
-//! their lengths and seeds match. [`Order::set_seed`] changes the seed for all shuffles
+//! their lengths match. [`Order::set_seed`] changes the seed for all shuffles
 //! without rebuilding the order. Shuffles use a six-round Feistel permutation with
 //! cycle walking; they are intended for reproducible ordering, not cryptography.
 //!
 //! `x.repeat(3)` and `x.cycle_to(len)` preserve the input's record order on every pass,
-//! including any nested shuffles. `x.shuffle(seed).repeat(3)` repeats one fixed
+//! including any nested shuffles. `x.shuffle().repeat(3)` repeats one fixed
 //! permutation three times.
 //!
 //! `x.repeat_shuffled(3)` and `x.cycle_to_shuffled(len)` permute the immediate input's
 //! positions separately on each pass, including the first. Their permutation uses
-//! the order's seed, the local pass number and the input's configuration salt, with
-//! shuffle seed zero. Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed.
+//! the order's seed, the local pass number and the input's configuration salt.
+//! `x.shuffle()` produces the same order as `x.repeat_shuffled(1)`.
+//! Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed for all shuffled operations.
 //! Nested shuffles and shuffled repetitions keep their own permutations; enclosing
 //! repeats never reseed them. Every child receives the unchanged order seed, with
 //! no enclosing epoch. The shuffled variants reject mixes in their inputs,
@@ -235,7 +236,7 @@
 //! with the documented variant and field names. For example:
 //!
 //! ```json
-//! {"Mix":[{"seq":{"Shuffle":{"seed":1,"inner":{"Source":50}}},"schedule":"Uniform"}]}
+//! {"Mix":[{"seq":{"Shuffle":{"inner":{"Source":50}}},"schedule":"Uniform"}]}
 //! ```
 //!
 //! Unknown fields are rejected. Changes to this format follow the [stability policy](#stability).

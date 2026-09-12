@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove the per-shuffle seed. Use `.shuffle()` and select the run
+  with `Order::with_seed` or `Order::set_seed`; source salts distinguish datasets.
+  Remove `seed` from `Seq::Shuffle` and its serialized form; old seeded `Shuffle`
+  configurations are rejected. `.shuffle()` matches `.repeat_shuffled(1)` and the
+  former `.shuffle(0)`. Shuffled repeat and cycle ordering is unchanged.
+  Resume older orders with their original crate version.
+
 - Share repetition construction and folding between repeat and cycle compilation.
   Keep their overflow and empty-input checks separate. Ordering is unchanged.
 

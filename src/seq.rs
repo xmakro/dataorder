@@ -55,13 +55,11 @@ pub enum Seq<T> {
     /// [`Order::new`](crate::Order::new) rejects this combination with
     /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
-    /// The permutation depends on `seed`, the order's seed,
+    /// The permutation depends on the order's seed,
     /// and the input configuration's source salts, original lengths and concat grouping.
     /// Empty or discarded sources still contribute. See the crate's
     /// [shuffle rules](crate#shuffles-and-repetitions) for details.
     Shuffle {
-        /// Selects the permutation.
-        seed: u64,
         /// The sequence to permute.
         inner: Box<Self>,
     },
@@ -200,7 +198,9 @@ impl<T> Seq<T> {
         Self::Mix(parts.into_iter().map(Into::into).collect())
     }
 
-    /// This sequence in the pseudorandom order selected by `seed`.
+    /// This sequence in a pseudorandom order selected by the order's seed and input salt.
+    /// Produces the same order as `repeat_shuffled(1)`. Select the run with
+    /// [`Order::with_seed`](crate::Order::with_seed) or [`Order::set_seed`](crate::Order::set_seed).
     ///
     /// The sequence must contain no mixes, even beneath other operations or in
     /// subtrees that would fold away. Shuffle each input before mixing instead.
@@ -208,7 +208,7 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(100).shuffle(1))?;
+    /// let order = Order::new(Seq::source(100).shuffle())?;
     /// let mut indices: Vec<usize> = order.iter().map(|item| item.record_index).collect();
     /// assert_ne!(indices[..5], [0, 1, 2, 3, 4]);
     /// indices.sort_unstable();
@@ -216,8 +216,8 @@ impl<T> Seq<T> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn shuffle(self, seed: u64) -> Self {
-        Self::Shuffle { seed, inner: Box::new(self) }
+    pub fn shuffle(self) -> Self {
+        Self::Shuffle { inner: Box::new(self) }
     }
 
     /// Repeats this sequence `times` times, preserving its record order on every pass.
@@ -226,7 +226,7 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(1000).shuffle(1).repeat(2))?;
+    /// let order = Order::new(Seq::source(1000).shuffle().repeat(2))?;
     /// let first: Vec<_> = order.cursor(..1000)?.map(|item| item.record_index).collect();
     /// let second: Vec<_> = order.cursor(1000..)?.map(|item| item.record_index).collect();
     /// assert_eq!(first, second);
@@ -243,11 +243,11 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(1000).shuffle(1).cycle_to(2500))?;
+    /// let order = Order::new(Seq::source(1000).shuffle().cycle_to(2500))?;
     /// assert_eq!(order.len(), 2500);
-    /// let epochs = Order::new(Seq::source(1000).shuffle(1).repeat(3))?;
+    /// let epochs = Order::new(Seq::source(1000).shuffle().repeat(3))?;
     /// assert!(order.iter().eq(epochs.cursor(..2500)?));
-    /// let longest = Order::new(Seq::source(1000).shuffle(1).cycle_to(usize::MAX))?;
+    /// let longest = Order::new(Seq::source(1000).shuffle().cycle_to(usize::MAX))?;
     /// assert_eq!(longest.len(), usize::MAX);
     /// assert!(longest.get(usize::MAX - 1).unwrap().record_index < 1000);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -300,8 +300,8 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let all = Order::new(Seq::source(10).shuffle(1))?;
-    /// let first = Order::new(Seq::source(10).shuffle(1).take(3))?;
+    /// let all = Order::new(Seq::source(10).shuffle())?;
+    /// let first = Order::new(Seq::source(10).shuffle().take(3))?;
     /// assert!(first.iter().eq(all.cursor(..3)?));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -316,8 +316,8 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let all = Order::new(Seq::source(10).shuffle(1))?;
-    /// let rest = Order::new(Seq::source(10).shuffle(1).skip(7))?;
+    /// let all = Order::new(Seq::source(10).shuffle())?;
+    /// let rest = Order::new(Seq::source(10).shuffle().skip(7))?;
     /// assert!(rest.iter().eq(all.cursor(7..)?));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -374,9 +374,9 @@ impl<T> Seq<T> {
     ///
     /// // Resolve dataset names to their known record counts.
     /// let counts = HashMap::from([("web", 1000usize), ("code", 200)]);
-    /// let names = Seq::mix([Seq::source("web"), Seq::source("code").shuffle(1)]);
+    /// let names = Seq::mix([Seq::source("web"), Seq::source("code").shuffle()]);
     /// let lengths = names.map_sources(|name| counts[name]);
-    /// assert_eq!(lengths, Seq::mix([Seq::source(1000), Seq::source(200).shuffle(1)]));
+    /// assert_eq!(lengths, Seq::mix([Seq::source(1000), Seq::source(200).shuffle()]));
     /// ```
     #[must_use]
     pub fn map_sources<U, F: FnMut(T) -> U>(self, mut f: F) -> Seq<U> {
@@ -394,9 +394,9 @@ impl<T> Seq<T> {
     /// use dataorder::Seq;
     ///
     /// // Parse record counts supplied as strings.
-    /// let config = Seq::mix([Seq::source("1000"), Seq::source("200").shuffle(1)]);
+    /// let config = Seq::mix([Seq::source("1000"), Seq::source("200").shuffle()]);
     /// let lengths = config.try_map_sources(str::parse::<usize>)?;
-    /// assert_eq!(lengths, Seq::mix([Seq::source(1000), Seq::source(200).shuffle(1)]));
+    /// assert_eq!(lengths, Seq::mix([Seq::source(1000), Seq::source(200).shuffle()]));
     /// assert!(Seq::source("unknown").try_map_sources(str::parse::<usize>).is_err());
     /// # Ok::<(), std::num::ParseIntError>(())
     /// ```
@@ -439,7 +439,7 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Mix(parts) => Seq::Mix(
             parts.into_iter().map(|p| Ok(MixPart { seq: map_sources(p.seq, f)?, schedule: p.schedule })).collect::<Result<_, E>>()?,
         ),
-        Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
+        Seq::Shuffle { inner } => map_sources(*inner, f)?.shuffle(),
         Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),
         Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle_to(len),
         Seq::ShuffledRepeat { times, inner } => map_sources(*inner, f)?.repeat_shuffled(times),

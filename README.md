@@ -83,8 +83,8 @@ impl Source for Dataset {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let web = Seq::source(Dataset { name: "web", records: 1000 }).shuffle(1);
-    let code = Seq::source(Dataset { name: "code", records: 200 }).shuffle(2);
+    let web = Seq::source(Dataset { name: "web", records: 1000 }).shuffle();
+    let code = Seq::source(Dataset { name: "code", records: 200 }).shuffle();
     let order = Order::new(Seq::mix([web, code]))?;
 
     for item in order.cursor(..10)? {
@@ -111,7 +111,7 @@ so you can nest mixes and concatenations.
 | Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
 | Choose exact counts for each dataset | `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count), …])` |
 | Control when a sequence contributes records | `Seq::mix`, with a `Schedule` for each part |
-| Shuffle positions in a sequence containing no mixes | `.shuffle(seed)` |
+| Shuffle positions in a sequence containing no mixes | `.shuffle()` |
 | Repeat whole passes, preserving the input order | `.repeat(times)` |
 | Repeat or truncate to an exact length, preserving the input order | `.cycle_to(len)` |
 | Shuffle the input separately on each pass | `.repeat_shuffled(times)` |
@@ -140,7 +140,10 @@ assert_eq!(Order::new(seq)?.len(), 1_000_000);
 Each shuffled cycle permutes its immediate input on every pass, including the first,
 using the order's seed and its local pass number. Nested shuffles keep their own
 permutations. Plain `.repeat(times)` and `.cycle_to(count)` replay the input order;
-for example, `.shuffle(1).repeat(3)` repeats the same permutation three times.
+for example, `.shuffle().repeat(3)` repeats the same permutation three times.
+`.shuffle()` produces the same order as `.repeat_shuffled(1)`. Set the seed for all
+shuffled operations with `Order::with_seed(seq, seed)` or `order.set_seed(seed)`;
+source salts distinguish datasets within that run.
 Changing a part's count can change the mixed order's prefix. Keep the original
 configuration and concatenate additional data when the existing prefix must stay fixed.
 

@@ -35,7 +35,6 @@ pub(crate) enum Node {
     },
     /// `salt` is the input configuration's salt, computed before pruning.
     Shuffle {
-        seed: u64,
         salt: u64,
         shape: Shape,
         child: Box<Self>,
@@ -125,7 +124,7 @@ impl<T: Source> Order<T> {
     ///
     /// ```
     /// use dataorder::{ErrorKind, Order, Seq};
-    /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(2).shuffle(1)]))?;
+    /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(2).shuffle()]))?;
     /// assert_eq!(order.len(), 5);
     /// let err = Order::new(Seq::source(3).skip(4)).unwrap_err();
     /// assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 4, len: 3 });
@@ -141,13 +140,13 @@ impl<T: Source> Order<T> {
     }
 
     /// Validates and compiles `seq` with the given order seed.
-    /// This seed is combined with each shuffle's own seed; it does not add shuffling
+    /// This seed is combined with each shuffled input's configuration salt; it does not add shuffling
     /// to unshuffled sequences. Use [`Order::set_seed`] to reseed an existing order
     /// without rebuilding it.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let seq = Seq::source(100).shuffle(1);
+    /// let seq = Seq::source(100).shuffle();
     /// let (a, b) = (Order::with_seed(seq.clone(), 1)?, Order::with_seed(seq, 2)?);
     /// assert!(a.iter().ne(b.iter()));
     /// assert_eq!(b.seed(), 2);
@@ -188,7 +187,7 @@ impl<T> Order<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let seq = Seq::source(100).shuffle(1);
+    /// let seq = Seq::source(100).shuffle();
     /// let mut order = Order::new(seq.clone())?;
     /// order.set_seed(7);
     /// let reseeded = Order::with_seed(seq, 7)?;
@@ -222,7 +221,7 @@ impl<T> Order<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(5).shuffle(1)]))?;
+    /// let order = Order::new(Seq::concat([Seq::source(3), Seq::source(5).shuffle()]))?;
     /// let item = order.get(2).unwrap();
     /// assert_eq!(item.source_ordinal, 0);
     /// assert_eq!((*item.source, item.record_index), (3, 2));
@@ -270,7 +269,7 @@ impl<T> Order<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(10).shuffle(3))?;
+    /// let order = Order::new(Seq::source(10).shuffle())?;
     /// let all: Vec<usize> = order.iter().map(|item| item.record_index).collect();
     /// assert_eq!(order.cursor(4..7)?.map(|item| item.record_index).collect::<Vec<_>>(), all[4..7]);
     /// assert_eq!(order.cursor(8..)?.count(), 2);
@@ -325,15 +324,15 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (u32, usi
                 pos = j;
                 node = &children[s];
             }
-            Node::Shuffle { seed, salt, shape, child } => {
-                pos = perm::permute(*shape, perm::key(*seed, order_seed, 0, *salt), pos);
+            Node::Shuffle { salt, shape, child } => {
+                pos = perm::permute(*shape, perm::key(order_seed, 0, *salt), pos);
                 node = child;
             }
             Node::Repeat { child_len, shuffle, child, .. } => {
                 let pass = pos / child_len;
                 pos -= pass * child_len;
                 if let Some(salt) = shuffle {
-                    pos = perm::permute(Shape::new(*child_len), perm::key(0, order_seed, pass, *salt), pos);
+                    pos = perm::permute(Shape::new(*child_len), perm::key(order_seed, pass, *salt), pos);
                 }
                 node = child;
             }
@@ -416,7 +415,7 @@ impl<T: Source> Compiler<T> {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, depth),
             Seq::Mix(parts) => self.mix_parts(parts, depth),
-            Seq::Shuffle { seed, inner } => self.shuffle(seed, *inner, depth),
+            Seq::Shuffle { inner } => self.shuffle(*inner, depth),
             Seq::Repeat { times, inner } => self.repeat(times, *inner, false, depth),
             Seq::Cycle { len, inner } => self.cycled(len, *inner, false, depth),
             Seq::ShuffledRepeat { times, inner } => self.repeat(times, *inner, true, depth),
@@ -477,10 +476,10 @@ impl<T: Source> Compiler<T> {
         self.mix(children, &schedule)
     }
 
-    fn shuffle(&mut self, seed: u64, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
+    fn shuffle(&mut self, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         let mut child = self.shuffle_child(inner, depth)?;
         if child.len > 1 {
-            child.node = Node::Shuffle { seed, salt: child.salt, shape: Shape::new(child.len), child: Box::new(child.node) };
+            child.node = Node::Shuffle { salt: child.salt, shape: Shape::new(child.len), child: Box::new(child.node) };
         }
         Ok(child)
     }

@@ -31,7 +31,7 @@ fn names(cursor: Cursor<'_, Shard>) -> Vec<(&'static str, usize)> {
 fn builders_accept_unresolved_sources() {
     // No trait bounds, including Source or Clone, are needed to build the tree.
     fn configuration<T>(first: T, second: T) -> Seq<T> {
-        Seq::concat([Seq::mix([Seq::source(first).shuffle(7)]), Seq::mix([(Seq::source(second), Schedule::Uniform)])])
+        Seq::concat([Seq::mix([Seq::source(first).shuffle()]), Seq::mix([(Seq::source(second), Schedule::Uniform)])])
             .repeat(2)
             .cycle_to(50)
             .skip(2)
@@ -85,7 +85,7 @@ fn shuffles_reject_mix_descendants_before_folding() {
     for inner in cases {
         // Build the variant directly and discard its output: validation must still
         // reject the mix and report the shuffle's original configuration path.
-        let shuffled = Seq::Shuffle { seed: 7, inner: Box::new(inner) };
+        let shuffled = Seq::Shuffle { inner: Box::new(inner) };
         let error = Order::new(Seq::concat([Seq::source(1), shuffled.repeat(0)])).unwrap_err();
         assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
         assert_eq!(error.path(), [1, 0]);
@@ -96,20 +96,20 @@ fn shuffles_reject_mix_descendants_before_folding() {
 #[test]
 fn shuffle_restrictions_follow_ancestors_and_allow_mixed_siblings() {
     let mix = || Seq::mix([Seq::source(10), Seq::source(20)]);
-    let error = Order::with_seed(mix().shuffle(1).shuffle(2), 3).unwrap_err();
+    let error = Order::with_seed(mix().shuffle().shuffle(), 3).unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
     assert_eq!(error.path(), [0]); // The nearest enclosing shuffle.
 
     // Finishing an inner shuffle must restore the enclosing restriction.
-    let error = Order::new(Seq::concat([Seq::source(10).shuffle(1), mix()]).shuffle(2)).unwrap_err();
+    let error = Order::new(Seq::concat([Seq::source(10).shuffle(), mix()]).shuffle()).unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
     assert!(error.path().is_empty());
 
     // After leaving a shuffle, later siblings may contain mixes. Nested scheduled
     // mixes, shuffled concatenations, repeats and selections remain supported.
     let seq = Seq::mix([
-        (Seq::concat([Seq::source(10), Seq::source(20).shuffle(1)]).repeat(2).shuffle(2).cycle_to(100), Schedule::Uniform),
-        (Seq::concat([Seq::source(10).shuffle(3).shuffle(4), mix()]).skip(2), Schedule::delayed(0.3)),
+        (Seq::concat([Seq::source(10), Seq::source(20).shuffle()]).repeat(2).shuffle().cycle_to(100), Schedule::Uniform),
+        (Seq::concat([Seq::source(10).shuffle().shuffle(), mix()]).skip(2), Schedule::delayed(0.3)),
     ])
     .repeat(2)
     .skip(1)
@@ -121,7 +121,7 @@ fn shuffle_restrictions_follow_ancestors_and_allow_mixed_siblings() {
 #[test]
 #[cfg(feature = "serde")]
 fn deserialized_shuffles_cannot_contain_mixes() {
-    let seq: Seq<usize> = serde_json::from_str(r#"{"Shuffle":{"seed":7,"inner":{"Mix":[]}}}"#).unwrap();
+    let seq: Seq<usize> = serde_json::from_str(r#"{"Shuffle":{"inner":{"Mix":[]}}}"#).unwrap();
     let error = Order::new(seq).unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
     assert!(error.path().is_empty());
@@ -205,7 +205,7 @@ fn unresolved_position_operations_round_trip() {
 #[test]
 fn hand_built_configuration() {
     let seq = Seq::Mix(vec![
-        MixPart { seq: shard("a", 10).shuffle(1).cycle_to(75), schedule: Schedule::Uniform },
+        MixPart { seq: shard("a", 10).shuffle().cycle_to(75), schedule: Schedule::Uniform },
         MixPart::from(
             Seq::Mix(vec![MixPart::from(shard("b", 40)), MixPart { seq: shard("c", 5), schedule: Schedule::delayed(0.5) }]).cycle_to(25),
         ),
@@ -277,8 +277,8 @@ fn full_iteration_covers_empty_and_maximum_lengths() {
 fn resets_replace_remaining_ranges_in_order_coordinates() {
     use std::ops::Bound::{Excluded, Included, Unbounded};
 
-    let mix = Seq::mix([shard("a", 250).shuffle(1), shard("b", 150)]);
-    for seq in [shard("a", 400), mix, Seq::concat([shard("a", 250), shard("b", 150)]).shuffle(2)] {
+    let mix = Seq::mix([shard("a", 250).shuffle(), shard("b", 150)]);
+    for seq in [shard("a", 400), mix, Seq::concat([shard("a", 250), shard("b", 150)]).shuffle()] {
         let order = Order::new(seq).unwrap();
         let mut cursor = order.cursor(100..200).unwrap();
         assert_eq!(cursor.next(), order.get(100));
@@ -310,7 +310,7 @@ fn resets_replace_remaining_ranges_in_order_coordinates() {
 
 #[test]
 fn cursors_reset_skip_and_clone() {
-    let order = Order::new(Seq::mix([shard("a", 300).shuffle(1).repeat(2), shard("b", 100).shuffle(2)]).skip(2).step_by(3)).unwrap();
+    let order = Order::new(Seq::mix([shard("a", 300).shuffle().repeat(2), shard("b", 100).shuffle()]).skip(2).step_by(3)).unwrap();
     let all = names(order.iter());
     assert_eq!(all.len(), order.len());
     let mut cursor = order.iter();
@@ -353,7 +353,7 @@ fn sources_through_pointers_and_lengths() {
     let boxed: Box<&Shard> = Box::new(&shared);
     assert_eq!(boxed.salt(), dataorder::salt("s"));
     assert_eq!((&&shared).salt(), shared.salt());
-    let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle(1)).unwrap();
+    let order = Order::new(Seq::concat([Seq::source(vec!['a', 'b', 'c']), Seq::source(['d', 'e'].to_vec())]).shuffle()).unwrap();
     let letters: String = order.iter().map(|item| item.source[item.record_index]).collect();
     assert_eq!(letters.len(), 5);
     assert_eq!(Order::new(Seq::source(&[1u8, 2, 3][..])).unwrap().len(), 3);
@@ -363,17 +363,17 @@ fn sources_through_pointers_and_lengths() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let seq = Seq::mix([(Seq::source(10).shuffle(1), Schedule::Uniform), (Seq::source(5), Schedule::ramp(0.2, 0.6))]).skip(1).step_by(2);
+    let seq = Seq::mix([(Seq::source(10).shuffle(), Schedule::Uniform), (Seq::source(5), Schedule::ramp(0.2, 0.6))]).skip(1).step_by(2);
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<usize> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq);
     let (a, b) = (Order::new(seq).unwrap(), Order::new(back).unwrap());
     assert!(a.iter().eq(b.iter()));
     // The wire format is part of the API.
-    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle(1).cycle_to(9), Schedule::ramp(0.1, 0.2))]);
+    let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle().cycle_to(9), Schedule::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
-        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"seed":1,"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
+        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
     );
     assert_eq!(serde_json::to_string(&Schedule::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
     assert_eq!(serde_json::to_string(&Schedule::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
@@ -381,7 +381,7 @@ fn serde_round_trip() {
     // Unknown fields are rejected in every variant.
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
-        r#"{"Shuffle":{"seed":1,"inner":{"Source":5},"extra":true}}"#,
+        r#"{"Shuffle":{"inner":{"Source":5},"extra":true}}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":"Uniform","extra":1}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0,"end":0.3}}}]}"#,
     ] {
@@ -389,6 +389,8 @@ fn serde_round_trip() {
     }
     // Removed fields and variants are rejected rather than silently reinterpreted.
     for json in [
+        r#"{"Shuffle":{"seed":0,"inner":{"Source":5}}}"#,
+        r#"{"Shuffle":{"seed":7,"inner":{"Source":5}}}"#,
         r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform"}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":"Uniform","sampling":"Uniform"}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#,

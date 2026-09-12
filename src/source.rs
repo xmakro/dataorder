@@ -41,7 +41,7 @@ pub trait Source {
 
     /// A stable dataset identity used when deriving shuffle keys. Defaults to 0.
     ///
-    /// Sources with the same length and salt shuffle alike under the same seeds
+    /// Sources with the same length and salt shuffle alike under the same order seed
     /// and, for shuffled repetitions, the local pass number. Derive a salt from a dataset name with [`crate::salt`]
     /// to keep ordering independent of storage location.
     /// The compiler includes this salt and the original length in configuration

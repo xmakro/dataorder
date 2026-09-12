@@ -15,7 +15,7 @@ fn standard_iterator_position_is_available() {
 #[test]
 #[allow(clippy::reversed_empty_ranges)]
 fn checked_access_preserves_cursor_on_errors() {
-    let order = Order::new(Seq::mix([Seq::source(10).shuffle(1), Seq::source(7)])).unwrap();
+    let order = Order::new(Seq::mix([Seq::source(10).shuffle(), Seq::source(7)])).unwrap();
     assert_eq!(order.get(16), (&order).into_iter().nth(16));
     assert_eq!(order.get(17), None);
     assert_eq!(order.get(usize::MAX), None);
@@ -142,7 +142,7 @@ fn item_equality_checks_metadata_before_source_values() {
 
 #[test]
 fn sharding_preserves_global_partition_not_worker_mixture() {
-    let seq = Seq::mix([Seq::source(4).shuffle(1), Seq::source(4).shuffle(2)]);
+    let seq = Seq::mix([Seq::source(4).shuffle(), Seq::source(4).shuffle()]);
     for worker in 0..2 {
         let order = Order::new(seq.clone().skip(worker).step_by(2)).unwrap();
         assert!(order.iter().all(|item| item.source_ordinal == worker));

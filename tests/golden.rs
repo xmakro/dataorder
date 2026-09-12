@@ -40,38 +40,38 @@ fn fingerprint<'a>(it: impl Iterator<Item = dataorder::Item<'a, Src>>) -> u64 {
 #[test]
 fn golden_orders() {
     let cases: Vec<(&str, Seq<Src>, u64)> = vec![
-        ("shuffle", src(0, 1000).shuffle(7), 0),
-        ("shuffle, seeded order", src(0, 1000).shuffle(7), 42),
-        ("shuffle.repeat", src(0, 777).shuffle(1).repeat(3), 0),
-        ("shuffle(concat)", Seq::concat([src(0, 300), src(1, 500).shuffle(2)]).shuffle(3), 0),
-        ("slice of shuffle", src(0, 5000).shuffle(9).skip(100).take(2000), 0),
-        ("mix uniform", Seq::mix([src(0, 1000).shuffle(1), src(1, 300).shuffle(2), src(2, 50)]), 0),
+        ("shuffle", src(0, 1000).shuffle(), 0),
+        ("shuffle, seeded order", src(0, 1000).shuffle(), 42),
+        ("shuffle.repeat", src(0, 777).shuffle().repeat(3), 0),
+        ("shuffle(concat)", Seq::concat([src(0, 300), src(1, 500).shuffle()]).shuffle(), 0),
+        ("slice of shuffle", src(0, 5000).shuffle().skip(100).take(2000), 0),
+        ("mix uniform", Seq::mix([src(0, 1000).shuffle(), src(1, 300).shuffle(), src(2, 50)]), 0),
         (
             "mix scheduled",
             Seq::mix([
-                (src(0, 2000).shuffle(1), Uniform),
-                (src(1, 400).shuffle(2), Schedule::delayed(0.5)),
+                (src(0, 2000).shuffle(), Uniform),
+                (src(1, 400).shuffle(), Schedule::delayed(0.5)),
                 (src(2, 600), Schedule::ramp(0.2, 0.6)),
             ]),
             0,
         ),
         (
             "nested mixes, epochs, shard",
-            Seq::mix([Seq::mix([src(0, 500).shuffle(1).repeat(2), src(1, 300).shuffle(2).repeat(3)]), src(2, 900).shuffle(3)])
+            Seq::mix([Seq::mix([src(0, 500).shuffle().repeat(2), src(1, 300).shuffle().repeat(3)]), src(2, 900).shuffle()])
                 .skip(1)
                 .step_by(4),
             0,
         ),
-        ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle(4)]).skip(3).step_by(7), 0),
-        ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
-        ("mix with explicit counts", Seq::mix([src(0, 100).shuffle(1).cycle_to(1800), src(1, 5000).shuffle(2).cycle_to(1200)]), 0),
-        ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
-        ("cycle of a repeated shuffle", src(0, 300).shuffle(5).repeat(2).cycle_to(1000), 0),
+        ("stride over mix", Seq::mix([src(0, 1000), src(1, 999).shuffle()]).skip(3).step_by(7), 0),
+        ("repeat of mix", Seq::mix([src(0, 200).shuffle(), src(1, 100).shuffle()]).repeat(4), 0),
+        ("mix with explicit counts", Seq::mix([src(0, 100).shuffle().cycle_to(1800), src(1, 5000).shuffle().cycle_to(1200)]), 0),
+        ("nested repeats", src(0, 100).shuffle().repeat(3).repeat(2), 0),
+        ("cycle of a repeated shuffle", src(0, 300).shuffle().repeat(2).cycle_to(1000), 0),
         (
             "mix fading",
             Seq::mix([
-                (src(0, 1500).shuffle(1), Uniform),
-                (src(1, 300).shuffle(2), Schedule::until(0.4)),
+                (src(0, 1500).shuffle(), Uniform),
+                (src(1, 300).shuffle(), Schedule::until(0.4)),
                 (src(2, 400), Schedule::trapezoid(0.2, 0.4, 0.6, 0.9)),
             ]),
             0,
@@ -112,7 +112,7 @@ fn golden_orders() {
     let names: Vec<&str> = cases.iter().map(|c| c.0).collect();
     assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
     // A few elements in the clear, for the first case.
-    let order = Order::new(src(0, 1000).shuffle(7)).unwrap();
+    let order = Order::new(src(0, 1000).shuffle()).unwrap();
     const FIRST: [usize; 6] = [629, 114, 228, 812, 639, 604];
     assert_eq!(order.cursor(0..6).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).unwrap().record_index == FIRST[k]));
@@ -139,7 +139,7 @@ fn golden_name_salted_order() {
     // FNV-1a and Feistel arithmetic, rather than obtained by blessing this test's output.
     const FIRST: [usize; 12] = [445, 928, 15, 77, 0, 293, 540, 797, 190, 407, 709, 652];
     const EXPECTED: u64 = 15_852_656_108_745_184_545;
-    let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin" }).shuffle(7), 42).unwrap();
+    let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin" }).shuffle(), 42).unwrap();
     assert_eq!(order.cursor(..12).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     let actual = order
         .iter()
