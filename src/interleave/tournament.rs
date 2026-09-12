@@ -52,14 +52,6 @@ impl<V> TournamentTree<V> {
         Self { nodes: Vec::new(), values: Vec::new(), live: 0, scratch: Vec::new() }
     }
 
-    /// Builds the tree from the leaves' initial keys and values (leaf `i` = `leaves[i]`).
-    #[cfg(test)]
-    pub(crate) fn new(leaves: impl IntoIterator<Item = (f64, V)>) -> Self {
-        let mut tree = Self::empty();
-        tree.rebuild(leaves);
-        tree
-    }
-
     /// Replaces the tree by one over new leaves, reusing every allocation.
     ///
     /// # Panics
@@ -105,18 +97,6 @@ impl<V> TournamentTree<V> {
         self.nodes[0] = winner[1];
         self.live = k;
         winner.clear();
-    }
-
-    /// Number of leaves not yet removed.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.live
-    }
-
-    /// `true` when every leaf has been removed.
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.live == 0
     }
 
     /// Key and value of the leaf with the smallest key.
@@ -226,6 +206,13 @@ mod tests {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
 
+    /// A tree over the leaves' initial keys and values (leaf `i` = `leaves[i]`).
+    fn new<V>(leaves: impl IntoIterator<Item = (f64, V)>) -> TournamentTree<V> {
+        let mut tree = TournamentTree::empty();
+        tree.rebuild(leaves);
+        tree
+    }
+
     /// Few distinct values, so that ties are common.
     fn random_key(rng: &mut Rng) -> f64 {
         (rng.next() % 50) as f64 / 7.0
@@ -241,13 +228,13 @@ mod tests {
     #[test]
     fn matches_binary_heap() {
         let mut rng = Rng(0x1234_5678_9ABC_DEF1);
-        let mut tree = TournamentTree::new(Vec::new());
+        let mut tree = new(Vec::new());
         for &n in &[1usize, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 100, 1000] {
             for _ in 0..(if n < 20 { 50 } else { 3 }) {
                 let keys: Vec<f64> = (0..n).map(|_| random_key(&mut rng)).collect();
                 // Alternately a fresh tree and a rebuilt one.
                 if rng.next().is_multiple_of(2) {
-                    tree = TournamentTree::new(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
+                    tree = new(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
                 } else {
                     tree.rebuild(keys.iter().enumerate().map(|(i, &key)| (key, i as u32)));
                 }
@@ -256,7 +243,7 @@ mod tests {
                 while let Some(Reverse(K(bits, leaf))) = heap.pop() {
                     let (key, &value) = tree.min().expect("tree empty too early");
                     assert_eq!((key.to_bits(), value), (bits, leaf), "n {n} step {steps}");
-                    assert_eq!(tree.len(), heap.len() + 1);
+                    assert_eq!(tree.live, heap.len() + 1);
                     if rng.next().is_multiple_of(3) {
                         tree.remove_min();
                     } else {
@@ -266,7 +253,7 @@ mod tests {
                     }
                     steps += 1;
                 }
-                assert!(tree.is_empty());
+                assert_eq!(tree.live, 0);
                 assert!(tree.min().is_none());
             }
         }
@@ -274,15 +261,15 @@ mod tests {
 
     #[test]
     fn empty_tree() {
-        let tree: TournamentTree<u32> = TournamentTree::new(Vec::new());
-        assert!(tree.is_empty());
-        assert_eq!(tree.len(), 0);
+        let tree: TournamentTree<u32> = new(Vec::new());
+        assert_eq!(tree.live, 0);
+        assert_eq!(tree.live, 0);
         assert!(tree.min().is_none());
     }
 
     #[test]
     fn last_survivor_has_no_tournament_path() {
-        let mut tree = TournamentTree::new((0..100).map(|i| (f64::from(i), i)));
+        let mut tree = new((0..100).map(|i| (f64::from(i), i)));
         for i in 0..99 {
             assert_eq!(tree.min(), Some((f64::from(i), &i)));
             tree.remove_min();
@@ -296,10 +283,10 @@ mod tests {
             assert_eq!(cloned.min(), Some((key, &99)));
         }
         cloned.remove_min();
-        assert!(cloned.is_empty());
+        assert_eq!(cloned.live, 0);
         assert_eq!(tree.min(), Some((99.0, &99)));
         tree.rebuild((0..100).map(|i| (f64::from(i), i)));
-        assert_eq!(tree.len(), 100);
+        assert_eq!(tree.live, 100);
         assert_eq!(tree.min(), Some((0.0, &0)));
     }
 }

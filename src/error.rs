@@ -49,12 +49,6 @@ impl Error {
     pub fn into_kind(self) -> ErrorKind {
         self.kind
     }
-
-    /// A schedule or length rejection of a mix.
-    #[cfg(test)]
-    pub(crate) fn is_schedule(&self) -> bool {
-        matches!(self.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::ScheduleTooSteep { .. })
-    }
 }
 
 impl fmt::Display for Error {

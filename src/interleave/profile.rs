@@ -43,19 +43,6 @@ impl Profile {
         Self::from_rates([(0.0, d0, 0.0, 0.0), (d0, d1, 0.0, r), (d1, d2, r, r), (d2, d3, r, 0.0), (d3, 1.0, 0.0, 0.0)])
     }
 
-    /// The rate just after `t` (`before == false`) or just before it.
-    #[cfg(test)]
-    fn rate_at(&self, t: f64, before: bool) -> f64 {
-        let s = &self.segs[self.segs.partition_point(|s| if before { s.start < t } else { s.start <= t }).saturating_sub(1)];
-        s.r0 + (s.r1 - s.r0) * ((t - s.start) / (s.end - s.start)).clamp(0.0, 1.0)
-    }
-
-    /// `f'(1⁻)`, the rate at the end.
-    #[cfg(test)]
-    pub(crate) fn final_rate(&self) -> f64 {
-        self.segs.last().map_or(0.0, |s| s.r1)
-    }
-
     /// The largest rate anywhere.
     pub(crate) fn max_rate(&self) -> f64 {
         self.segs.iter().fold(0.0, |m, s| m.max(s.r0).max(s.r1))
@@ -134,6 +121,17 @@ struct Segment {
 mod tests {
     use super::*;
 
+    /// The rate just after `t` (`before == false`) or just before it.
+    fn rate_at(p: &Profile, t: f64, before: bool) -> f64 {
+        let s = &p.segs[p.segs.partition_point(|s| if before { s.start < t } else { s.start <= t }).saturating_sub(1)];
+        s.r0 + (s.r1 - s.r0) * ((t - s.start) / (s.end - s.start)).clamp(0.0, 1.0)
+    }
+
+    /// `f'(1⁻)`, the rate at the end.
+    fn final_rate(p: &Profile) -> f64 {
+        p.segs.last().map_or(0.0, |s| s.r1)
+    }
+
     fn grid() -> impl Iterator<Item = f64> {
         (0..=1000).map(|i| i as f64 / 1000.0)
     }
@@ -145,20 +143,20 @@ mod tests {
             assert_eq!(p.share(0.0), 0.0);
             assert_eq!(p.share(d0), 0.0);
             assert!((p.share(1.0) - 1.0).abs() < 1e-12, "F(1) = {}", p.share(1.0));
-            assert!((p.final_rate() - 2.0 / ((1.0 - d0) + (1.0 - d1))).abs() < 1e-12);
+            assert!((final_rate(&p) - 2.0 / ((1.0 - d0) + (1.0 - d1))).abs() < 1e-12);
             // Nothing before d0, the final rate from d1 on, a jump exactly at a step.
             if d0 > 0.0 {
-                assert_eq!(p.rate_at(d0, true), 0.0);
+                assert_eq!(rate_at(&p, d0, true), 0.0);
             }
-            assert!((p.rate_at(d1, false) - p.final_rate()).abs() < 1e-12);
+            assert!((rate_at(&p, d1, false) - final_rate(&p)).abs() < 1e-12);
             if d1 > d0 {
                 // The rate rises linearly, so the share on the ramp is a parabola.
                 let mid = (d0 + d1) / 2.0;
-                let tol = 1e-9 * p.final_rate();
-                assert!((p.rate_at(mid, false) - p.final_rate() / 2.0).abs() < tol);
+                let tol = 1e-9 * final_rate(&p);
+                assert!((rate_at(&p, mid, false) - final_rate(&p) / 2.0).abs() < tol);
                 assert!((p.share(mid) - p.share(d1) / 4.0).abs() < tol);
             } else {
-                assert!((p.rate_at(d0, false) - p.final_rate()).abs() < 1e-12);
+                assert!((rate_at(&p, d0, false) - final_rate(&p)).abs() < 1e-12);
             }
             let mut prev = -1.0;
             for t in grid() {
@@ -180,13 +178,13 @@ mod tests {
             assert_eq!(p.share(d0), 0.0);
             assert!((p.share(d3) - 1.0).abs() < 1e-12, "F(d3) = {}", p.share(d3));
             assert!((p.share(1.0) - 1.0).abs() < 1e-12);
-            assert_eq!(p.final_rate(), if d2 < d3 || d3 < 1.0 { 0.0 } else { r });
+            assert_eq!(final_rate(&p), if d2 < d3 || d3 < 1.0 { 0.0 } else { r });
             if d3 > d2 {
                 let mid = (d2 + d3) / 2.0;
-                assert!((p.rate_at(mid, false) - r / 2.0).abs() < 1e-9 * r);
+                assert!((rate_at(&p, mid, false) - r / 2.0).abs() < 1e-9 * r);
             }
             if d3 < 1.0 {
-                assert_eq!(p.rate_at(d3, false), 0.0);
+                assert_eq!(rate_at(&p, d3, false), 0.0);
             }
             let mut prev = -1.0;
             for t in grid() {
