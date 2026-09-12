@@ -24,9 +24,9 @@ use std::ops::{Bound, Range, RangeBounds};
 ///
 /// [`nth`](Iterator::nth) skips without returning intermediate elements.
 /// [`count`](Iterator::count) uses the remaining length; [`last`](Iterator::last)
-/// uses random access. Neither walks the range. Construction positions the cursor
-/// immediately and can allocate, even for an empty range. `Debug` displays the
-/// current position and range end.
+/// uses random access. Neither walks the range. Construction and moves can allocate;
+/// see the crate's [cost model](crate#cost). `Debug` displays the current position
+/// and range end.
 #[must_use = "a cursor yields nothing until iterated"]
 pub struct Cursor<'a, T> {
     order: &'a Order<T>,
@@ -61,11 +61,9 @@ impl<'a, T> Cursor<'a, T> {
     /// to the order's end. Use `reset(pos..end)` to keep a chosen endpoint.
     /// The previous range does not constrain the new one.
     ///
-    /// Forward moves skip; backward moves reposition the cursor tree. Both reuse
-    /// existing buffers within the current child. Entering another concat child
-    /// creates fresh state; entering a previously unvisited mix part can also allocate.
-    /// Use this method for repeated random access or to visit multiple ranges.
-    /// Empty ranges are positioned like other ranges and can allocate.
+    /// Use this method for repeated random access or to visit multiple ranges; the
+    /// crate's [cost model](crate#cost) describes which moves reuse buffers and which
+    /// allocate.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -116,10 +114,9 @@ impl<T> fmt::Debug for Cursor<'_, T> {
     }
 }
 
-/// Clones the current position and cursor state for independent iteration.
-/// Copies initialized child cursors and mix buffers, so cloning an active cursor
-/// can allocate. Spare buffer capacity is not preserved, so later seeks may allocate
-/// too. The source handles remain borrowed from the same order.
+/// Clones the current position and cursor state for independent iteration, borrowing
+/// the source handles from the same order; see the crate's [cost model](crate#cost)
+/// for what a clone copies.
 impl<T> Clone for Cursor<'_, T> {
     fn clone(&self) -> Self {
         Cursor { order: self.order, root: self.root.clone(), pos: self.pos, end: self.end }

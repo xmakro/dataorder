@@ -189,15 +189,17 @@
 //! A shuffle reads scattered child positions without allocating.
 //!
 //! Stepping through a sequence skips unselected child positions. Mixes advance their
-//! interleave for short skips and seek for longer ones. Sharding a mix across `count`
-//! workers can therefore multiply the total interleaving work by up to `count`;
-//! see [`Seq::step_by`].
+//! interleave for short skips and seek for longer ones, so sharding a mix across `count`
+//! workers can multiply the total interleaving work by up to `count`. Partitioning each
+//! part before mixing avoids that at the price of a different order; see [`Seq::step_by`].
 //!
 //! Cursor construction positions its state immediately and can allocate, even for
-//! an empty range or a cursor used only for `count()`. [`Cursor::reset`] and
-//! [`Iterator::nth`] reuse existing buffers within the current child, including
-//! when moving to empty ranges. Concat transitions replace
-//! child state, and entering a new mix part can allocate. Cloning copies current state
+//! an empty range or a cursor used only for `count()`: an entered mix reserves space
+//! for its parts and builds each part's cursor when it first draws from it.
+//! [`Cursor::reset`] and [`Iterator::nth`] skip forward or reposition the tree
+//! backward, reusing existing buffers within the current child, including when
+//! moving to empty ranges. Entering another concat child replaces the child state,
+//! and entering a new mix part can allocate. Cloning copies initialized state
 //! without preserving spare buffer capacity; subsequent seeks may allocate new buffers.
 //! `last()` uses [`Order::get`] and can allocate independently of the cursor's buffers.
 //! For benchmark workloads and commands, see the

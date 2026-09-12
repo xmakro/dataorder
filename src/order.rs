@@ -239,10 +239,9 @@ impl<T> Order<T> {
 
     /// Returns the [`Item`] at order position `pos`, or `None` when `pos >= len()`.
     ///
-    /// Walks the path to a source. A concat searches its offsets in `O(log k)`; a mix
-    /// seeks the interleave and allocates (see the crate's [cost model](crate#cost)), and
-    /// a shuffle cycle-walks a permutation at constant average cost per position.
-    /// Use [`Order::iter`] or [`Order::cursor`] for consecutive positions. For many scattered positions,
+    /// Walks the path from the root to a source; a mix on that path seeks its interleave
+    /// and allocates. See the crate's [cost model](crate#cost). Use [`Order::iter`] or
+    /// [`Order::cursor`] for consecutive positions, and for many scattered positions
     /// reuse a cursor with [`Cursor::reset`] (`reset(pos..)`) to reuse its allocations.
     ///
     /// ```
@@ -268,8 +267,8 @@ impl<T> Order<T> {
     /// This is also the iterator used by `for item in &order`.
     /// Use [`Order::cursor`] to select a range.
     ///
-    /// Construction positions the cursor immediately and can allocate; see
-    /// [`Order::cursor`] for allocation and buffer reuse behavior.
+    /// Construction positions the cursor immediately and can allocate; see the crate's
+    /// [cost model](crate#cost).
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -288,10 +287,9 @@ impl<T> Order<T> {
     /// `cursor(a..b)?` yields the element at each `p` in `a..b`; the end is exclusive.
     /// `cursor(..)?` visits the whole order, as does [`Order::iter`].
     ///
-    /// Construction positions the cursor immediately and can allocate, even for
-    /// an empty range. Each entered mix reserves space for its parts, then initializes
-    /// child cursors as it draws from them. Prefer reusing a cursor with
-    /// [`reset`](Cursor::reset) when visiting many ranges, especially over large mixes.
+    /// Construction positions the cursor immediately and can allocate, even for an
+    /// empty range; see the crate's [cost model](crate#cost). Prefer reusing a cursor
+    /// with [`reset`](Cursor::reset) when visiting many ranges, especially over large mixes.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

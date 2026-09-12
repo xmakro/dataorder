@@ -44,15 +44,11 @@ pub enum Seq<T> {
     /// Schedules belong to this mix; see [`Schedule`]. The total length cannot exceed
     /// [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     Mix(Vec<MixPart<T>>),
-    /// `inner` repeated `times` times. Any mix schedules inside restart each epoch.
-    ///
-    /// A plain repetition preserves the input's record order on every pass:
-    /// `x.repeat(1)` is `x`, and `x.repeat(0)` is empty but still validates `inner`.
-    /// A shuffled repetition permutes the input's positions separately on every pass,
-    /// including the first; nested shuffles keep their own permutations, and
-    /// [`shuffle`](Seq::shuffle) builds a shuffled repetition with one pass. A shuffled
-    /// repetition's input must contain no mixes, even when `times` is zero. See the
-    /// crate's [shuffle and repetition rules](crate#shuffles-and-repetitions).
+    /// `inner` repeated `times` times, replaying its record order on every pass or, when
+    /// `shuffled`, permuting its positions separately on every pass. Any mix schedules
+    /// inside restart each pass. `x.repeat(0)` is empty but still validates `inner`, and
+    /// a shuffled repetition's input must contain no mixes; see the crate's
+    /// [shuffle and repetition rules](crate#shuffles-and-repetitions).
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -184,8 +180,7 @@ impl<T> Seq<T> {
         self.repeat_shuffled(1)
     }
 
-    /// Repeats this sequence `times` times, preserving its record order on every pass.
-    /// The first pass preserves the sequence, including all nested epochs;
+    /// Repeats this sequence `times` times, preserving its record order on every pass;
     /// see [`Repeat`](Seq::Repeat).
     ///
     /// ```
@@ -221,9 +216,8 @@ impl<T> Seq<T> {
         Self::Cycle { len, shuffled: false, inner: Box::new(self) }
     }
 
-    /// Repeats this sequence with a separate shuffle of its positions on every pass.
-    /// Includes the first pass and uses the order's seed. Nested shuffles stay fixed;
-    /// the input must contain no mixes. See [`Repeat`](Seq::Repeat).
+    /// Repeats this sequence `times` times with a separate shuffle of its positions on
+    /// every pass, including the first; see [`Repeat`](Seq::Repeat).
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -313,11 +307,10 @@ impl<T> Seq<T> {
     /// two workers send one part exclusively to each worker, even when both inputs
     /// are shuffled.
     ///
-    /// Each worker advances the mix past unselected positions, or seeks for long
-    /// skips. Across `count` workers this can cost up to `count` times the global
-    /// mix's interleaving work. Partitioning each part before mixing can reduce
-    /// this work, but changes the global order and how virtual time maps to output
-    /// positions because each part's count is rounded separately.
+    /// Sharding a completed mix multiplies its interleaving work across the workers;
+    /// see the crate's [cost model](crate#cost). Partitioning each part before mixing
+    /// avoids that, but changes the global order and how virtual time maps to output
+    /// positions, because each part's count is rounded separately.
     #[must_use]
     pub fn step_by(self, step: usize) -> Self {
         Self::StepBy { step, inner: Box::new(self) }

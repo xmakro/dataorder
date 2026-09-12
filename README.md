@@ -137,20 +137,17 @@ assert_eq!(Order::new(seq)?.len(), 1_000_000);
 # Ok::<(), dataorder::Error>(())
 ```
 
-Each shuffled pass uses the order's seed, the input's configuration salt and its
-pass number, so `.shuffle()` produces the same order as `.repeat_shuffled(1)`, while
-plain `.repeat(times)` and `.cycle_to(count)` replay the input order. Set the seed
-for all shuffled operations with `Order::with_seed(seq, seed)` or
-`order.set_seed(seed)`; source salts distinguish datasets within that run. See the
+Plain `.repeat(times)` and `.cycle_to(count)` replay the input order; the shuffled
+variants permute every pass with the order's seed, set for all shuffles with
+`Order::with_seed(seq, seed)` or `order.set_seed(seed)`. See the
 [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
-for what else a permutation depends on.
+for what a permutation depends on and which configuration changes preserve it.
 Changing a part's count can change the mixed order's prefix. Keep the original
 configuration and concatenate additional data when the existing prefix must stay fixed.
 
 To change the mixture during training, resume each retained input with
-`.skip(consumed_from_that_input)` and keep the same order seed. Adding or nesting
-mixture inputs preserves each retained input's shuffle stream, including nested epochs.
-You can also keep the remaining old mixture as one input:
+`.skip(consumed_from_that_input)` and keep the same order seed; each retained input
+keeps its shuffle stream. You can also keep the remaining old mixture as one input:
 `Seq::mix([old_mix.skip(consumed), new_data])`. This starts a new training phase;
 its positions start at zero.
 
@@ -199,21 +196,15 @@ resume existing checkpoints with their original crate version.
   `ErrorKind::ShuffleContainsMix`. Repeat a schedule's input sequence to span
   several epochs; repeating the whole mix restarts its schedules each epoch.
 - **Workers partition positions.** Apply `.skip(index).step_by(count)` to the
-  completed sequence to divide its positions without overlap. Check `index < count`
-  in your calling code. For a known sequence length `len`, use `skip(index.min(len))`
-  if workers past its end should receive no positions. The global schedule is preserved
-  collectively; each worker need not receive a balanced dataset mix. Two equal
-  interleaved datasets split across two workers send one dataset to each worker,
-  even when both inputs are shuffled. Sharding the input sequences
-  before mixing produces a different order and can change how virtual time maps
-  to output positions. Shard lengths can differ by one; callers needing equal worker lengths
-  must choose their truncation or padding policy.
-- **Seeds are reproducible.** The same configuration and seed give the same order on
-  supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
-  A permutation depends on the order seed and the input's configuration salt, which
-  follows the original source configuration. See the
+  completed sequence to divide its positions without overlap. See
+  [`Seq::step_by`](https://docs.rs/dataorder/latest/dataorder/enum.Seq.html#method.step_by)
+  for worker indices, uneven shard lengths, unbalanced per-worker mixtures and the
+  cost of sharding a mix.
+- **Seeds are reproducible.** The same configuration, source lengths and salts, and
+  seed give the same order on supported platforms, and `Order::with_seed` and
+  `set_seed` reseed all shuffles at once. The
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
-  for what preserves an existing shuffle when a configuration changes.
+  say what else a permutation depends on.
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
   returns `None` for invalid positions. `cursor` and `reset` return
@@ -225,9 +216,9 @@ resume existing checkpoints with their original crate version.
   `LengthOverflow` identifies the offending node.
 - **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range,
   and `reset(range)?` to move an existing cursor to another range of absolute order
-  positions while reusing its buffers. See
-  [`Cursor::reset`](https://docs.rs/dataorder/latest/dataorder/struct.Cursor.html#method.reset)
-  for what a move keeps and when it allocates.
+  positions while reusing its buffers. See the
+  [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) for what a move
+  keeps and when it allocates.
 
 Every item's `source_ordinal` indexes `order.sources()` and distinguishes equal and
 zero-sized handles. Ordinals follow the original configuration, including sources
