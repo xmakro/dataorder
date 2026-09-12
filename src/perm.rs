@@ -67,40 +67,20 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// Traversal state: a fixed order seed and an accumulated epoch for item metadata.
-/// Shuffle keys never use this accumulated epoch.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Context {
-    pub(crate) seed: u64,
-    pub(crate) epoch: usize,
-}
-
-impl Context {
-    pub(crate) const fn new(seed: u64) -> Self {
-        Self { seed, epoch: 0 }
-    }
-
-    /// Flatten nested repetitions. Counts belong to the original configuration;
-    /// mixtures and selections do not change them. Compilation bounds their products.
-    #[inline]
-    pub(crate) fn repeat(self, times: usize, epoch: usize) -> Self {
-        Self { epoch: self.epoch * times + epoch, ..self }
-    }
-}
-
 /// The key of a shuffle with `seed`, `order_seed`, local `pass` and configuration
 /// `salt`. Ordinary shuffles use pass zero. These inputs are hashed together, not merely
 /// xored, so no simple relation between them reproduces another combination's key. Not a
 /// security boundary: seeds are for reproducibility.
 #[inline]
 pub(crate) fn key(seed: u64, order_seed: u64, pass: usize, salt: u64) -> Key {
-    let ctx = if pass == 0 {
+    let pass_seed = if pass == 0 {
         order_seed
     } else {
         mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
     };
-    let a =
-        mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
+    let a = mix64(
+        mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B,
+    );
     let mut k = Key::UNSET;
     for (i, rk) in k.rk.iter_mut().enumerate() {
         *rk = mix64(a.wrapping_add((i as u64).wrapping_mul(PHI)));
@@ -207,15 +187,6 @@ mod tests {
         assert_ne!(source_salt(0, 1000), source_salt(0, 999));
         let (a, b) = (source_salt(1, 10), source_salt(2, 10));
         assert_ne!(combine_salts([a, b]), combine_salts([b, a]));
-        // Nested repeats count the same epochs as one flat repeat.
-        for outer in 0..2 {
-            for inner in 0..3 {
-                let nested = Context::new(5).repeat(2, outer).repeat(3, inner);
-                let flat = Context::new(5).repeat(6, outer * 3 + inner);
-                assert_eq!(nested.epoch, outer * 3 + inner);
-                assert_eq!(nested.epoch, flat.epoch);
-            }
-        }
     }
 
     /// Chi-square of `values` against a uniform expectation over `cells` cells.

@@ -9,7 +9,7 @@ use std::sync::Arc;
 /// Implement this trait for your dataset handle when compiling a sequence with
 /// [`Order::new`](crate::Order::new). [`Seq`](crate::Seq) itself accepts any type.
 /// The order yields an [`Item`](crate::Item) containing a source ordinal, a reference
-/// to the handle, a record index and an epoch, without reading any records.
+/// to the handle and a record index, without reading any records.
 /// [`salt`](Source::salt) lets datasets of the same length have distinct shuffle inputs.
 ///
 /// ```

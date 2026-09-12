@@ -6,7 +6,7 @@
 
 use crate::cursor::{Cursor, resolve_range};
 use crate::interleave::{Interleave, Schedule};
-use crate::perm::{self, Context, Shape};
+use crate::perm::{self, Shape};
 use crate::seq::MixPart;
 use crate::{BoundsError, Error, ErrorKind, MAX_DEPTH, Seq, Source};
 use std::fmt;
@@ -41,12 +41,10 @@ pub(crate) enum Node {
         child: Box<Self>,
     },
     /// `child` repeated: positions `0..len`, `child_len` per repetition, the last one cut
-    /// short when `len` is not a multiple (a cycle). `times` is the original repetition
-    /// count, including a partial final pass. Selections preserve it for epoch numbering.
+    /// short when `len` is not a multiple (a cycle).
     Repeat {
         child_len: usize,
         len: usize,
-        times: usize,
         /// Input salt when this node shuffles each pass; nested shuffles stay fixed.
         shuffle: Option<u64>,
         child: Box<Self>,
@@ -82,8 +80,8 @@ impl Node {
 /// even when source values are equal or zero-sized. It is local to the order, not a
 /// persistent dataset ID. The item borrows its source and is cheap to copy.
 ///
-/// Equality compares `source_ordinal`, `record_index` and `epoch` first, then compares
-/// source values only when all three match. Source comparison uses `T`'s equality
+/// Equality compares `source_ordinal` and `record_index` first, then compares
+/// source values only when both match. Source comparison uses `T`'s equality
 /// implementation, so its cost depends on the source type.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Item<'a, T> {
@@ -91,11 +89,6 @@ pub struct Item<'a, T> {
     pub source_ordinal: usize,
     /// Index of the record within this source, not its position in the order.
     pub record_index: usize,
-    /// Zero-based accumulated repetition epoch at the source, or zero without repeats.
-    /// Counts nested repetitions; see the crate's
-    /// [epoch rules](crate#shuffles-and-repetitions). Selections preserve the original
-    /// epoch. A shuffle around a repeat can draw epochs out of order.
-    pub epoch: usize,
     /// The source handle owned by the order.
     pub source: &'a T,
 }
@@ -141,7 +134,7 @@ impl<T: Source> Order<T> {
     ///
     /// # Errors
     /// Skips and takes past the end, a zero step, shuffles containing mixes,
-    /// lengths or nested repeat counts that overflow, nesting deeper than [`MAX_DEPTH`],
+    /// lengths that overflow, nesting deeper than [`MAX_DEPTH`],
     /// and schedules the mix rejects; see [`ErrorKind`]. The error identifies the invalid node.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
         Self::with_seed(seq, 0)
@@ -242,8 +235,8 @@ impl<T> Order<T> {
         if pos >= self.len() {
             return None;
         }
-        let (s, i, epoch) = get(&self.root, pos, Context::new(self.seed));
-        Some(Item { source_ordinal: s as usize, source: &self.sources[s as usize], record_index: i, epoch })
+        let (src, index) = get(&self.root, pos, self.seed);
+        Some(Item { source_ordinal: src as usize, source: &self.sources[src as usize], record_index: index })
     }
 
     /// Returns a cursor over the whole order, starting at position 0.
@@ -316,12 +309,12 @@ impl<'a, T> IntoIterator for &'a Order<T> {
     }
 }
 
-/// The element at `pos` of `node`, as `(source index, record index, accumulated epoch)`.
-pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, usize, usize) {
+/// Resolve a position to `(source index, record index)` with an unchanged order seed.
+pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (u32, usize) {
     loop {
         match node {
             Node::Empty => unreachable!("dataorder: position in an empty sequence"),
-            Node::Source { src, offset, .. } => return (*src, offset + pos, ctx.epoch),
+            Node::Source { src, offset, .. } => return (*src, offset + pos),
             Node::Concat { offsets, children } => {
                 let i = offsets.partition_point(|&o| o <= pos) - 1;
                 pos -= offsets[i];
@@ -333,16 +326,15 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, us
                 node = &children[s];
             }
             Node::Shuffle { seed, salt, shape, child } => {
-                pos = perm::permute(*shape, perm::key(*seed, ctx.seed, 0, *salt), pos);
+                pos = perm::permute(*shape, perm::key(*seed, order_seed, 0, *salt), pos);
                 node = child;
             }
-            Node::Repeat { child_len, times, shuffle, child, .. } => {
-                let epoch = pos / child_len;
-                pos -= epoch * child_len;
+            Node::Repeat { child_len, shuffle, child, .. } => {
+                let pass = pos / child_len;
+                pos -= pass * child_len;
                 if let Some(salt) = shuffle {
-                    pos = perm::permute(Shape::new(*child_len), perm::key(0, ctx.seed, epoch, *salt), pos);
+                    pos = perm::permute(Shape::new(*child_len), perm::key(0, order_seed, pass, *salt), pos);
                 }
-                ctx = ctx.repeat(*times, epoch);
                 node = child;
             }
             Node::Slice { start, child, .. } => {
@@ -357,15 +349,12 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, us
     }
 }
 
-/// Summaries returned by compilation. Salt and the epoch bound follow the original
+/// Summaries returned by compilation. Salt follows the original
 /// configuration; the node and length describe the folded result.
 struct Compiled {
     node: Node,
     len: usize,
     salt: u64,
-    /// Maximum product of original repeat counts along a source path, used only
-    /// to validate epoch arithmetic. Zero for an empty sequence.
-    epoch_count: usize,
 }
 
 struct Compiler<T> {
@@ -402,13 +391,13 @@ impl<T: Source> Compiler<T> {
     }
 
     /// `depth` counts configuration nodes from the root. Each visit returns its node,
-    /// length, configuration salt and epoch bound to the parent.
-    /// Lengths and nested repeat counts must fit before a parent can truncate them.
+    /// length and configuration salt to the parent.
+    /// Lengths must fit before a parent can truncate them.
     fn compile(&mut self, seq: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         if depth > MAX_DEPTH {
             return Err(self.err(ErrorKind::TooDeep));
         }
-        let mut compiled = match seq {
+        match seq {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, depth),
             Seq::Mix(parts) => self.mix_parts(parts, depth),
@@ -420,11 +409,7 @@ impl<T: Source> Compiler<T> {
             Seq::Skip { n, inner } => self.skip(n, *inner, depth),
             Seq::Take { n, inner } => self.take(n, *inner, depth),
             Seq::StepBy { step, inner } => self.stepped(step, *inner, depth),
-        }?;
-        if compiled.len == 0 {
-            compiled.epoch_count = 0;
         }
-        Ok(compiled)
     }
 
     fn source(&mut self, source: T) -> Result<Compiled, Error> {
@@ -433,14 +418,13 @@ impl<T: Source> Compiler<T> {
         let salt = perm::source_salt(source.salt(), len);
         self.sources.push(source);
         let node = if len == 0 { Node::Empty } else { Node::Source { src, offset: 0, len } };
-        Ok(Compiled { node, len, salt, epoch_count: 1 })
+        Ok(Compiled { node, len, salt })
     }
 
     /// Flatten concats using their existing offsets and the summaries returned by visits.
     fn concat(&mut self, parts: Vec<Seq<T>>, depth: u32) -> Result<Compiled, Error> {
         let parts = self.children(parts, depth)?;
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
-        let epoch_count = parts.iter().map(|part| part.epoch_count).max().unwrap_or(0);
         let mut children = Vec::new();
         let mut offsets = Vec::new();
         let mut len = 0usize;
@@ -466,7 +450,7 @@ impl<T: Source> Compiler<T> {
             1 => children.pop().unwrap(),
             _ => Node::Concat { offsets, children },
         };
-        Ok(Compiled { node, len, salt, epoch_count })
+        Ok(Compiled { node, len, salt })
     }
 
     fn mix_parts(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
@@ -498,24 +482,23 @@ impl<T: Source> Compiler<T> {
         if shuffled { self.shuffle_child(inner, depth) } else { self.child(0, inner, depth) }
     }
 
-    /// A single plain repetition leaves both positions and epoch numbers unchanged.
+    /// A single plain repetition leaves positions unchanged.
     fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node: child, len: child_len, salt, epoch_count } = self.repeat_child(inner, shuffled, depth)?;
+        let Compiled { node: child, len: child_len, salt } = self.repeat_child(inner, shuffled, depth)?;
         let len = times.checked_mul(child_len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
-        let epoch_count = times.checked_mul(epoch_count).ok_or_else(|| self.err(ErrorKind::EpochOverflow))?;
         let shuffle = (shuffled && child_len > 1).then_some(salt);
         let node = if len == 0 {
             Node::Empty
         } else if times == 1 && shuffle.is_none() {
             child
         } else {
-            Node::Repeat { child_len, len, times, shuffle, child: Box::new(child) }
+            Node::Repeat { child_len, len, shuffle, child: Box::new(child) }
         };
-        Ok(Compiled { node, len, salt, epoch_count })
+        Ok(Compiled { node, len, salt })
     }
 
     fn cycled(&mut self, len: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len: child_len, salt, mut epoch_count } = self.repeat_child(inner, shuffled, depth)?;
+        let Compiled { node, len: child_len, salt } = self.repeat_child(inner, shuffled, depth)?;
         if len > 0 && child_len == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
@@ -523,35 +506,33 @@ impl<T: Source> Compiler<T> {
         let node = if len == 0 || (len <= child_len && shuffle.is_none()) {
             slice(node, 0, len)
         } else {
-            let times = len.div_ceil(child_len);
-            epoch_count = times.checked_mul(epoch_count).ok_or_else(|| self.err(ErrorKind::EpochOverflow))?;
-            Node::Repeat { child_len, len, times, shuffle, child: Box::new(node) }
+            Node::Repeat { child_len, len, shuffle, child: Box::new(node) }
         };
-        Ok(Compiled { node, len, salt, epoch_count })
+        Ok(Compiled { node, len, salt })
     }
 
     fn skip(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len, salt, epoch_count } = self.child(0, inner, depth)?;
+        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
         if n > len {
             return Err(self.err(ErrorKind::SkipOutOfRange { n, len }));
         }
-        Ok(Compiled { node: slice(node, n, len - n), len: len - n, salt, epoch_count })
+        Ok(Compiled { node: slice(node, n, len - n), len: len - n, salt })
     }
 
     fn take(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len, salt, epoch_count } = self.child(0, inner, depth)?;
+        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
         if n > len {
             return Err(self.err(ErrorKind::TakeOutOfRange { n, len }));
         }
-        Ok(Compiled { node: slice(node, 0, n), len: n, salt, epoch_count })
+        Ok(Compiled { node: slice(node, 0, n), len: n, salt })
     }
 
     fn stepped(&mut self, step: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         if step == 0 {
             return Err(self.err(ErrorKind::ZeroStep));
         }
-        let Compiled { node, len, salt, epoch_count } = self.child(0, inner, depth)?;
-        Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt, epoch_count })
+        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
+        Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt })
     }
 
     /// Validate schedules even when the mix folds away.
@@ -562,7 +543,6 @@ impl<T: Source> Compiler<T> {
         }
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
         let lens: Vec<usize> = parts.iter().map(|part| part.len).collect();
-        let epoch_count = parts.iter().map(|part| part.epoch_count).max().unwrap_or(0);
         let mut il = Interleave::with_schedule(&lens, schedule).map_err(|e| {
             let (kind, part) = e.into_kind();
             self.err_at(kind, part)
@@ -577,11 +557,11 @@ impl<T: Source> Compiler<T> {
             1 => children.pop().unwrap(),
             _ => Node::Mix { il, children },
         };
-        Ok(Compiled { node, len, salt, epoch_count })
+        Ok(Compiled { node, len, salt })
     }
 }
 
-/// Fold a selection without changing repetition counts or configuration salts.
+/// Fold a selection without changing configuration salts or local shuffle passes.
 fn slice(node: Node, start: usize, len: usize) -> Node {
     if len == 0 {
         return Node::Empty;
@@ -592,9 +572,7 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
     match node {
         Node::Empty => unreachable!("dataorder: nonempty slice of an empty sequence"),
         Node::Source { src, offset, .. } => Node::Source { src, offset: offset + start, len },
-        // Even an epoch-zero prefix must keep `times`: a later enclosing repeat
-        // multiplies its epoch by this original count before reaching the child.
-        Node::Repeat { child_len, times, shuffle, child, .. } if start == 0 => Node::Repeat { child_len, len, times, shuffle, child },
+        Node::Repeat { child_len, shuffle, child, .. } if start == 0 => Node::Repeat { child_len, len, shuffle, child },
         Node::Slice { start: inner, child, .. } => slice(*child, inner + start, len),
         Node::Stride { step, offset, child, .. } => {
             let offset = offset + start * step;
@@ -623,7 +601,7 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
     }
 }
 
-/// Fold a stride, retaining repeat counts even when selecting just one position.
+/// Fold a stride without changing the selected child positions.
 fn stride(child: Node, step: usize) -> Node {
     let len = child.len().div_ceil(step);
     if step == 1 || len <= 1 {

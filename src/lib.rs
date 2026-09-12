@@ -3,7 +3,7 @@
 //! Shuffle and mix billions of records without storing a full index array. Ordering
 //! memory grows with the sources and sequence structure, not the number of records.
 //! Each lookup returns an [`Item`] with a source ordinal, source reference, record
-//! index and epoch, leaving record loading to you.
+//! index, leaving record loading to you.
 //!
 //! - **Shuffle on demand:** each shuffled index takes O(1) time on average and O(1) space.
 //! - **Seek into a mix:** counting and binary searches locate each part's position
@@ -39,7 +39,6 @@
 //! assert_eq!(item.source_ordinal, 0);
 //! assert_eq!(*item.source, 1_000_000_000);
 //! assert!(item.record_index < 1_000_000_000);
-//! assert_eq!(item.epoch, 1);
 //! assert_eq!(item, order.get(resume).unwrap());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -66,7 +65,7 @@
 //! | [`Concat`](Seq::Concat) | Sum of part lengths | Parts read one after another |
 //! | [`Mix`](Seq::Mix) | Sum of part lengths | Parts interleaved, preserving each part's order |
 //! | [`Shuffle`](Seq::Shuffle) | `n` | A seeded permutation of the child's positions |
-//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in epoch `p / n` |
+//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in the unchanged input |
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
 //! | [`ShuffledRepeat`](Seq::ShuffledRepeat) | `times × n` | A separate permutation of the child's positions per pass |
 //! | [`ShuffledCycle`](Seq::ShuffledCycle) | `len` | Like shuffled repeat, truncated to an exact length |
@@ -118,7 +117,8 @@
 //! the order's seed, the local pass number and the input's configuration salt, with
 //! shuffle seed zero. Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed.
 //! Nested shuffles and shuffled repetitions keep their own permutations; enclosing
-//! repeats never reseed them. The shuffled variants reject mixes in their inputs,
+//! repeats never reseed them. Every child receives the unchanged order seed, with
+//! no enclosing epoch. The shuffled variants reject mixes in their inputs,
 //! just like `shuffle`. A shortened final pass takes a prefix of its full permutation.
 //!
 //! Plain repetition of a shuffled repetition replays the same series of permutations.
@@ -126,28 +126,15 @@
 //! flatten into one shuffled repetition. Extending an outermost shuffled repeat or
 //! cycle preserves its existing prefix.
 //!
-//! Epochs start at zero. Entering a repeat with count `times` and local epoch `e`
-//! computes `epoch = epoch * times + e`. Thus `x.repeat(3).repeat(2)` has the same
-//! order as `x.repeat(6)`. A cycle's count includes its partial final pass, if any.
-//! Mixtures pass the epoch through unchanged: adding, reordering or nesting mixture
+//! `x.repeat(3).repeat(2)` has the same order as `x.repeat(6)`.
+//! Adding, reordering or nesting mixture
 //! inputs does not reseed existing inputs, including those with nested repetitions.
 //! Their own configurations and the order seed determine their permutations.
-//! Enclosing repeat counts affect only the reported epoch numbers.
 //!
 //! Adding an outer repeat preserves the entire first pass. Extending an outermost
-//! repeat or cycle preserves the existing prefix. Changing an inner repeat's count
-//! can change its reported epoch numbers in later enclosing passes, but not shuffle keys.
-//! Selections keep original repeat counts, even when retaining only the first pass:
-//! for an `n`-element source `x`, `x.shuffle(1).repeat(3).take(n).repeat(2)` reports
-//! epochs 0 and 3 while using the same permutation. Both plain and shuffled repetitions
-//! contribute to these metadata epochs. A single repetition leaves the epoch unchanged.
-//! Epoch numbers use `usize` and never wrap. For each nonempty sequence, the product
-//! of original repeat counts along any source path must fit in `usize`, even after
-//! selections. Compilation reports [`ErrorKind::EpochOverflow`] when this bound fails.
-//! This bound is used for validation; sibling inputs do not affect epoch numbering.
-//! [`Item::epoch`] reports this accumulated epoch at the source, even for unshuffled
-//! records. Mixture inputs can be in different epochs at the same time. A shuffle
-//! around a repeated sequence can draw its records and epochs out of order.
+//! repeat or cycle preserves the existing prefix. A selection fixes the positions
+//! that subsequent operations can draw from: `x.shuffled_repeat(1).take(2).shuffled_repeat(2)`
+//! permutes the same selected pair on both outer passes.
 //!
 //! Configuration salts are computed from the original tree. Each source contributes
 //! its salt and original length, even when empty. Unary operations pass that value
@@ -171,7 +158,7 @@
 //! have valid parameters and satisfy their individual numerical limits; see
 //! [`Schedule`] and [`ErrorKind`] for the full rules.
 //!
-//! Lengths, positions and epochs use `usize` throughout. Every sequence node must fit in
+//! Lengths and positions use `usize` throughout. Every sequence node must fit in
 //! `usize`, even if a parent truncates or discards it. Seeds, salts and shuffle
 //! arithmetic use fixed-width `u64` values for reproducibility across platforms.
 //! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
@@ -197,7 +184,7 @@
 //! # Cost
 //!
 //! Storage depends on the configuration and cursor state, not on the number of output
-//! elements. Compiler visits return lengths, configuration salts and epoch bounds to their parents.
+//! elements. Compiler visits return lengths and configuration salts to their parents.
 //! Compilation can revisit subtrees when flattening concatenations or folding selections.
 //! Each mix builds independent profiles in `O(k)` time for `k` parts.
 //!

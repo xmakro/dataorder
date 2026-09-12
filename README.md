@@ -49,7 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Resume deep into the second epoch without replaying the earlier positions.
     let resume = 1_200_000_000;
     for item in order.cursor(resume..resume + 10)? {
-        assert_eq!(item.epoch, 1);
         println!("record {} from a dataset of {} records", item.record_index, item.source);
     }
     assert_eq!(order.cursor(resume..)?.next(), order.get(resume));
@@ -61,9 +60,7 @@ The position in an order differs from the index within a dataset: position
 1,200,000,000 above selects one of the original billion records. `get(pos)` returns
 `Option<Item>`; `iter()` visits the whole order, while `cursor(range)?` selects a range.
 Both return a seekable `Cursor` yielding the same `Item` values in order. Each item
-contains `source_ordinal`, `source` (a reference to the dataset handle), `record_index`,
-and `epoch` (the zero-based accumulated repetition epoch at that source).
-An input without repeats has epoch zero; mixture inputs can be in different epochs.
+contains `source_ordinal`, `source` (a reference to the dataset handle), and `record_index`.
 
 ## Using your datasets
 
@@ -223,11 +220,10 @@ resume existing checkpoints with their original crate version.
   selected-away sources. Changing a source's salt or original length, or changing
   concatenation grouping, can change a shuffle above it. Compiler pruning has no
   effect on these salts.
-  Nested repeats count total epochs: `.repeat(3).repeat(2)` matches `.repeat(6)`.
+  Nested plain repeats compose: `.repeat(3).repeat(2)` matches `.repeat(6)`.
   Adding an outer repeat preserves the entire first pass, including nested epochs.
-  Mixtures pass epoch numbers through without depending on sibling inputs.
-  Selections retain original repeat counts for epoch numbering. Epoch metadata
-  never changes shuffle keys. Nested shuffled repetitions permute their own inputs
+  The order seed passes down unchanged; each shuffled repeat uses only its local
+  pass number. Nested shuffled repetitions permute their own inputs
   separately and do not flatten into one shuffled repetition. See the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
@@ -235,10 +231,10 @@ resume existing checkpoints with their original crate version.
   returns `None` for invalid positions. `cursor` and `reset` return
   `Result` for range operations. `step_by(0)` is an error when the order is built.
   Failed cursor operations leave their state unchanged.
-- **Lengths and epoch counts must fit `usize`.** Every intermediate sequence must fit,
+- **Lengths must fit `usize`.** Every intermediate sequence must fit,
   even when a later `take`, `cycle_to`, or `step_by` would shorten it. Original nested
-  repeat-count products must also fit; selections can leave gaps in epoch numbers.
-  `LengthOverflow` and `EpochOverflow` identify the offending node.
+  repeat counts impose no additional limit after a selection shortens the input.
+  `LengthOverflow` identifies the offending node.
 - **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range.
   Use `reset(range)?` to replace the remaining range and reuse allocated buffers.
   Every range uses absolute order positions: `reset(pos..end)` keeps a chosen

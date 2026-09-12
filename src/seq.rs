@@ -69,10 +69,8 @@ pub enum Seq<T> {
     /// Any mix schedules inside restart each epoch.
     /// `x.repeat(1)` is `x`; `x.repeat(0)` is empty but still validates `inner`.
     ///
-    /// Nested repeats accumulate one epoch number: `x.repeat(3).repeat(2)` has the
+    /// Nested plain repeats compose: `x.repeat(3).repeat(2)` has the
     /// same order as `x.repeat(6)`. Adding an outer repeat preserves the first pass.
-    /// Selections retain original repeat counts for epoch numbering; see the crate's
-    /// [shuffle rules](crate#shuffles-and-repetitions).
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -84,8 +82,6 @@ pub enum Seq<T> {
     /// Each pass preserves the input's record order, as [`Repeat`](Seq::Repeat)
     /// does. Adding an outer cycle preserves the first pass, including nested epochs.
     /// Increasing its length preserves the existing prefix when it is outermost.
-    /// Its repetition count includes a partial final pass; changing that count can
-    /// change reported epochs when the cycle is inside another repetition.
     /// When `len` fits within `inner`, this is equivalent to `inner.take(len)`.
     /// A positive `len` requires a non-empty child. `cycle_to(usize::MAX)` creates the
     /// longest supported order; it is still finite.
@@ -264,6 +260,9 @@ impl<T> Seq<T> {
     /// Repeats this sequence with a separate shuffle of its positions on every pass.
     /// Includes the first pass and uses the order's seed. Nested shuffles stay fixed;
     /// the input must contain no mixes. See [`ShuffledRepeat`](Seq::ShuffledRepeat).
+    /// Only the unchanged order seed passes to the input. For example,
+    /// `x.shuffled_repeat(1).take(2).shuffled_repeat(2)` permutes the same two
+    /// selected positions on both outer passes.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

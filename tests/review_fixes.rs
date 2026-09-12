@@ -64,16 +64,16 @@ fn items_distinguish_zero_sized_sources() {
     let mut cursor = order.iter();
     assert_eq!(cursor.clone().map(|item| (item.source_ordinal, item.record_index)).collect::<Vec<_>>(), expected);
     for (pos, &(s, i)) in expected.iter().enumerate() {
-        assert_eq!(order.get(pos), Some(Item { source_ordinal: s, source: &Zero, record_index: i, epoch: 0 }));
+        assert_eq!(order.get(pos), Some(Item { source_ordinal: s, source: &Zero, record_index: i }));
     }
-    assert_eq!(cursor.nth(3), Some(Item { source_ordinal: 1, source: &Zero, record_index: 1, epoch: 0 }));
+    assert_eq!(cursor.nth(3), Some(Item { source_ordinal: 1, source: &Zero, record_index: 1 }));
     assert_eq!(cursor.offset(), 4);
     assert!(cursor.reset(9..).is_err());
     assert!(cursor.reset(..9).is_err());
     assert_eq!(cursor.offset(), 4);
     cursor.reset(0..).unwrap();
-    assert_eq!(cursor.next(), Some(Item { source_ordinal: 0, source: &Zero, record_index: 0, epoch: 0 }));
-    assert_eq!(cursor.clone().last(), Some(Item { source_ordinal: 1, source: &Zero, record_index: 3, epoch: 0 }));
+    assert_eq!(cursor.next(), Some(Item { source_ordinal: 0, source: &Zero, record_index: 0 }));
+    assert_eq!(cursor.clone().last(), Some(Item { source_ordinal: 1, source: &Zero, record_index: 3 }));
     assert_eq!(cursor.clone().count(), 7);
     cursor.reset(2..4).unwrap();
     assert_eq!(cursor.nth(usize::MAX), None);
@@ -124,9 +124,9 @@ fn item_equality_checks_metadata_before_source_values() {
     let source = ComparedSource { value: 1, comparisons: &comparisons };
     let equal_source = ComparedSource { value: 1, comparisons: &comparisons };
     let different_source = ComparedSource { value: 2, comparisons: &comparisons };
-    let item = Item { source_ordinal: 0, source: &source, record_index: 2, epoch: 0 };
+    let item = Item { source_ordinal: 0, source: &source, record_index: 2 };
 
-    for other in [Item { source_ordinal: 1, ..item }, Item { record_index: 3, ..item }, Item { epoch: 1, ..item }] {
+    for other in [Item { source_ordinal: 1, ..item }, Item { record_index: 3, ..item }] {
         assert_ne!(item, other);
         assert_eq!(comparisons.get(), 0, "different metadata must skip source comparison");
     }

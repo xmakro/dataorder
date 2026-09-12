@@ -2,33 +2,25 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `Item::epoch`, accumulated repetition metadata and
+  `ErrorKind::EpochOverflow`. Items identify the source and record only. Remove the
+  internal `Draw` wrapper and repeat-count products; every sequence length must
+  still fit `usize`. Children receive only the unchanged order seed, and each
+  shuffled repeat uses its own local pass number. Record ordering is unchanged.
+  Cover `shuffled_repeat(1).take(2).shuffled_repeat(2)` with a regression that keeps
+  the same selected pair on both outer passes.
+
 - **Breaking:** `repeat(times)` and `cycle_to(len)` now preserve their input's record
   order on every pass, including nested shuffles. Add `shuffled_repeat(times)` and
   `shuffled_cycle_to(len)` to permute the immediate input separately on each pass,
   including the first, using the order seed and local pass number. These operations
   reject mix descendants like `shuffle`; shuffle the inputs before mixing.
-  Shuffle keys no longer use accumulated repetition context. `Item::epoch` still
-  counts both kinds of repetition. Add serialized `ShuffledRepeat` and `ShuffledCycle`
-  variants; existing `Repeat` and `Cycle` configurations adopt the plain behavior.
+  Add serialized `ShuffledRepeat` and `ShuffledCycle` variants; existing `Repeat`
+  and `Cycle` configurations adopt the plain behavior.
   Resume older orders with their original crate version.
 
-- **Breaking:** expose `Item::epoch: usize`, the zero-based accumulated repetition epoch
-  at the returned source. Random access and cursors report it for shuffled and
-  unshuffled inputs. Item equality includes the epoch; struct literals and exhaustive
-  patterns must account for the new field. Epochs never wrap: validate original nested
-  repeat-count products against `usize::MAX` and report `EpochOverflow` during compilation.
-  Record ordering is unchanged for configurations within this bound.
-
 - Simplify concatenation pruning to one pass over child ranges, reusing the existing
-  vectors. Shuffle salts, epoch counts and output orders are unchanged.
-
-- **Breaking:** flatten nested repetition metadata into one runtime epoch number. Each repeat
-  computes `parent_epoch * times + local_epoch`; mixtures pass it through unchanged.
-  Sibling repeat depth does not affect an input's epoch numbers.
-  Consecutive `.repeat(a).repeat(b)` matches `.repeat(a * b)` when
-  their lengths fit. Keep original repeat counts through selections, including a
-  cycle's partial final pass. Remove compiler repeat levels and their folding traversal.
-  Epoch metadata does not enter shuffle keys.
+  vectors. Shuffle salts and output orders are unchanged.
 
 - **Breaking:** derive shuffle salts from the original configuration during compilation.
   Sources contribute their salts and original lengths, including empty or discarded
@@ -60,7 +52,7 @@
   Update mapping calls to use the new names. Ordering, callback behavior and
   serialized configurations are unchanged.
 
-- Compare `Item` source ordinals, record indices and epochs before source values, avoiding
+- Compare `Item` source ordinals and record indices before source values, avoiding
   source comparisons when any of them differ. Document that equality includes
   source values and that their comparison cost depends on the source type.
 
@@ -69,7 +61,7 @@
   fields, error paths, display messages and ordering behavior are unchanged.
 
 - Correct the `Source` documentation to describe the returned `Item`, including
-  its source ordinal, source reference, record index and epoch.
+  its source ordinal, source reference and record index.
 
 - **Breaking:** rename `Seq::cycle(len)` to `Seq::cycle_to(len)` to make its
   exact finite target length explicit. Replace `.cycle(len)` calls with
@@ -179,7 +171,7 @@
   length, use `skip(index.min(len))` when those workers should be empty.
   Serialized `Shard` configurations are rejected.
 
-- **Breaking:** use `Item { source_ordinal, source, record_index, epoch }` for both
+- **Breaking:** use `Item { source_ordinal, source, record_index }` for both
   `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,
   `Order::source_index`, `Cursor::indexed` and `IndexedCursor`. Every result
   identifies its source explicitly, including equal and zero-sized handles.

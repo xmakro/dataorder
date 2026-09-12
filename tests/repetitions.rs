@@ -1,6 +1,6 @@
-//! Epoch numbering belongs to each input stream, independently of its surrounding mix.
+//! Repeated input streams keep their order independently of the surrounding mix.
 
-use dataorder::{ErrorKind, Order, Schedule, Seq, Source};
+use dataorder::{Order, Schedule, Seq, Source};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Dataset {
@@ -22,15 +22,15 @@ fn source(id: u64, len: usize) -> Seq<Dataset> {
     Seq::source(Dataset { id, len }).shuffle(7)
 }
 
-fn records(order: &Order<Dataset>) -> Vec<(u64, usize, usize)> {
-    order.iter().map(|item| (item.source.id, item.record_index, item.epoch)).collect()
+fn records(order: &Order<Dataset>) -> Vec<(u64, usize)> {
+    order.iter().map(|item| (item.source.id, item.record_index)).collect()
 }
 
-fn stream(records: &[(u64, usize, usize)], id: u64) -> Vec<(usize, usize)> {
-    records.iter().filter_map(|&(s, i, epoch)| (s == id).then_some((i, epoch))).collect()
+fn stream(records: &[(u64, usize)], id: u64) -> Vec<usize> {
+    records.iter().filter_map(|&(s, i)| (s == id).then_some(i)).collect()
 }
 
-fn check_access(order: &Order<Dataset>, expected: &[(u64, usize, usize)]) {
+fn check_access(order: &Order<Dataset>, expected: &[(u64, usize)]) {
     assert_eq!(records(order), expected);
     let mut cursor = order.iter();
     for pos in [expected.len() - 1, 0, expected.len() / 2, 1] {
@@ -38,12 +38,12 @@ fn check_access(order: &Order<Dataset>, expected: &[(u64, usize, usize)]) {
         assert_eq!(cursor.clone().next(), order.get(pos));
         assert_eq!(cursor.nth(3), order.get(pos + 3));
         for (offset, item) in cursor.by_ref().take(5).enumerate() {
-            assert_eq!((item.source.id, item.record_index, item.epoch), expected[pos + 4 + offset]);
+            assert_eq!((item.source.id, item.record_index), expected[pos + 4 + offset]);
         }
     }
     for (pos, &record) in expected.iter().enumerate() {
         let item = order.get(pos).unwrap();
-        assert_eq!((item.source.id, item.record_index, item.epoch), record);
+        assert_eq!((item.source.id, item.record_index), record);
     }
 }
 
@@ -117,14 +117,14 @@ fn changing_the_mix_mid_training_continues_each_stream() {
         let changed = Seq::mix([old_mix.clone().skip(consumed), new_data]);
         let order = Order::with_seed(changed, seed).unwrap();
         let remaining = records(&order);
-        let old_remaining: Vec<_> = remaining.iter().copied().filter(|&(id, _, _)| id != 2).collect();
+        let old_remaining: Vec<_> = remaining.iter().copied().filter(|&(id, _)| id != 2).collect();
         assert_eq!(old_remaining, original[consumed..]);
         check_access(&order, &remaining);
     }
 }
 
 #[test]
-fn selections_preserve_original_repeat_counts() {
+fn repeating_selections_preserves_the_selected_records() {
     let n = 17;
     let base = source(0, n);
     for seed in [0, 51] {
@@ -148,70 +148,37 @@ fn selections_preserve_original_repeat_counts() {
 }
 
 #[test]
-fn drawn_items_report_source_epochs_with_or_without_shuffling() {
-    for shuffled in [false, true] {
-        let base = Seq::source(Dataset { id: 0, len: 17 });
-        let base = if shuffled { base.shuffle(7) } else { base };
-        let order = Order::with_seed(base.repeat(3).repeat(2), 51).unwrap();
-        for (pos, item) in order.iter().enumerate() {
-            assert_eq!(item.epoch, pos / 17);
-            assert_eq!(order.get(pos), Some(item));
-        }
-    }
-
-    // Without repeats, including shuffled and selected sources, the epoch is zero.
-    let order = Order::with_seed(source(0, 17).skip(2).step_by(3), 51).unwrap();
-    assert!(order.iter().all(|item| item.epoch == 0));
-
-    // Shuffling the repeated sequence reorders its epochs along with its records.
-    let order = Order::new(Seq::source(Dataset { id: 0, len: 17 }).repeat(3).shuffle(7)).unwrap();
-    let drawn = records(&order);
-    assert!(drawn.windows(2).any(|pair| pair[0].2 > pair[1].2));
-    let mut actual = drawn.clone();
-    actual.sort_unstable();
-    let expected: Vec<_> = (0..17).flat_map(|i| (0..3).map(move |epoch| (0, i, epoch))).collect();
-    assert_eq!(actual, expected);
-    check_access(&order, &drawn);
-
-    // Identical records from different epochs are distinct items.
-    let repeated = Order::new(Seq::source(1).repeat(2)).unwrap();
-    let first = repeated.get(0).unwrap();
-    let second = repeated.get(1).unwrap();
-    assert_eq!(first.record_index, second.record_index);
-    assert_ne!(first, second);
+fn items_identify_records_independently_of_repetition() {
+    let order = Order::new(Seq::source(17).shuffled_repeat(1).repeat(2)).unwrap();
+    assert!(order.cursor(..17).unwrap().eq(order.cursor(17..).unwrap()));
 }
 
 #[test]
-fn sparse_epochs_use_usize_and_overflow_is_rejected_at_compilation() {
-    let sparse = Seq::source(1).repeat(100).take(1).repeat(2);
-    let order = Order::new(sparse).unwrap();
-    let epochs: Vec<usize> = order.iter().map(|item| item.epoch).collect();
-    assert_eq!(epochs, [0, 100]);
-
-    // A full usize-sized sequence still supports the last representable position.
-    let huge = Order::new(Seq::source(1).repeat(usize::MAX)).unwrap();
-    let last = huge.get(usize::MAX - 1).unwrap();
-    assert_eq!(last.epoch, usize::MAX - 1);
-    assert_eq!(huge.cursor(usize::MAX - 1..).unwrap().next(), Some(last));
-    let times = usize::MAX / 2;
-    let sparse = Order::new(Seq::source(1).repeat(times).take(1).repeat(2)).unwrap();
-    assert_eq!(sparse.get(1).unwrap().epoch, times);
-
-    let huge = || Seq::source(1).repeat(usize::MAX);
-    for selected in [huge().take(1), huge().skip(usize::MAX - 1), huge().step_by(usize::MAX)] {
-        for invalid in [selected.clone().repeat(2), selected.cycle_to(2)] {
-            let err = Order::new(invalid.clone()).unwrap_err();
-            assert_eq!(err.kind(), &ErrorKind::EpochOverflow);
-            assert!(err.path().is_empty());
-            assert_eq!(err.to_string(), "nested repeat counts exceed usize::MAX (at the root)");
-            let err = Order::new(Seq::concat([Seq::source(1), invalid.take(0)])).unwrap_err();
-            assert_eq!(err.kind(), &ErrorKind::EpochOverflow);
-            assert_eq!(err.path(), [1, 0]);
+fn nested_repeat_counts_do_not_limit_shortened_sequences() {
+    for huge in
+        [Seq::source(1).repeat(usize::MAX), Seq::source(1).shuffled_repeat(usize::MAX), Seq::source(3).shuffled_cycle_to(usize::MAX)]
+    {
+        for selected in [huge.clone().take(1), huge.clone().skip(usize::MAX - 1), huge.step_by(usize::MAX)] {
+            let input = Order::new(selected.clone()).unwrap();
+            for repeated in [
+                selected.clone().repeat(2),
+                selected.clone().cycle_to(2),
+                selected.clone().shuffled_repeat(2),
+                selected.clone().shuffled_cycle_to(2),
+            ] {
+                let order = Order::new(repeated).unwrap();
+                assert_eq!(order.len(), 2);
+                assert!(order.iter().all(|item| Some(item) == input.get(0)));
+                assert_eq!(order.get(1), input.get(0));
+            }
+            for repeated in [selected.clone().repeat(usize::MAX), selected.shuffled_repeat(usize::MAX)] {
+                let order = Order::new(repeated).unwrap();
+                assert_eq!(order.len(), usize::MAX);
+                assert_eq!(order.get(usize::MAX - 1), input.get(0));
+                let mut cursor = order.cursor(usize::MAX - 1..).unwrap();
+                assert_eq!(cursor.next(), input.get(0));
+                assert_eq!(cursor.next(), None);
+            }
         }
     }
-    // Empty outputs have no epochs, while sibling inputs do not multiply each other.
-    assert!(Order::new(huge().take(0).repeat(usize::MAX)).unwrap().is_empty());
-    let parts = [huge().take(1), huge().take(1)];
-    assert!(Order::new(Seq::mix(parts.clone())).unwrap().iter().all(|item| item.epoch == 0));
-    assert!(Order::new(Seq::concat(parts)).unwrap().iter().all(|item| item.epoch == 0));
 }
