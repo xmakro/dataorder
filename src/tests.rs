@@ -511,6 +511,9 @@ fn errors() {
     assert_eq!(Order::new(a.clone().skip(2).take(8)).unwrap().len(), 8);
     assert_eq!(Order::new(a.clone().skip(10)).unwrap().len(), 0);
     assert_eq!(Order::new(a.clone().step_by(0)).unwrap_err(), root(ErrorKind::ZeroStep));
+    // A stride validates its input before its step, like every other node.
+    assert_eq!(Order::new(a.clone().take(11).step_by(0)).unwrap_err(), at(ErrorKind::TakeOutOfRange { n: 11, len: 10 }, &[0]));
+    assert_eq!(Order::new(Seq::mix([a.clone()]).shuffle().step_by(0)).unwrap_err(), at(ErrorKind::ShuffleContainsMix, &[0]));
     // Beyond usize::MAX on every target: a repeat of a repeat, and a concat of two halves.
     assert_eq!(Order::new(a.clone().repeat(usize::MAX).repeat(usize::MAX)).unwrap_err().kind(), &ErrorKind::LengthOverflow);
     let half = || src(0, usize::MAX / 2 + 1);

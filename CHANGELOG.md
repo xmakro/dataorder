@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- Validate a stride's input before its step. `Order::new` reports an error inside the
+  input of `step_by(0)` at that node, as every other node does, instead of
+  `ErrorKind::ZeroStep` at the stride. Ordering is unchanged.
+
 - Add `BoundsError::StartOutOfBounds` for ranges that start beyond the order.
   `cursor(start..)` and `reset(start..)` with `start` past the end reported a reversed
   range, because the unbounded end resolved to the order's length before the start

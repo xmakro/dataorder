@@ -182,7 +182,10 @@ fn unresolved_position_operations_round_trip() {
     let json = serde_json::to_string(&seq).unwrap();
     let back: Seq<String> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, seq.map_sources(str::to_owned));
-    assert_eq!(Order::new(back.map_sources(|_| 10usize)).unwrap_err().kind(), &ErrorKind::ZeroStep);
+    // The invalid skip is found first: a stride validates its input before its step.
+    let error = Order::new(back.map_sources(|_| 10usize)).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::SkipOutOfRange { n: 11, len: 10 });
+    assert_eq!(error.path(), [0]);
 }
 
 #[test]

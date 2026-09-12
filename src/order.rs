@@ -528,11 +528,12 @@ impl<T: Source> Compiler<T> {
         Ok(Compiled { node: slice(node, 0, n), len: n, salt })
     }
 
+    /// Validates the input before the step, like every other node.
     fn stepped(&mut self, step: usize, inner: Seq<T>) -> Result<Compiled, Error> {
+        let Compiled { node, len, salt } = self.child(0, inner)?;
         if step == 0 {
             return Err(self.err(ErrorKind::ZeroStep));
         }
-        let Compiled { node, len, salt } = self.child(0, inner)?;
         Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt })
     }
 
