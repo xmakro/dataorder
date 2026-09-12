@@ -203,8 +203,8 @@ fn mapping_and_serialization_preserve_shuffled_variants() {
     assert_eq!(seq.map_sources(str::to_owned).map_sources(|s| s.parse::<usize>().unwrap()), parsed);
     #[cfg(feature = "serde")]
     for (seq, json) in [
-        (Seq::source(37).repeat_shuffled(3), r#"{"ShuffledRepeat":{"times":3,"inner":{"Source":37}}}"#),
-        (Seq::source(19).cycle_to_shuffled(45), r#"{"ShuffledCycle":{"len":45,"inner":{"Source":19}}}"#),
+        (Seq::source(37).repeat_shuffled(3), r#"{"Repeat":{"times":3,"shuffled":true,"inner":{"Source":37}}}"#),
+        (Seq::source(19).cycle_to_shuffled(45), r#"{"Cycle":{"len":45,"shuffled":true,"inner":{"Source":19}}}"#),
     ] {
         assert_eq!(serde_json::to_string(&seq).unwrap(), json);
         let back: Seq<usize> = serde_json::from_str(json).unwrap();

@@ -2,6 +2,13 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** replace `Seq::ShuffledRepeat` and `Seq::ShuffledCycle` with a
+  `shuffled` field on `Seq::Repeat` and `Seq::Cycle`. The `repeat_shuffled` and
+  `cycle_to_shuffled` builders are unchanged. Serialized `Repeat` and `Cycle` nodes
+  gain the field; nodes without it deserialize as plain repetitions, so existing
+  plain configurations still load, while serialized `ShuffledRepeat` and
+  `ShuffledCycle` nodes are rejected. Ordering is unchanged.
+
 - Give each documented rule one home. The crate docs keep the reference text on
   shuffles, repetitions and salts, `Schedule` keeps the virtual-clock model, and the
   README, sequence and source docs point to them instead of restating them. Move the

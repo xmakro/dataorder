@@ -356,11 +356,17 @@ fn serde_round_trip() {
     let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle().cycle_to(9), Schedule::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
-        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"inner":{"Shuffle":{"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
+        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"shuffled":false,"inner":{"Shuffle":{"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
     );
     assert_eq!(serde_json::to_string(&Schedule::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
     assert_eq!(serde_json::to_string(&Schedule::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
-    assert_eq!(serde_json::to_string(&Seq::source(4usize).cycle_to(9)).unwrap(), r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#);
+    assert_eq!(
+        serde_json::to_string(&Seq::source(4usize).cycle_to(9)).unwrap(),
+        r#"{"Cycle":{"len":9,"shuffled":false,"inner":{"Source":4}}}"#
+    );
+    // Repetitions written before the `shuffled` field existed load as plain repetitions.
+    assert_eq!(serde_json::from_str::<Seq<usize>>(r#"{"Repeat":{"times":2,"inner":{"Source":4}}}"#).unwrap(), Seq::source(4).repeat(2));
+    assert_eq!(serde_json::from_str::<Seq<usize>>(r#"{"Cycle":{"len":9,"inner":{"Source":4}}}"#).unwrap(), Seq::source(4).cycle_to(9));
     // Unknown fields are rejected in every variant.
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
@@ -382,6 +388,8 @@ fn serde_round_trip() {
         r#"{"Shard":{"count":2,"index":1,"inner":{"Source":4}}}"#,
         r#"{"Slice":{"start":"Unbounded","end":"Unbounded","inner":{"Source":4}}}"#,
         r#"{"StepBy":{"step":2,"offset":1,"inner":{"Source":4}}}"#,
+        r#"{"ShuffledRepeat":{"times":3,"inner":{"Source":4}}}"#,
+        r#"{"ShuffledCycle":{"len":9,"inner":{"Source":4}}}"#,
     ] {
         assert!(serde_json::from_str::<Seq<usize>>(json).is_err(), "{json}");
     }

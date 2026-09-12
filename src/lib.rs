@@ -65,10 +65,8 @@
 //! | [`Concat`](Seq::Concat) | Sum of part lengths | Parts read one after another |
 //! | [`Mix`](Seq::Mix) | Sum of part lengths | Parts interleaved, preserving each part's order |
 //! | [`Shuffle`](Seq::Shuffle) | `n` | A seeded permutation of the child's positions |
-//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in the unchanged input |
-//! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
-//! | [`ShuffledRepeat`](Seq::ShuffledRepeat) | `times × n` | A separate permutation of the child's positions per pass |
-//! | [`ShuffledCycle`](Seq::ShuffledCycle) | `len` | Like shuffled repeat, truncated to an exact length |
+//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in the unchanged input, or in a separate permutation per pass when `shuffled` |
+//! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last pass truncated as needed |
 //! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
 //! | [`StepBy`](Seq::StepBy) | `⌈n / step⌉` | Child position `p × step` |

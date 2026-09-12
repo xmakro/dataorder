@@ -35,7 +35,7 @@ fn config_salt(seq: &Seq<Src>) -> perm::ConfigSalt {
         Seq::Source(s) => perm::source_salt(s.salt(), s.len),
         Seq::Concat(parts) => perm::combine_salts(parts.iter().map(config_salt)),
         Seq::Mix(_) => unreachable!("shuffle inputs cannot contain mixes"),
-        Seq::Shuffle { inner } | Seq::ShuffledRepeat { inner, .. } | Seq::ShuffledCycle { inner, .. } => {
+        Seq::Shuffle { inner } | Seq::Repeat { shuffled: true, inner, .. } | Seq::Cycle { shuffled: true, inner, .. } => {
             perm::shuffled_salt(config_salt(inner))
         }
         Seq::Repeat { inner, .. }
@@ -114,31 +114,28 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
             let il = Interleave::new(live);
             il.iter(0..il.len()).map(|(s, j)| live_evs[s][j]).collect()
         }
-        Seq::Cycle { len, inner } => {
+        Seq::Cycle { len, shuffled, inner } => {
             let n = eval(inner, run_seed)?.len();
             if n == 0 && *len > 0 {
                 return Err(root(ErrorKind::EmptyCycle));
             }
-            eval(&cycle_of(inner, *len, n), run_seed)?
-        }
-        Seq::ShuffledCycle { len, inner } => {
-            let n = eval(inner, run_seed)?.len();
-            if n == 0 && *len > 0 {
-                return Err(root(ErrorKind::EmptyCycle));
+            if *shuffled {
+                let times = if n == 0 { 0 } else { len.div_ceil(n) };
+                eval(&inner.clone().repeat_shuffled(times).take(*len), run_seed)?
+            } else {
+                eval(&cycle_of(inner, *len, n), run_seed)?
             }
-            let times = if n == 0 { 0 } else { len.div_ceil(n) };
-            eval(&inner.clone().repeat_shuffled(times).take(*len), run_seed)?
         }
         Seq::Shuffle { inner } => {
             let v = eval(inner, run_seed)?;
             let (shape, key) = (Shape::new(v.len()), perm::key(run_seed, 0, config_salt(inner).value));
             (0..v.len()).map(|i| v[perm::permute(shape, key, i)]).collect()
         }
-        Seq::Repeat { times, inner } => {
+        Seq::Repeat { times, shuffled: false, inner } => {
             // Validate the input even when the repeat is empty.
             eval(inner, run_seed)?.repeat(*times)
         }
-        Seq::ShuffledRepeat { times, inner } => {
+        Seq::Repeat { times, shuffled: true, inner } => {
             let v = eval(inner, run_seed)?;
             let n = v.len();
             let mut out = Vec::new();
@@ -175,7 +172,7 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
 /// positions need, then cut to `len`.
 fn cycle_of(seq: &Seq<Src>, len: usize, n: usize) -> Seq<Src> {
     let times = if n == 0 { 0 } else { len.div_ceil(n) };
-    let inner = if times > 1 { Seq::Repeat { times, inner: Box::new(seq.clone()) } } else { seq.clone() };
+    let inner = if times > 1 { Seq::Repeat { times, shuffled: false, inner: Box::new(seq.clone()) } } else { seq.clone() };
     Seq::Take { n: len, inner: Box::new(inner) }
 }
 
