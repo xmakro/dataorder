@@ -220,10 +220,13 @@ pub(crate) enum NodeCursor<'a> {
     /// A permutation per pass; a plain shuffle has one pass.
     Shuffle(ShuffleCursor<'a>),
     Repeat(RepeatCursor<'a>),
+    /// A unit stride: a plain selection of the child, which needs no count of the
+    /// elements left.
     Slice {
         start: usize,
         child: Box<Self>,
     },
+    /// Every `step`-th child position from `offset`, for a step above one.
     Stride {
         step: usize,
         offset: usize,
@@ -243,7 +246,7 @@ impl<'a> NodeCursor<'a> {
             Node::Mix { il, children } => NodeCursor::Mix(Box::new(MixCursor::new(il, children))),
             Node::Repeat { child_len, shuffle: Some(salt), child, .. } => NodeCursor::Shuffle(ShuffleCursor::new(child, *child_len, *salt)),
             Node::Repeat { child_len, shuffle: None, child, .. } => NodeCursor::Repeat(RepeatCursor::new(child, *child_len)),
-            Node::Slice { start, child, .. } => NodeCursor::Slice { start: *start, child: Box::new(NodeCursor::new(child)) },
+            Node::Stride { step: 1, offset, child, .. } => NodeCursor::Slice { start: *offset, child: Box::new(NodeCursor::new(child)) },
             Node::Stride { step, offset, len, child } => {
                 NodeCursor::Stride { step: *step, offset: *offset, len: *len, left: 0, child: Box::new(NodeCursor::new(child)) }
             }

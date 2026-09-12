@@ -563,15 +563,16 @@ fn cycles() {
     assert_eq!(ids(Order::new(y().cycle_to(15)).unwrap().iter()), ids(Order::new(y()).unwrap().cursor(..15).unwrap()));
     assert_eq!(ids(Order::new(y().cycle_to(45)).unwrap().iter()), ids(Order::new(y().repeat(3)).unwrap().cursor(..45).unwrap()));
     assert_eq!(ids(Order::new(y().cycle_to(45)).unwrap().iter())[..20], ids(Order::new(y()).unwrap().iter())[..]);
-    // Node shapes: no slice above a repeat. A short cycle of a shuffle shortens its
-    // single shuffled pass; a short cycle of a plain child is a slice or the child.
+    // Node shapes: a prefix of a repeat shortens the repeat. A short cycle of a shuffle
+    // shortens its single shuffled pass; a short cycle of a plain child is a unit stride
+    // or the child.
     let root = |seq: Seq<Src>| Order::new(seq).unwrap().root;
     assert!(matches!(root(x().cycle_to(250)), Node::Repeat { child_len: 100, len: 250, .. }));
     assert!(matches!(root(x().repeat(4).take(250)), Node::Repeat { child_len: 100, len: 250, .. }));
     assert!(matches!(root(x().repeat(4).take(100)), Node::Repeat { child_len: 100, len: 100, .. }));
     assert!(matches!(root(x().cycle_to(7)), Node::Repeat { child_len: 100, len: 7, shuffle: Some(_), .. }));
     assert!(matches!(root(src(0, 100).cycle_to(7)), Node::Source { offset: 0, len: 7, .. }));
-    assert!(matches!(root(x().repeat(4).skip(1).take(250)), Node::Slice { start: 1, len: 250, .. }));
+    assert!(matches!(root(x().repeat(4).skip(1).take(250)), Node::Stride { step: 1, offset: 1, len: 250, .. }));
     let Node::Mix { children, .. } = root(Seq::mix([x().cycle_to(200), src(1, 1000).shuffle().cycle_to(100)])) else { panic!() };
     assert!(matches!(children[0], Node::Repeat { child_len: 100, len: 200, .. }));
     assert!(matches!(children[1], Node::Repeat { child_len: 1000, len: 100, shuffle: Some(_), .. }));
@@ -768,7 +769,7 @@ fn folds() {
     assert!(
         matches!(root(a().shuffle().skip(10).skip(2).step_by(3)), Node::Stride { step: 3, offset: 12, len: 30, ref child } if matches!(**child, Node::Repeat { shuffle: Some(_), .. }))
     );
-    assert!(matches!(root(a().shuffle().skip(10).take(50).skip(5)), Node::Slice { start: 15, len: 45, .. }));
+    assert!(matches!(root(a().shuffle().skip(10).take(50).skip(5)), Node::Stride { step: 1, offset: 15, len: 45, .. }));
     assert!(
         matches!(root(a().skip(1).step_by(4).skip(1).step_by(2)), Node::Stride { step: 8, offset: 4, len: 12, ref child } if matches!(**child, Node::Source { offset: 1, .. }))
     );
