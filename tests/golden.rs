@@ -2,34 +2,17 @@
 //! changed: that is a breaking change (see the crate docs on stability), to be made
 //! deliberately, with a version bump and new values here.
 
+mod common;
+
 use Schedule::*;
+use common::{Src, src};
 use dataorder::{Order, Schedule, Seq, Source};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Src {
-    id: u32,
-    len: usize,
-}
-
-impl Source for Src {
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn salt(&self) -> u64 {
-        self.id as u64
-    }
-}
-
-fn src(id: u32, len: usize) -> Seq<Src> {
-    Seq::source(Src { id, len })
-}
 
 /// FNV-1a over the elements: a stable fingerprint of an order.
 fn fingerprint<'a>(it: impl Iterator<Item = dataorder::Item<'a, Src>>) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for item in it {
-        for b in (item.source.id as u64).to_le_bytes().into_iter().chain((item.record_index as u64).to_le_bytes()) {
+        for b in item.source.id.to_le_bytes().into_iter().chain((item.record_index as u64).to_le_bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100_0000_01b3);
         }

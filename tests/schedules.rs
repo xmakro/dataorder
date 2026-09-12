@@ -1,6 +1,10 @@
 //! Schedule semantics through the public API: hand-derived counts on the virtual clock,
 //! the independent Python oracle's fixtures, numerical edge cases and error reporting.
-use dataorder::{ErrorKind, Order, Schedule, Seq, Source};
+
+mod common;
+
+use common::check_access;
+use dataorder::{ErrorKind, Order, Schedule, Seq};
 
 fn order(parts: &[(usize, Schedule)]) -> Order<usize> {
     Order::new(Seq::mix(parts.iter().map(|&(n, schedule)| (Seq::source(n), schedule)))).unwrap()
@@ -8,21 +12,6 @@ fn order(parts: &[(usize, Schedule)]) -> Order<usize> {
 
 fn entries(order: &Order<usize>) -> Vec<(usize, usize)> {
     order.iter().map(|item| (item.source_ordinal, item.record_index)).collect()
-}
-
-fn check_seeks(order: &Order<usize>) {
-    let all = entries(order);
-    let mut cursor = order.cursor(0..0).unwrap();
-    for start in (0..=order.len()).rev() {
-        let end = (start + 11).min(order.len());
-        cursor.reset(start..end).unwrap();
-        let window: Vec<_> = cursor.by_ref().map(|item| (item.source_ordinal, item.record_index)).collect();
-        assert_eq!(window, all[start..end], "seek {start}");
-        if start < order.len() {
-            let item = order.get(start).unwrap();
-            assert_eq!((item.source_ordinal, item.record_index), all[start]);
-        }
-    }
 }
 
 #[test]
@@ -34,7 +23,7 @@ fn delayed_source_begins_in_virtual_time_and_uniform_continues() {
     assert_eq!(all.iter().position(|&(s, _)| s == 1), Some(61));
     assert!(all[62..].iter().any(|&(s, _)| s == 0));
     assert_eq!(all.iter().filter(|&&(s, _)| s == 1).count(), 100);
-    check_seeks(&order);
+    check_access(&order);
 }
 
 #[test]
@@ -47,7 +36,7 @@ fn both_constant_and_ramp_adapt_in_output_space() {
     assert_eq!(all[..75].iter().filter(|&&(s, _)| s == 1).count(), 25);
     // At virtual time .8: A = 80, B = 64.
     assert_eq!(all[..144].iter().filter(|&&(s, _)| s == 1).count(), 64);
-    check_seeks(&order);
+    check_access(&order);
 }
 
 #[test]
@@ -57,22 +46,22 @@ fn a_constant_source_can_stop_during_another_sources_ramp() {
     // At virtual time .8: A is done and B has supplied 100*.8² = 64 items.
     assert_eq!(all[..164].iter().filter(|&&(s, _)| s == 0).count(), 100);
     assert!(all[164..].iter().all(|&(s, _)| s == 1));
-    check_seeks(&order);
+    check_access(&order);
 }
 
 #[test]
 fn schedules_can_overlap_without_uniform_or_skip_empty_clock_intervals() {
     let delayed = order(&[(31, Schedule::delayed(0.8)); 3]);
     assert_eq!(entries(&delayed), entries(&order(&[(31, Schedule::Uniform); 3])));
-    check_seeks(&delayed);
+    check_access(&delayed);
 
     let separated = order(&[(11, Schedule::until(0.2)), (29, Schedule::delayed(0.8))]);
     assert_eq!(entries(&separated), (0..11).map(|j| (0, j)).chain((0..29).map(|j| (1, j))).collect::<Vec<_>>());
-    check_seeks(&separated);
+    check_access(&separated);
 
     let overlapping =
         order(&[(43, Schedule::ramp(0.2, 0.9)), (37, Schedule::trapezoid(0.3, 0.4, 0.5, 0.8)), (29, Schedule::fade(0.4, 0.7))]);
-    check_seeks(&overlapping);
+    check_access(&overlapping);
     for (s, n) in [43, 37, 29].into_iter().enumerate() {
         assert_eq!(entries(&overlapping).iter().filter(|&&(i, _)| i == s).count(), n);
     }
@@ -86,7 +75,7 @@ fn seeks_cover_narrow_late_support_and_nearly_coincident_boundaries() {
         (23, Schedule::trapezoid(at, at + 4e-13, at + 6e-13, at + 1e-12)),
         (17, Schedule::delayed(at + 1e-12)),
     ]);
-    check_seeks(&order);
+    check_access(&order);
 }
 
 #[test]
@@ -101,18 +90,8 @@ fn sharding_parts_can_change_counts_without_schedule_capacity_errors() {
     }
 }
 
-#[derive(Clone)]
-struct Dataset {
-    ordinal: usize,
-    len: usize,
-}
-impl Source for Dataset {
-    fn len(&self) -> usize {
-        self.len
-    }
-}
-
-/// Expected positions come from rational CDFs in the independent Python oracle.
+/// Expected positions come from rational CDFs in the independent Python oracle. Every
+/// part is a bare length, so an item's source ordinal is its part index.
 #[test]
 fn schedules_match_independent_cdfs_and_minority_ranks() {
     let cases: serde_json::Value = serde_json::from_str(include_str!("fixtures/schedule_oracle.json")).unwrap();
@@ -128,7 +107,7 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
                     Schedule::trapezoid(p[0].as_f64().unwrap(), p[1].as_f64().unwrap(), p[2].as_f64().unwrap(), p[3].as_f64().unwrap())
                 }
             };
-            (Seq::source(Dataset { ordinal: i, len: n.as_u64().unwrap() as usize }), schedule)
+            (Seq::source(n.as_u64().unwrap() as usize), schedule)
         })))
         .unwrap();
         let samples = fixture["samples"].as_array().unwrap();
@@ -137,18 +116,18 @@ fn schedules_match_independent_cdfs_and_minority_ranks() {
         for sample in samples {
             let pos = sample[0].as_u64().unwrap() as usize;
             let expected = (sample[1].as_u64().unwrap() as usize, sample[2].as_u64().unwrap() as usize);
-            let dataorder::Item { source, record_index: index, .. } = order.get(pos).unwrap();
-            assert_eq!((source.ordinal, index), expected, "case {case}, position {pos}");
-            let dataorder::Item { source, record_index: index, .. } = order.cursor(pos..).unwrap().next().unwrap();
-            assert_eq!((source.ordinal, index), expected, "cursor: case {case}, position {pos}");
+            let item = order.get(pos).unwrap();
+            assert_eq!((item.source_ordinal, item.record_index), expected, "case {case}, position {pos}");
+            let item = order.cursor(pos..).unwrap().next().unwrap();
+            assert_eq!((item.source_ordinal, item.record_index), expected, "cursor: case {case}, position {pos}");
             // Every small fixture is a complete walk. Large fixtures contain short
             // independently generated windows: seek only across gaps, then exercise
             // the tournament and cached segment transitions with consecutive nexts.
             if next_position != Some(pos) {
                 walking.reset(pos..).unwrap();
             }
-            let dataorder::Item { source, record_index: index, .. } = walking.next().unwrap();
-            assert_eq!((source.ordinal, index), expected, "walk: case {case}, position {pos}");
+            let item = walking.next().unwrap();
+            assert_eq!((item.source_ordinal, item.record_index), expected, "walk: case {case}, position {pos}");
             next_position = pos.checked_add(1);
         }
         if samples.len() == order.len() {

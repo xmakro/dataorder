@@ -1,23 +1,14 @@
 //! Shuffles through the public API: nested layers keep their own permutations, a repetition
 //! never changes its input's permutations, and configuration salts follow the original
 //! configuration.
-use dataorder::{ErrorKind, Order, Seq, Source};
+
+mod common;
+
+use common::{check_access, src};
+use dataorder::{ErrorKind, Order, Seq};
 
 fn indices(order: &Order<usize>) -> Vec<usize> {
     order.iter().map(|item| item.record_index).collect()
-}
-
-fn check_access(order: &Order<usize>) {
-    let expected: Vec<_> = order.iter().collect();
-    for (pos, item) in expected.iter().enumerate() {
-        assert_eq!(order.get(pos), Some(*item));
-    }
-    let mut cursor = order.iter();
-    for pos in [order.len(), 0, order.len() / 2, 1, order.len() - 1, 0] {
-        cursor.reset(pos..).unwrap();
-        assert_eq!(cursor.clone().collect::<Vec<_>>(), expected[pos..]);
-        assert_eq!(cursor.nth(3), expected.get(pos + 3).copied());
-    }
 }
 
 #[test]
@@ -215,30 +206,16 @@ fn mapping_and_serialization_preserve_shuffled_variants() {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Named {
-    salt: u64,
-    len: usize,
-}
-impl Source for Named {
-    fn len(&self) -> usize {
-        self.len
-    }
-    fn salt(&self) -> u64 {
-        self.salt
-    }
-}
-
 #[test]
 fn nested_slice_boundaries_preserve_configuration_salts() {
-    let s = |salt| Seq::source(Named { salt, len: 10 });
+    let s = |id| src(id, 10);
     let make = |removed| Seq::concat([Seq::concat([s(removed), s(1), s(2)]).skip(1), s(3)]).skip(15);
     let tail = |removed| Seq::concat([s(1), Seq::concat([s(2), s(3), s(removed)]).take(29)]).take(25);
     for (a, b) in [(make(0), make(999)), (tail(0), tail(999))] {
         let a = Order::new(a.shuffle()).unwrap();
         let b = Order::new(b.shuffle()).unwrap();
-        let mut a_items: Vec<_> = a.iter().map(|item| (item.source.salt, item.record_index)).collect();
-        let mut b_items: Vec<_> = b.iter().map(|item| (item.source.salt, item.record_index)).collect();
+        let mut a_items: Vec<_> = a.iter().map(|item| (item.source.id, item.record_index)).collect();
+        let mut b_items: Vec<_> = b.iter().map(|item| (item.source.id, item.record_index)).collect();
         assert_ne!(a_items, b_items);
         a_items.sort_unstable();
         b_items.sort_unstable();

@@ -2,6 +2,10 @@
 //! for resets, empty ranges, boundaries, clones and failed operations. Reproduce a property
 //! failure with DATAORDER_STATE_SEED=<decimal seed>; failure histories are minimized by
 //! deleting operations before being reported.
+
+mod common;
+
+use common::check_access;
 use dataorder::{BoundsError, Order, Schedule, Seq};
 use std::ops::Bound;
 
@@ -336,18 +340,7 @@ fn concat_children_keep_their_own_transform_parameters() {
         ])
     };
     let seq = Seq::concat([nested(11), nested(19), Seq::source(3), nested(7)]).repeat(3);
-    let order = Order::with_seed(seq, 42).unwrap();
-    let expected: Vec<_> = (0..order.len()).map(|pos| order.get(pos).unwrap()).collect();
-    assert_eq!(order.iter().collect::<Vec<_>>(), expected);
-    let mut cursor = order.iter();
-    for pos in (0..order.len()).rev().step_by(3).chain((0..order.len()).step_by(7)) {
-        cursor.reset(pos..).unwrap();
-        let mut copy = cursor.clone();
-        for expected in &expected[pos..(pos + 5).min(order.len())] {
-            assert_eq!(cursor.next(), Some(*expected));
-            assert_eq!(copy.next(), Some(*expected));
-        }
-    }
+    check_access(&Order::with_seed(seq, 42).unwrap());
 }
 
 #[test]
