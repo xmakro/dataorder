@@ -76,9 +76,9 @@ fn golden_orders() {
             ]),
             0,
         ),
-        ("shuffled repeat", src(0, 777).shuffled_repeat(3), 0),
-        ("shuffled repeat, seeded order", src(0, 777).shuffled_repeat(3), 42),
-        ("shuffled cycle", src(0, 300).shuffled_cycle_to(1000), 0),
+        ("shuffled repeat", src(0, 777).repeat_shuffled(3), 0),
+        ("shuffled repeat, seeded order", src(0, 777).repeat_shuffled(3), 42),
+        ("shuffled cycle", src(0, 300).cycle_to_shuffled(1000), 0),
     ];
     // Repeat entries independently recomputed using Python integer Feistel arithmetic
     // and rational uniform-interleave keys: plain repeats replay the input, while

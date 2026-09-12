@@ -116,7 +116,7 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
                 return Err(root(ErrorKind::EmptyCycle));
             }
             let times = if n == 0 { 0 } else { len.div_ceil(n) };
-            eval(&inner.clone().shuffled_repeat(times).take(*len), run_seed)?
+            eval(&inner.clone().repeat_shuffled(times).take(*len), run_seed)?
         }
         Seq::Shuffle { seed, inner } => {
             let v = eval(inner, run_seed)?;
@@ -175,11 +175,11 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize], allow_mix: bool) -> Seq
     }
     let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens, allow_mix)).collect::<Vec<_>>();
     match rng.below(11) {
-        9 => random_seq(rng, depth - 1, lens, false).shuffled_repeat(rng.below(4)),
+        9 => random_seq(rng, depth - 1, lens, false).repeat_shuffled(rng.below(4)),
         10 => {
             let inner = random_seq(rng, depth - 1, lens, false);
             let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
-            inner.shuffled_cycle_to(if n == 0 { 0 } else { rng.below(70) })
+            inner.cycle_to_shuffled(if n == 0 { 0 } else { rng.below(70) })
         }
         1 | 2 | 7 if !allow_mix => Seq::concat(parts(rng, depth - 1)),
         8 => {
@@ -926,7 +926,7 @@ fn steep_schedule_at_scale() {
 /// Explicit counts repeat short parts (reshuffled) and truncate long ones before mixing.
 #[test]
 fn mix_with_explicit_counts() {
-    let seq = Seq::mix([src(0, 100).shuffled_cycle_to(1800), src(1, 5000).shuffled_cycle_to(1200)]);
+    let seq = Seq::mix([src(0, 100).cycle_to_shuffled(1800), src(1, 5000).cycle_to_shuffled(1200)]);
     let order = Order::new(seq).unwrap();
     assert_eq!(order.len(), 3000);
     let all = ids(order.cursor(0..3000).unwrap());

@@ -32,11 +32,11 @@ fn configuration(r: &mut Rng, depth: usize, allow_mix: bool) -> (Seq<usize>, usi
         0 => (s.shuffle(r.next()), n),
         9 => {
             let k = r.below(5);
-            if let Some(len) = n.checked_mul(k) { (s.shuffled_repeat(k), len) } else { (s, n) }
+            if let Some(len) = n.checked_mul(k) { (s.repeat_shuffled(k), len) } else { (s, n) }
         }
         10 => {
             let k = if r.below(3) == 0 { usize::MAX } else { r.below(100) };
-            if n > 0 { (s.shuffled_cycle_to(k), k) } else { (s, n) }
+            if n > 0 { (s.cycle_to_shuffled(k), k) } else { (s, n) }
         }
         1 => {
             let k = r.below(5);

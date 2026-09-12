@@ -21,9 +21,9 @@ impl Source for Src {
 
 fn main() {
     let seq = Seq::mix([
-        (Seq::source(Src { name: 'A', len: 60 }).shuffled_repeat(2), Schedule::Uniform),
-        (Seq::source(Src { name: 'B', len: 20 }).shuffled_repeat(2), Schedule::delayed(0.5)), // B: starts at virtual time 0.5
-        (Seq::source(Src { name: 'C', len: 40 }).shuffled_repeat(2), Schedule::ramp(0.2, 0.6)), // C: ramps from virtual time 0.2 to 0.6
+        (Seq::source(Src { name: 'A', len: 60 }).repeat_shuffled(2), Schedule::Uniform),
+        (Seq::source(Src { name: 'B', len: 20 }).repeat_shuffled(2), Schedule::delayed(0.5)), // B: starts at virtual time 0.5
+        (Seq::source(Src { name: 'C', len: 40 }).repeat_shuffled(2), Schedule::ramp(0.2, 0.6)), // C: ramps from virtual time 0.2 to 0.6
     ]);
     let order = Order::new(seq.clone()).unwrap();
     let sources: Vec<(char, usize)> = order.sources().iter().map(|s| (s.name, s.len)).collect();

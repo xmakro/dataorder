@@ -28,7 +28,7 @@
 //! use dataorder::{Order, Seq};
 //!
 //! // Shuffle a billion records and repeat for two epochs.
-//! let seq = Seq::source(1_000_000_000).shuffled_repeat(2);
+//! let seq = Seq::source(1_000_000_000).repeat_shuffled(2);
 //! let order = Order::with_seed(seq, 42)?;
 //! assert_eq!(order.len(), 2_000_000_000);
 //!
@@ -74,7 +74,7 @@
 //! | [`StepBy`](Seq::StepBy) | `⌈n / step⌉` | Child position `p × step` |
 //!
 //! A mix uses every element of every part once. Set each part's exact count with
-//! [`Seq::cycle_to`] or [`Seq::shuffled_cycle_to`] before mixing. A mix preserves
+//! [`Seq::cycle_to`] or [`Seq::cycle_to_shuffled`] before mixing. A mix preserves
 //! the order within each part; use the shuffled variant to shuffle each pass.
 //!
 //! [`Schedule`] assigns each part's elements keys on a shared virtual clock.
@@ -112,7 +112,7 @@
 //! including any nested shuffles. `x.shuffle(seed).repeat(3)` repeats one fixed
 //! permutation three times.
 //!
-//! `x.shuffled_repeat(3)` and `x.shuffled_cycle_to(len)` permute the immediate input's
+//! `x.repeat_shuffled(3)` and `x.cycle_to_shuffled(len)` permute the immediate input's
 //! positions separately on each pass, including the first. Their permutation uses
 //! the order's seed, the local pass number and the input's configuration salt, with
 //! shuffle seed zero. Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed.
@@ -133,7 +133,7 @@
 //!
 //! Adding an outer repeat preserves the entire first pass. Extending an outermost
 //! repeat or cycle preserves the existing prefix. A selection fixes the positions
-//! that subsequent operations can draw from: `x.shuffled_repeat(1).take(2).shuffled_repeat(2)`
+//! that subsequent operations can draw from: `x.repeat_shuffled(1).take(2).repeat_shuffled(2)`
 //! permutes the same selected pair on both outer passes.
 //!
 //! Configuration salts are computed from the original tree. Each source contributes

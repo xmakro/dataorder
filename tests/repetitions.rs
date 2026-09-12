@@ -149,29 +149,29 @@ fn repeating_selections_preserves_the_selected_records() {
 
 #[test]
 fn items_identify_records_independently_of_repetition() {
-    let order = Order::new(Seq::source(17).shuffled_repeat(1).repeat(2)).unwrap();
+    let order = Order::new(Seq::source(17).repeat_shuffled(1).repeat(2)).unwrap();
     assert!(order.cursor(..17).unwrap().eq(order.cursor(17..).unwrap()));
 }
 
 #[test]
 fn nested_repeat_counts_do_not_limit_shortened_sequences() {
     for huge in
-        [Seq::source(1).repeat(usize::MAX), Seq::source(1).shuffled_repeat(usize::MAX), Seq::source(3).shuffled_cycle_to(usize::MAX)]
+        [Seq::source(1).repeat(usize::MAX), Seq::source(1).repeat_shuffled(usize::MAX), Seq::source(3).cycle_to_shuffled(usize::MAX)]
     {
         for selected in [huge.clone().take(1), huge.clone().skip(usize::MAX - 1), huge.step_by(usize::MAX)] {
             let input = Order::new(selected.clone()).unwrap();
             for repeated in [
                 selected.clone().repeat(2),
                 selected.clone().cycle_to(2),
-                selected.clone().shuffled_repeat(2),
-                selected.clone().shuffled_cycle_to(2),
+                selected.clone().repeat_shuffled(2),
+                selected.clone().cycle_to_shuffled(2),
             ] {
                 let order = Order::new(repeated).unwrap();
                 assert_eq!(order.len(), 2);
                 assert!(order.iter().all(|item| Some(item) == input.get(0)));
                 assert_eq!(order.get(1), input.get(0));
             }
-            for repeated in [selected.clone().repeat(usize::MAX), selected.shuffled_repeat(usize::MAX)] {
+            for repeated in [selected.clone().repeat(usize::MAX), selected.repeat_shuffled(usize::MAX)] {
                 let order = Order::new(repeated).unwrap();
                 assert_eq!(order.len(), usize::MAX);
                 assert_eq!(order.get(usize::MAX - 1), input.get(0));

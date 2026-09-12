@@ -42,7 +42,7 @@ use dataorder::{Order, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Two passes over a billion records, with a fresh shuffle for each pass.
-    let seq = Seq::source(1_000_000_000).shuffled_repeat(2);
+    let seq = Seq::source(1_000_000_000).repeat_shuffled(2);
     let order = Order::with_seed(seq, 42)?;
     assert_eq!(order.len(), 2_000_000_000);
 
@@ -114,15 +114,15 @@ so you can nest mixes and concatenations.
 | Shuffle positions in a sequence containing no mixes | `.shuffle(seed)` |
 | Repeat whole passes, preserving the input order | `.repeat(times)` |
 | Repeat or truncate to an exact length, preserving the input order | `.cycle_to(len)` |
-| Shuffle the input separately on each pass | `.shuffled_repeat(times)` |
-| Shuffle each pass and truncate to an exact length | `.shuffled_cycle_to(len)` |
+| Shuffle the input separately on each pass | `.repeat_shuffled(times)` |
+| Shuffle each pass and truncate to an exact length | `.cycle_to_shuffled(len)` |
 | Keep a range of positions | `.skip(start).take(len)` |
 | Keep every nth position from an offset | `.skip(offset).step_by(step)` |
 | Assign every nth position to a worker | `.skip(worker_index).step_by(worker_count)` |
 
 A mix uses every input element once, drawing more often from longer sequences.
 Choose each dataset's count with `.cycle_to(count)` to preserve its order, or
-`.shuffled_cycle_to(count)` to shuffle each pass. This gives a 75/25 mixture of one million records:
+`.cycle_to_shuffled(count)` to shuffle each pass. This gives a 75/25 mixture of one million records:
 
 ```rust
 use dataorder::{Order, Seq};
@@ -130,8 +130,8 @@ use dataorder::{Order, Seq};
 let web = Seq::source(100_000);
 let code = Seq::source(500_000);
 let seq = Seq::mix([
-    web.shuffled_cycle_to(750_000),
-    code.shuffled_cycle_to(250_000),
+    web.cycle_to_shuffled(750_000),
+    code.cycle_to_shuffled(250_000),
 ]);
 assert_eq!(Order::new(seq)?.len(), 1_000_000);
 # Ok::<(), dataorder::Error>(())
@@ -164,8 +164,8 @@ use dataorder::{Order, Schedule, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq = Seq::mix([
-        (Seq::source(300).shuffled_cycle_to(750), Schedule::Uniform),
-        (Seq::source(100).shuffled_cycle_to(250), Schedule::delayed(0.5)),
+        (Seq::source(300).cycle_to_shuffled(750), Schedule::Uniform),
+        (Seq::source(100).cycle_to_shuffled(250), Schedule::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);

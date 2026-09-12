@@ -261,12 +261,12 @@ impl<T> Seq<T> {
     /// Includes the first pass and uses the order's seed. Nested shuffles stay fixed;
     /// the input must contain no mixes. See [`ShuffledRepeat`](Seq::ShuffledRepeat).
     /// Only the unchanged order seed passes to the input. For example,
-    /// `x.shuffled_repeat(1).take(2).shuffled_repeat(2)` permutes the same two
+    /// `x.repeat_shuffled(1).take(2).repeat_shuffled(2)` permutes the same two
     /// selected positions on both outer passes.
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::with_seed(Seq::source(1000).shuffled_repeat(3), 42)?;
+    /// let order = Order::with_seed(Seq::source(1000).repeat_shuffled(3), 42)?;
     /// let first: Vec<_> = order.cursor(..1000)?.map(|item| item.record_index).collect();
     /// let mut second: Vec<_> = order.cursor(1000..2000)?.map(|item| item.record_index).collect();
     /// assert_ne!(first, second);
@@ -275,7 +275,7 @@ impl<T> Seq<T> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn shuffled_repeat(self, times: usize) -> Self {
+    pub fn repeat_shuffled(self, times: usize) -> Self {
         Self::ShuffledRepeat { times, inner: Box::new(self) }
     }
 
@@ -285,14 +285,14 @@ impl<T> Seq<T> {
     ///
     /// ```
     /// use dataorder::{Order, Seq};
-    /// let order = Order::new(Seq::source(1000).shuffled_cycle_to(2500))?;
-    /// let epochs = Order::new(Seq::source(1000).shuffled_repeat(3))?;
+    /// let order = Order::new(Seq::source(1000).cycle_to_shuffled(2500))?;
+    /// let epochs = Order::new(Seq::source(1000).repeat_shuffled(3))?;
     /// assert_eq!(order.len(), 2500);
     /// assert!(order.iter().eq(epochs.cursor(..2500)?));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn shuffled_cycle_to(self, len: usize) -> Self {
+    pub fn cycle_to_shuffled(self, len: usize) -> Self {
         Self::ShuffledCycle { len, inner: Box::new(self) }
     }
 
@@ -442,8 +442,8 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
         Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),
         Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle_to(len),
-        Seq::ShuffledRepeat { times, inner } => map_sources(*inner, f)?.shuffled_repeat(times),
-        Seq::ShuffledCycle { len, inner } => map_sources(*inner, f)?.shuffled_cycle_to(len),
+        Seq::ShuffledRepeat { times, inner } => map_sources(*inner, f)?.repeat_shuffled(times),
+        Seq::ShuffledCycle { len, inner } => map_sources(*inner, f)?.cycle_to_shuffled(len),
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
         Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
         Seq::StepBy { step, inner } => map_sources(*inner, f)?.step_by(step),

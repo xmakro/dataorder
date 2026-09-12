@@ -22,11 +22,11 @@ fn check_access(order: &Order<usize>) {
 fn repeating_a_selected_shuffle_keeps_the_selected_records() {
     for seed in [0, 1, 42, u64::MAX] {
         for times in [1, 3] {
-            let selected = Seq::source(37).shuffled_repeat(times).take(2);
+            let selected = Seq::source(37).repeat_shuffled(times).take(2);
             let input = Order::with_seed(selected.clone(), seed).unwrap();
             let mut expected = indices(&input);
             expected.sort_unstable();
-            let order = Order::with_seed(selected.shuffled_repeat(2), seed).unwrap();
+            let order = Order::with_seed(selected.repeat_shuffled(2), seed).unwrap();
             assert_eq!(order.len(), 4);
             for pass in indices(&order).as_chunks::<2>().0 {
                 let mut actual = pass.to_vec();
@@ -42,10 +42,10 @@ fn repeating_a_selected_shuffle_keeps_the_selected_records() {
 fn plain_repeats_preserve_even_nested_shuffled_inputs() {
     for base in [
         Seq::source(37).shuffle(7),
-        Seq::source(37).shuffled_repeat(3),
-        Seq::source(37).shuffled_cycle_to(83),
-        Seq::source(37).shuffled_repeat(3).skip(17).take(70).shuffle(11),
-        Seq::mix([Seq::source(37).shuffled_repeat(3), Seq::source(19).shuffled_cycle_to(45)]),
+        Seq::source(37).repeat_shuffled(3),
+        Seq::source(37).cycle_to_shuffled(83),
+        Seq::source(37).repeat_shuffled(3).skip(17).take(70).shuffle(11),
+        Seq::mix([Seq::source(37).repeat_shuffled(3), Seq::source(19).cycle_to_shuffled(45)]),
     ] {
         for seed in [0, 42, u64::MAX] {
             let once = Order::with_seed(base.clone(), seed).unwrap();
@@ -66,7 +66,7 @@ fn shuffled_passes_are_permutations_and_cycles_preserve_their_prefix() {
     let n = 37;
     for seed in [0, 42, u64::MAX] {
         let base = Seq::source(n);
-        let order = Order::with_seed(base.clone().shuffled_repeat(3), seed).unwrap();
+        let order = Order::with_seed(base.clone().repeat_shuffled(3), seed).unwrap();
         let all = indices(&order);
         for pass in all.chunks_exact(n) {
             let mut sorted = pass.to_vec();
@@ -78,29 +78,29 @@ fn shuffled_passes_are_permutations_and_cycles_preserve_their_prefix() {
         assert_ne!(all[n..2 * n], all[2 * n..]);
         check_access(&order);
         for len in [1, n - 1, n, n + 1, 2 * n, 2 * n + 7, 3 * n] {
-            let cycle = Order::with_seed(base.clone().shuffled_cycle_to(len), seed).unwrap();
+            let cycle = Order::with_seed(base.clone().cycle_to_shuffled(len), seed).unwrap();
             assert!(cycle.iter().eq(order.cursor(..len).unwrap()));
             check_access(&cycle);
         }
-        let once = Order::with_seed(base.clone().shuffled_repeat(1), seed).unwrap();
+        let once = Order::with_seed(base.clone().repeat_shuffled(1), seed).unwrap();
         assert!(once.iter().eq(order.cursor(..n).unwrap()));
-        let mut reseeded = Order::new(base.shuffled_repeat(3)).unwrap();
+        let mut reseeded = Order::new(base.repeat_shuffled(3)).unwrap();
         reseeded.set_seed(seed);
         assert!(reseeded.iter().eq(order.iter()));
     }
     assert_ne!(
-        indices(&Order::new(Seq::source(n).shuffled_repeat(3)).unwrap()),
-        indices(&Order::with_seed(Seq::source(n).shuffled_repeat(3), 42).unwrap())
+        indices(&Order::new(Seq::source(n).repeat_shuffled(3)).unwrap()),
+        indices(&Order::with_seed(Seq::source(n).repeat_shuffled(3), 42).unwrap())
     );
 }
 
 #[test]
 fn shuffled_repetition_preserves_the_immediate_input_multiset() {
-    for base in [Seq::source(37).shuffle(7).take(19), Seq::source(37).shuffle(7).shuffled_repeat(2), Seq::source(37).shuffled_cycle_to(51)]
+    for base in [Seq::source(37).shuffle(7).take(19), Seq::source(37).shuffle(7).repeat_shuffled(2), Seq::source(37).cycle_to_shuffled(51)]
     {
         let input = Order::with_seed(base.clone(), 42).unwrap();
         let n = input.len();
-        let actual = Order::with_seed(base.shuffled_repeat(3), 42).unwrap();
+        let actual = Order::with_seed(base.repeat_shuffled(3), 42).unwrap();
         let mut expected = indices(&input);
         expected.sort_unstable();
         for pass in 0..3 {
@@ -114,30 +114,30 @@ fn shuffled_repetition_preserves_the_immediate_input_multiset() {
 
 #[test]
 fn shuffled_repetition_validates_original_inputs_and_limits() {
-    for seq in [Seq::source(0).shuffled_repeat(3), Seq::source(10).shuffled_repeat(0), Seq::source(0).shuffled_cycle_to(0)] {
+    for seq in [Seq::source(0).repeat_shuffled(3), Seq::source(10).repeat_shuffled(0), Seq::source(0).cycle_to_shuffled(0)] {
         assert!(Order::new(seq).unwrap().is_empty());
     }
-    for seq in [Seq::source(0).shuffled_cycle_to(1), Seq::source(0).shuffled_cycle_to(usize::MAX)] {
+    for seq in [Seq::source(0).cycle_to_shuffled(1), Seq::source(0).cycle_to_shuffled(usize::MAX)] {
         assert_eq!(Order::new(seq).unwrap_err().kind(), &ErrorKind::EmptyCycle);
     }
-    let error = Order::new(Seq::source(2).shuffled_repeat(usize::MAX)).unwrap_err();
+    let error = Order::new(Seq::source(2).repeat_shuffled(usize::MAX)).unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::LengthOverflow);
     assert!(error.path().is_empty());
     for mix in [Seq::mix([Seq::source(10)]), Seq::mix([] as [Seq<usize>; 0]), Seq::mix([Seq::source(10)]).take(0)] {
         for seq in
-            [mix.clone().shuffled_repeat(0), mix.clone().shuffled_repeat(1), mix.clone().shuffled_cycle_to(0), mix.shuffled_cycle_to(3)]
+            [mix.clone().repeat_shuffled(0), mix.clone().repeat_shuffled(1), mix.clone().cycle_to_shuffled(0), mix.cycle_to_shuffled(3)]
         {
             let err = Order::new(Seq::concat([Seq::source(1), seq])).unwrap_err();
             assert_eq!(err.kind(), &ErrorKind::ShuffleContainsMix);
             assert_eq!(err.path(), [1]);
         }
     }
-    for seq in [Seq::source(3).take(4).shuffled_repeat(0), Seq::source(3).take(4).shuffled_cycle_to(0)] {
+    for seq in [Seq::source(3).take(4).repeat_shuffled(0), Seq::source(3).take(4).cycle_to_shuffled(0)] {
         let err = Order::new(seq).unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::TakeOutOfRange { n: 4, len: 3 });
         assert_eq!(err.path(), [0]);
     }
-    for seq in [Seq::source(1).shuffled_repeat(usize::MAX), Seq::source(3).shuffled_cycle_to(usize::MAX)] {
+    for seq in [Seq::source(1).repeat_shuffled(usize::MAX), Seq::source(3).cycle_to_shuffled(usize::MAX)] {
         let order = Order::new(seq).unwrap();
         let mut cursor = order.cursor(usize::MAX - 8..).unwrap();
         assert_eq!(cursor.nth(6), order.get(usize::MAX - 2));
@@ -150,14 +150,14 @@ fn shuffled_repetition_validates_original_inputs_and_limits() {
 
 #[test]
 fn mapping_and_serialization_preserve_shuffled_variants() {
-    let seq = Seq::concat([Seq::source("37").shuffled_repeat(3), Seq::source("19").shuffled_cycle_to(45)]);
+    let seq = Seq::concat([Seq::source("37").repeat_shuffled(3), Seq::source("19").cycle_to_shuffled(45)]);
     let parsed = seq.clone().try_map_sources(str::parse::<usize>).unwrap();
-    assert_eq!(parsed, Seq::concat([Seq::source(37).shuffled_repeat(3), Seq::source(19).shuffled_cycle_to(45)]));
+    assert_eq!(parsed, Seq::concat([Seq::source(37).repeat_shuffled(3), Seq::source(19).cycle_to_shuffled(45)]));
     assert_eq!(seq.map_sources(str::to_owned).map_sources(|s| s.parse::<usize>().unwrap()), parsed);
     #[cfg(feature = "serde")]
     for (seq, json) in [
-        (Seq::source(37).shuffled_repeat(3), r#"{"ShuffledRepeat":{"times":3,"inner":{"Source":37}}}"#),
-        (Seq::source(19).shuffled_cycle_to(45), r#"{"ShuffledCycle":{"len":45,"inner":{"Source":19}}}"#),
+        (Seq::source(37).repeat_shuffled(3), r#"{"ShuffledRepeat":{"times":3,"inner":{"Source":37}}}"#),
+        (Seq::source(19).cycle_to_shuffled(45), r#"{"ShuffledCycle":{"len":45,"inner":{"Source":19}}}"#),
     ] {
         assert_eq!(serde_json::to_string(&seq).unwrap(), json);
         let back: Seq<usize> = serde_json::from_str(json).unwrap();

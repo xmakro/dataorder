@@ -14,12 +14,12 @@
   internal `Draw` wrapper and repeat-count products; every sequence length must
   still fit `usize`. Children receive only the unchanged order seed, and each
   shuffled repeat uses its own local pass number. Record ordering is unchanged.
-  Cover `shuffled_repeat(1).take(2).shuffled_repeat(2)` with a regression that keeps
+  Cover `repeat_shuffled(1).take(2).repeat_shuffled(2)` with a regression that keeps
   the same selected pair on both outer passes.
 
 - **Breaking:** `repeat(times)` and `cycle_to(len)` now preserve their input's record
-  order on every pass, including nested shuffles. Add `shuffled_repeat(times)` and
-  `shuffled_cycle_to(len)` to permute the immediate input separately on each pass,
+  order on every pass, including nested shuffles. Add `repeat_shuffled(times)` and
+  `cycle_to_shuffled(len)` to permute the immediate input separately on each pass,
   including the first, using the order seed and local pass number. These operations
   reject mix descendants like `shuffle`; shuffle the inputs before mixing.
   Add serialized `ShuffledRepeat` and `ShuffledCycle` variants; existing `Repeat`
