@@ -55,7 +55,7 @@ pub enum Seq<T> {
     /// [`Order::new`](crate::Order::new) rejects this combination with
     /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
-    /// The permutation depends on the order's seed,
+    /// The permutation depends on the order's seed
     /// and the input configuration's source salts, original lengths and concat grouping.
     /// Empty or discarded sources still contribute. See the crate's
     /// [shuffle rules](crate#shuffles-and-repetitions) for details.

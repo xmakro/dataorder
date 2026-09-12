@@ -80,24 +80,23 @@ fn golden_orders() {
         ("shuffled repeat, seeded order", src(0, 777).repeat_shuffled(3), 42),
         ("shuffled cycle", src(0, 300).cycle_to_shuffled(1000), 0),
     ];
-    // Repeat entries independently recomputed using Python integer Feistel arithmetic
-    // and rational uniform-interleave keys: plain repeats replay the input, while
-    // shuffled repeats use their local pass number. Other entries retain their outputs.
+    // Captured from the prior implementation with every shuffle seed set to zero,
+    // before removing the per-shuffle seed. Shuffled repeat/cycle entries are unchanged.
     const EXPECTED: [u64; 17] = [
-        13510848840803686825,
-        5734682759774056529,
-        3287178459042382076,
-        1077492288285509245,
-        2420967535336859100,
-        11125969817394475988,
-        3696955324159907089,
-        4369987832402671921,
-        12216569398622504889,
-        4935321577852654885,
-        4787768506023466187,
-        543417429321880357,
-        11240630329514219006,
-        16685696649537605013,
+        9636474030837673273,
+        99794755355777013,
+        9286240989508410160,
+        4516933780095520549,
+        2169467847850813516,
+        6077391615804054636,
+        4777681411854005729,
+        14822918342460314720,
+        6306593996894984370,
+        9905920817996087845,
+        8047275810872675024,
+        2356273720401712677,
+        13646566052028493114,
+        15158694468846685013,
         3667822865842139108,
         4895949453059197240,
         10785437813920805584,
@@ -113,7 +112,7 @@ fn golden_orders() {
     assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle()).unwrap();
-    const FIRST: [usize; 6] = [629, 114, 228, 812, 639, 604];
+    const FIRST: [usize; 6] = [151, 178, 291, 270, 785, 758];
     assert_eq!(order.cursor(0..6).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).unwrap().record_index == FIRST[k]));
 }
@@ -137,8 +136,8 @@ fn golden_name_salted_order() {
     // Pin the public salt helper as well as its effect on the whole permutation.
     // Both the prefix and fingerprint were independently calculated from the specified
     // FNV-1a and Feistel arithmetic, rather than obtained by blessing this test's output.
-    const FIRST: [usize; 12] = [445, 928, 15, 77, 0, 293, 540, 797, 190, 407, 709, 652];
-    const EXPECTED: u64 = 15_852_656_108_745_184_545;
+    const FIRST: [usize; 12] = [702, 250, 476, 856, 914, 348, 674, 781, 21, 676, 402, 820];
+    const EXPECTED: u64 = 14_434_970_332_188_175_925;
     let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin" }).shuffle(), 42).unwrap();
     assert_eq!(order.cursor(..12).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     let actual = order

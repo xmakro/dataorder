@@ -96,8 +96,7 @@ fn shuffled_passes_are_permutations_and_cycles_preserve_their_prefix() {
 
 #[test]
 fn shuffled_repetition_preserves_the_immediate_input_multiset() {
-    for base in [Seq::source(37).shuffle().take(19), Seq::source(37).shuffle().repeat_shuffled(2), Seq::source(37).cycle_to_shuffled(51)]
-    {
+    for base in [Seq::source(37).shuffle().take(19), Seq::source(37).shuffle().repeat_shuffled(2), Seq::source(37).cycle_to_shuffled(51)] {
         let input = Order::with_seed(base.clone(), 42).unwrap();
         let n = input.len();
         let actual = Order::with_seed(base.repeat_shuffled(3), 42).unwrap();

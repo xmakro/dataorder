@@ -78,9 +78,8 @@ pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
     } else {
         mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
     };
-    let a = mix64(
-        mix64(0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B,
-    );
+    // Keep the former zero-local-seed offset to preserve shuffled-repeat ordering.
+    let a = mix64(mix64(0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
     let mut k = Key::UNSET;
     for (i, rk) in k.rk.iter_mut().enumerate() {
         *rk = mix64(a.wrapping_add((i as u64).wrapping_mul(PHI)));
@@ -259,7 +258,9 @@ mod tests {
         // Seven multiply-and-truncate rounds produced serial correlation 0.0512 on the
         // first case and consecutive-difference chi-square 13,622 on the second. Use the
         // public API: a bare length contributes a source salt, unlike the private helper.
-        for (n, seed) in [(56_444, 1), (65_536, 18_437)] {
+        // These order seeds reproduce the former local seeds 1 and 18_437 with order
+        // seed zero, keeping the same regression permutations after removing local seeds.
+        for (n, seed) in [(56_444, 10_701_884_503_043_813_976), (65_536, 1_868_409_662_210_368_291)] {
             assert_statistics(&public_perm(n, seed), seed, 5.0);
         }
     }

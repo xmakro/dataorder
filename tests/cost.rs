@@ -64,9 +64,10 @@ fn unary_traversals_do_not_allocate_temporary_child_lists() {
 fn seeks_within_each_concat_child_reuse_mix_buffers() {
     use dataorder::Schedule;
     let part = |k, len, scheduled| {
-        Seq::mix((0..k).map(|i| {
-            (Seq::source(len).shuffle(), if scheduled && i % 5 == 0 { Schedule::ramp(0.1, 0.6) } else { Schedule::Uniform })
-        }))
+        Seq::mix(
+            (0..k)
+                .map(|i| (Seq::source(len).shuffle(), if scheduled && i % 5 == 0 { Schedule::ramp(0.1, 0.6) } else { Schedule::Uniform })),
+        )
     };
     let order = Order::new(Seq::concat([part(1000, 10, false), part(700, 20, true)]).repeat(3)).unwrap();
     let epoch = order.len() / 3;
@@ -112,7 +113,7 @@ fn seeking_an_existing_cursor_allocates_nothing() {
 /// backward seek can revive, even though almost all of them have already finished.
 #[test]
 fn seeking_backward_revives_parts_without_allocating() {
-    let order = Order::new(Seq::mix((0..100).map(|_| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
+    let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
     let mut cursor = order.cursor(order.len() - 1..).unwrap();
     assert_eq!(cursor.next().map(|item| (*item.source, item.record_index)), Some(element(&order, order.len() - 1)));
     let count = allocations(|| cursor.reset(0..).unwrap());
@@ -123,7 +124,7 @@ fn seeking_backward_revives_parts_without_allocating() {
 /// A clone can grow new buffers on its first backward seek, then reuse them.
 #[test]
 fn cloned_cursors_revive_parts_and_reuse_new_buffers() {
-    let order = Order::new(Seq::mix((0..100).map(|_| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
+    let order = Order::new(Seq::mix((0..100).map(|i| Seq::source(if i == 0 { 1_000_000 } else { 1000 })))).unwrap();
     let mut cursor = order.cursor(order.len() - 1..).unwrap();
     cursor.next();
     let mut cloned = cursor.clone();
