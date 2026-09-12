@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- Validate schedules through `Schedule` itself and build each mix's interleave over
+  its non-empty parts only. Remove the internal schedule error type, its conversion
+  into `ErrorKind` and the empty-part special cases. Error kinds, paths, ordering
+  and the public API are unchanged.
+
 - Compile a shuffle as a shuffled repetition with one pass and merge the two shuffle
   cursors. Random access into a single pass skips the pass division, cursors derive a
   pass's key once rather than on every seek or skip, and shuffled repetitions keep

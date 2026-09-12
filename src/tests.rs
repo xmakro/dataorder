@@ -95,13 +95,19 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
         }
         Seq::Mix(parts) => {
             let evs = parts.iter().map(|p| eval(&p.seq, run_seed)).collect::<Result<Vec<_>, _>>()?;
-            let lens: Vec<usize> = evs.iter().map(|v| v.len()).collect();
-            let schedule: Vec<Schedule> = parts.iter().map(|p| p.schedule).collect();
-            let il = Interleave::with_schedule(&lens, &schedule).map_err(|e| {
-                let (kind, part) = e.into_kind();
-                at(kind, part.as_slice())
-            })?;
-            il.iter(0..il.len()).map(|(s, j)| evs[s][j]).collect()
+            if evs.iter().map(|v| v.len() as u64).sum::<u64>() > MAX_MIX_LEN {
+                return Err(root(ErrorKind::MixTooLong));
+            }
+            let mut live = Vec::new();
+            for (i, (p, v)) in parts.iter().zip(&evs).enumerate() {
+                let profile = p.schedule.profile(v.len()).map_err(|kind| at(kind, &[i]))?;
+                if !v.is_empty() {
+                    live.push((v.len(), profile));
+                }
+            }
+            let live_evs: Vec<&Vec<(u32, usize)>> = evs.iter().filter(|v| !v.is_empty()).collect();
+            let il = Interleave::new(live);
+            il.iter(0..il.len()).map(|(s, j)| live_evs[s][j]).collect()
         }
         Seq::Cycle { len, inner } => {
             let n = eval(inner, run_seed)?.len();
@@ -507,6 +513,8 @@ fn errors() {
     assert_eq!(Order::new(a.clone().repeat(usize::MAX).repeat(usize::MAX)).unwrap_err().kind(), &ErrorKind::LengthOverflow);
     let half = || src(0, usize::MAX / 2 + 1);
     assert_eq!(Order::new(Seq::concat([half(), half()])).unwrap_err(), root(ErrorKind::LengthOverflow));
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(Order::new(Seq::mix([src(0, MAX_MIX_LEN as usize), src(1, 1)])).unwrap_err(), root(ErrorKind::MixTooLong));
     // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix([(src(0, 10), Schedule::delayed(2.0))]);
     assert_eq!(

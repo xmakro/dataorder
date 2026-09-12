@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn returning_to_zero_clears_the_previous_counts() {
-        let il = Interleave::with_schedule(&[10_000, 1000], &[Schedule::Uniform, Schedule::until(0.5)]).unwrap();
+        let il = Interleave::new(vec![(10_000, None), (1000, Schedule::until(0.5).profile(1000).unwrap())]);
         let mut iter = il.iter(9000..il.len());
         iter.next();
         iter.seek(0..il.len());
