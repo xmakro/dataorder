@@ -223,26 +223,15 @@ resume existing checkpoints with their original crate version.
   even when a later `take`, `cycle_to`, or `step_by` would shorten it. Original nested
   repeat counts impose no additional limit after a selection shortens the input.
   `LengthOverflow` identifies the offending node.
-- **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range.
-  Use `reset(range)?` to replace the remaining range and reuse allocated buffers.
-  Every range uses absolute order positions: `reset(pos..end)` keeps a chosen
-  endpoint, `reset(pos..)` reads through the order's end, and `reset(..)` restarts
-  the whole order. The previous range does not constrain the new one.
-  Construction and moves to empty ranges can allocate. `last()` uses a direct lookup
-  and can allocate independently of the cursor's buffers.
-  Changing concat children creates fresh state. Clones copy current state without
-  preserving spare capacity, so later seeks can allocate.
-  `offset()` reports the next absolute position; `position(predicate)` is the usual
-  consuming iterator search.
+- **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range,
+  and `reset(range)?` to move an existing cursor to another range of absolute order
+  positions while reusing its buffers. See
+  [`Cursor::reset`](https://docs.rs/dataorder/latest/dataorder/struct.Cursor.html#method.reset)
+  for what a move keeps and when it allocates.
 
 Every item's `source_ordinal` indexes `order.sources()` and distinguishes equal and
 zero-sized handles. Ordinals follow the original configuration, including sources
 whose nodes were removed during compilation. They are local to the order, not persistent dataset IDs.
-
-Schedule diagnostics are part of `ErrorKind`: `InvalidSchedule { schedule, reason }`
-includes a `ScheduleReason` for non-finite parameters or invalid breakpoints.
-`ScheduleTooSteep { len, peak_rate, limit }` carries the values behind
-excessive steepness. Both `Error::kind()` and `Error::into_kind()` retain these details.
 
 `Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders
 defer configuration validation to `Order::new`, where `T: Source` is required.

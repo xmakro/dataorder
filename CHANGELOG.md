@@ -2,316 +2,110 @@
 
 ## Unreleased (0.4.0)
 
-- Validate a stride's input before its step. `Order::new` reports an error inside the
-  input of `step_by(0)` at that node, as every other node does, instead of
-  `ErrorKind::ZeroStep` at the stride. Ordering is unchanged.
+This release reworks the API around explicit items, checked access and a single
+order seed, and changes how shuffles and schedules are computed. Every order that
+contains a shuffle or a scheduled mix differs from 0.3.0; resume such orders with the
+crate version that produced them.
 
-- Add `BoundsError::StartOutOfBounds` for ranges that start beyond the order.
-  `cursor(start..)` and `reset(start..)` with `start` past the end reported a reversed
-  range, because the unbounded end resolved to the order's length before the start
-  was checked. The start is now checked before the range's direction and end.
-  Ordering is unchanged.
+- **Breaking:** shuffles take no seed of their own. `shuffle()` replaces
+  `shuffle(seed)`; select the run with `Order::with_seed` or `Order::set_seed`. A
+  permutation depends on that order seed and on the input's configuration salt, which
+  follows the original configuration: every source contributes its `Source::salt` and
+  original length, even when empty or excluded by a selection; plain repetitions and
+  selections pass the salt through; each shuffled layer advances it once, so nested
+  shuffles use distinct keys; and concatenations combine child salts independently of
+  grouping. Key derivation hashes the order seed, pass number and salt in one step.
 
-- Store each shuffled node's first-pass key in the compiled order and derive the keys
-  of later passes only when a cursor enters them. Random access into a shuffle, and
-  every shuffle nested under another, no longer derive a key per element.
-  `Order::set_seed` re-derives the stored keys in time proportional to the number of
-  shuffled nodes. Ordering and the public API are unchanged.
+- **Breaking:** `repeat(times)` and `cycle_to(len)` (renamed from `cycle`) preserve
+  their input's record order on every pass, including nested shuffles, and there is no
+  repetition context: enclosing repeats never reseed inner shuffles, and
+  `x.repeat(3).repeat(2)` orders like `x.repeat(6)`. Add `repeat_shuffled(times)` and
+  `cycle_to_shuffled(len)`, which permute the immediate input separately on each pass,
+  including the first; `shuffle()` orders like `repeat_shuffled(1)`. `Seq::Repeat` and
+  `Seq::Cycle` gain a `shuffled` field.
 
-- **Breaking:** replace `Seq::ShuffledRepeat` and `Seq::ShuffledCycle` with a
-  `shuffled` field on `Seq::Repeat` and `Seq::Cycle`. The `repeat_shuffled` and
-  `cycle_to_shuffled` builders are unchanged. Serialized `Repeat` and `Cycle` nodes
-  gain the field; nodes without it deserialize as plain repetitions, so existing
-  plain configurations still load, while serialized `ShuffledRepeat` and
-  `ShuffledCycle` nodes are rejected. Ordering is unchanged.
+- **Breaking:** a shuffle or shuffled repetition rejects any mix in its input
+  configuration, including empty or single-part mixes and mixes under other operations,
+  with `ErrorKind::ShuffleContainsMix` at the enclosing shuffle. Shuffle each input
+  before mixing.
 
-- Give each documented rule one home. The crate docs keep the reference text on
-  shuffles, repetitions and salts, `Schedule` keeps the virtual-clock model, and the
-  README, sequence and source docs point to them instead of restating them. Move the
-  seek probe bounds from the crate's cost section into the interleave module docs.
+- **Breaking:** schedules are independent curves on a shared virtual clock. Rename
+  `Sampling` to `Schedule`, `MixPart.sampling` to `schedule` and `fading` to `fade`.
+  `Uniform` is constant in virtual time, like `delayed(0.0)`; it no longer fills the
+  capacity other schedules leave, and there is no capacity check, so schedules may
+  overlap or leave gaps. Breakpoints are virtual times rather than output fractions,
+  and merged ramps are generally nonlinear in output position. Remove `DelayedLinear`;
+  `delayed` and `ramp` return `Trapezoid` with `fade` and `off` at 1. Seeks count the
+  elements below a virtual time and bisect. Remove `Eq` and `Hash` from `Seq`,
+  `MixPart` and `Schedule`; `PartialEq` uses ordinary `f64` equality.
 
-- **Breaking:** merge `BoundsError::StartOverflow` and `BoundsError::EndOverflow` into
-  `BoundsError::Overflow`, and remove `ScheduleReason::CoefficientOverflow`:
-  breakpoints too close together for finite profile coefficients are reported as
-  `ScheduleReason::InvalidBreakpoints`. Ordering and the serialized format are
-  unchanged.
+- **Breaking:** remove weighted mixes: `Seq::Weighted`, `Seq::weighted`,
+  `Seq::weighted_with`, `WeightedPart` and their error kinds. Choose exact counts with
+  `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count)])`. Merge `mix_with` into `mix`,
+  which accepts sequences, `(seq, schedule)` pairs or `MixPart` values.
 
-- **Breaking:** simplify shuffle key derivation. The order seed, local pass number and
-  configuration salt are hashed together in one step, without the former
-  zero-local-seed offset or a separate first-pass path. Every shuffled order changes;
-  the public API and serialized format are unchanged. Resume older orders with their
-  original crate version.
+- **Breaking:** replace `stride`, `slice` and `shard`, their `Seq` variants and their
+  `try_` forms with `skip`, `take` and `step_by` (`Seq::StepBy`). Partition workers
+  with `skip(index).step_by(count)`. Skipping past the end is an error, where `stride`
+  and `shard` produced empty sequences. A stride validates its input before its step.
 
-- **Breaking:** remove `MAX_DEPTH` and `ErrorKind::TooDeep`. Compilation no longer
-  counts nesting levels, so configurations of any depth compile. Compilation, mapping,
-  cloning, comparison and destruction recurse with depth as before, so arbitrarily
-  deep hand-built trees remain unsupported. Ordering and the serialized format are
-  unchanged.
+- **Breaking:** every result is an `Item { source_ordinal, source, record_index }`,
+  and `Order::get` returns `Option<Item>`. Remove `get_indexed`, `source_index`,
+  `sources_mut`, the `try_` access aliases, `Cursor::indexed` and `IndexedCursor`.
+  Item equality compares the ordinal and record index before the source value.
+  Rename `Seq::map` and `try_map` to `map_sources` and `try_map_sources`; use them
+  to open source handles before compiling.
 
-- Compile skips and takes as unit strides instead of a separate slice node; cursors
-  keep their direct path for them. Ordering and the public API are unchanged.
+- **Breaking:** `Order::iter()` returns a `Cursor` over the whole order and
+  `Order::cursor(range)` a checked `Result<Cursor, BoundsError>`. `Cursor::reset(range)`
+  replaces `seek`, `set_range` and their `try_` forms, using absolute order positions;
+  a failed reset leaves the cursor unchanged. Remove `Cursor::remaining`; use `len()`.
+  `BoundsError` gains `StartOutOfBounds`, merges `StartOverflow` and `EndOverflow`
+  into `Overflow`, and loses `InvalidShard` and `SeekOutOfBounds`. Cursors are
+  positioned when constructed, `last()` uses a direct lookup, clones keep no spare
+  capacity and entering another concat child creates fresh state; seeks within an
+  initialized mix still reuse its buffers.
 
-- **Breaking:** remove `ErrorKind::TooManySources`. Sources are indexed with `usize`
-  throughout, so a configuration can hold as many sources as memory allows; compiled
-  node sizes are unchanged. Ordering and the serialized format are unchanged.
+- **Breaking:** remove `Order::prepare` with its `Preparation`, `PreparedNode`,
+  `PreparedKind`, `PreparedParameters`, `PreparedSource`, `PreparedMix`,
+  `SamplingDiagnostics` and `WeightedAllocation` report types, and `Seq::check`,
+  `validate` and `dispose`. Builders accept any `T` and defer validation to
+  `Order::new`, which requires `T: Source`.
 
-- Validate schedules through `Schedule` itself and build each mix's interleave over
-  its non-empty parts only. Remove the internal schedule error type, its conversion
-  into `ErrorKind` and the empty-part special cases. Error kinds, paths, ordering
-  and the public API are unchanged.
+- **Breaking:** schedule diagnostics live in `ErrorKind`: `InvalidSchedule { schedule,
+  reason: ScheduleReason }` and `ScheduleTooSteep { len, peak_rate, limit }` replace
+  `InvalidSampling`, `TooSteep`, `SamplingDetail` and `Error::sampling_detail`.
+  `ScheduleReason` is `NonFiniteParameter` or `InvalidBreakpoints`, the latter also
+  for breakpoints too close together for finite coefficients. Remove `Overcommitted`,
+  `SamplingOverflow`, `InvalidWeight`, `ZeroWeights`, `EmptyWeightedPart`,
+  `OrderTooLong`, `TooManySources` and `TooDeep`.
 
-- Compile a shuffle as a shuffled repetition with one pass and merge the two shuffle
-  cursors. Random access into a single pass skips the pass division, cursors derive a
-  pass's key once rather than on every seek or skip, and shuffled repetitions keep
-  their cursor state inline instead of boxing it. Ordering and the public API are
-  unchanged.
+- **Breaking:** lengths, positions and counts are `usize` throughout, including the
+  `len` fields of `ErrorKind`, and every sequence node must fit, including
+  intermediates a parent later truncates; overflow is `LengthOverflow` at that node.
+  Sources are indexed with `usize`. Remove `MAX_DEPTH`: configurations of any depth
+  compile, though compilation, mapping, cloning, comparison and destruction still
+  recurse with depth.
 
-- Keep concat and repetition cursor state and boundary handling in dedicated
-  structs. Preserve direct skips, deferred boundary entry and child buffer reuse.
-  Ordering and the public API are unchanged.
+- **Breaking:** serialized configurations change accordingly. `Shuffle` has no
+  `seed`; `Repeat` and `Cycle` accept a `shuffled` field that defaults to false; mix
+  parts use `schedule`; schedules are `Uniform` or `Trapezoid`; `StepBy { step, inner }`
+  is new. Seeded `Shuffle`, `Weighted`, `Stride`, `Slice`, `Shard`, `DelayedLinear`
+  and `sampling` fields are rejected rather than reinterpreted.
 
-- **Breaking:** make concatenation salts independent of grouping. Regrouping
-  `concat([a, b, c])` as `concat([a, concat([b, c])])`, or adding empty
-  concatenations, now preserves every enclosing shuffle and shuffled repetition.
-  Source order, original lengths, empty or discarded sources and shuffled layers
-  still contribute. Use a constant-size associative summary during compilation;
-  runtime nodes still store only the final salt. Shuffles above multiple source
-  contributions can change. The public API and serialized format are unchanged.
-  Resume older orders with their original crate version.
+- **Breaking:** remove `salt_path`; pass the dataset identity's bytes to `salt`.
+  Rename `ORDERING_VERSION` to `CRATE_VERSION`.
 
-- **Breaking:** derive distinct keys for nested shuffled layers. Each shuffle,
-  shuffled repeat and shuffled cycle advances its configuration salt for enclosing
-  shuffles, including when folded away. Equivalent one-pass forms remain
-  interchangeable, and children keep their own permutations. Orders with no nested
-  shuffled layers are unchanged. The public API and serialized format are unchanged.
-  Resume older orders with their original crate version.
+- Store each shuffled node's first-pass key in the compiled order and derive later
+  passes' keys only when a cursor enters them; `set_seed` re-derives the stored keys
+  in time proportional to the number of shuffled nodes. Compile a shuffle as a
+  one-pass shuffled repetition, and keep concat and repetition cursor state in
+  dedicated structs.
 
-- **Breaking:** remove the per-shuffle seed. Use `.shuffle()` and select the run
-  with `Order::with_seed` or `Order::set_seed`; source salts distinguish datasets.
-  Remove `seed` from `Seq::Shuffle` and its serialized form; old seeded `Shuffle`
-  configurations are rejected. `.shuffle()` matches `.repeat_shuffled(1)` and the
-  former `.shuffle(0)`. Shuffled repeat and cycle ordering is unchanged.
-  Resume older orders with their original crate version.
-
-- Share repetition construction and folding between repeat and cycle compilation.
-  Keep their overflow and empty-input checks separate. Ordering is unchanged.
-
-- Store the order seed only in `Order` and pass it through cursor traversal.
-  Remove per-node seed copies and their seek-time updates; derived shuffle keys
-  remain cached. Ordering and the public API are unchanged.
-
-- **Breaking:** remove `Item::epoch`, accumulated repetition metadata and
-  `ErrorKind::EpochOverflow`. Items identify the source and record only. Remove the
-  internal `Draw` wrapper and repeat-count products; every sequence length must
-  still fit `usize`. Children receive only the unchanged order seed, and each
-  shuffled repeat uses its own local pass number. Record ordering is unchanged.
-  Cover `repeat_shuffled(1).take(2).repeat_shuffled(2)` with a regression that keeps
-  the same selected pair on both outer passes.
-
-- **Breaking:** `repeat(times)` and `cycle_to(len)` now preserve their input's record
-  order on every pass, including nested shuffles. Add `repeat_shuffled(times)` and
-  `cycle_to_shuffled(len)` to permute the immediate input separately on each pass,
-  including the first, using the order seed and local pass number. These operations
-  reject mix descendants like `shuffle`; shuffle the inputs before mixing.
-  Add serialized `ShuffledRepeat` and `ShuffledCycle` variants; existing `Repeat`
-  and `Cycle` configurations adopt the plain behavior.
-  Resume older orders with their original crate version.
-
-- Simplify concatenation pruning to one pass over child ranges, reusing the existing
-  vectors. Shuffle salts and output orders are unchanged.
-
-- **Breaking:** derive shuffle salts from the original configuration during compilation.
-  Sources contribute their salts and original lengths, including empty or discarded
-  sources. Unary operations pass salts through; concatenations combine child salts in
-  configuration order before flattening. Nested grouping can affect the result.
-  Return salts with compiler summaries and remove the source-salt table and traversal
-  of pruned nodes. Single-source shuffle arithmetic is unchanged;
-  shuffles over concatenations can change, including when selections retain only one
-  source. Resume existing orders with their original crate version.
-
-- **Breaking:** reject shuffles whose input configuration contains any mix, including
-  empty or single-part mixes and mixes beneath concatenations, repetitions or selections.
-  `Order::new` reports `ErrorKind::ShuffleContainsMix` at the nearest enclosing shuffle.
-  Shuffle each input before mixing instead. Remove the shuffled cursor's mix-seek cache
-  and the callback-based random traversal. Accepted configurations keep their ordering.
-
-- **Breaking:** remove `Eq` and `Hash` from `Seq`, `MixPart` and `Schedule`.
-  `PartialEq` now uses ordinary `f64` equality for schedule parameters: signed
-  zeros compare equal, and configurations containing NaN compare unequal even
-  to themselves. Remove the custom floating-point bit comparison. Ordering,
-  validation and serialized configurations are unchanged.
-
-- **Breaking:** rename `Schedule::fading` to `Schedule::fade` to pair with
-  `Schedule::ramp`. Replace `fading(fade, off)` calls with `fade(fade, off)`.
-  Parameters, validation, ordering and serialized configurations are unchanged.
-
-- **Breaking:** rename `Seq::map` and `Seq::try_map` to `Seq::map_sources` and
-  `Seq::try_map_sources` to make clear that they transform source handles.
-  Update mapping calls to use the new names. Ordering, callback behavior and
-  serialized configurations are unchanged.
-
-- Compare `Item` source ordinals and record indices before source values, avoiding
-  source comparisons when any of them differ. Document that equality includes
-  source values and that their comparison cost depends on the source type.
-
-- **Breaking:** rename `ErrorKind::TooSteep` to `ErrorKind::ScheduleTooSteep`.
-  Update matches and constructors to use the new variant name. Its diagnostic
-  fields, error paths, display messages and ordering behavior are unchanged.
-
-- Correct the `Source` documentation to describe the returned `Item`, including
-  its source ordinal, source reference and record index.
-
-- **Breaking:** rename `Seq::cycle(len)` to `Seq::cycle_to(len)` to make its
-  exact finite target length explicit. Replace `.cycle(len)` calls with
-  `.cycle_to(len)`. The `Seq::Cycle` variant, serialized configurations and
-  ordering behavior are unchanged.
-
-- **Breaking:** replace `Cursor::seek` and `Cursor::set_range` with
-  `Cursor::reset(range)`. Each reset replaces the remaining range and moves to its
-  start, using absolute order positions. Replace `set_range(range)` with
-  `reset(range)`; replace `seek(pos)` with `reset(pos..end)` to retain a chosen
-  endpoint, or `reset(pos..)` to read through the order's end. `reset(..)` restarts
-  the whole order. Remove `BoundsError::SeekOutOfBounds`; resets use the same
-  range validation as `Order::cursor`, and failures leave the cursor unchanged.
-  Buffer reuse, ordering and serialized configurations are unchanged.
-
-- **Breaking:** rename `ORDERING_VERSION` to `CRATE_VERSION`. Its value remains
-  the linked crate's package version, including patches that preserve ordering.
-  Use the renamed constant for conservative exact-version checkpoint checks.
-
-- **Breaking:** split full-order iteration from ranged cursor construction.
-  `Order::iter()` now returns a `Cursor` directly; replace `iter(..)?` or
-  `iter(..).unwrap()` with `iter()`. Use `Order::cursor(range)` for checked ranges;
-  it returns `Result<Cursor, BoundsError>`. Both cursors remain seekable, and
-  `IntoIterator for &Order` uses `iter()`. Ordering, bounds errors, allocation
-  behavior and serialized configurations are unchanged.
-
-- **Breaking:** rename `Sampling` to `Schedule`, `MixPart.sampling` to
-  `MixPart.schedule`, `SamplingReason` to `ScheduleReason`, and
-  `ErrorKind::InvalidSampling { sampling, reason }` to
-  `ErrorKind::InvalidSchedule { schedule, reason }`. Rename the `sampling` field
-  to `schedule` in serialized mix parts; the old field is rejected. Schedule
-  variants, parameters, error messages and ordering outputs are unchanged.
-
-- **Breaking:** use `usize` for lengths, positions, offsets, strides and element
-  counts throughout compilation and iteration. The `len` fields in
-  `ErrorKind::SkipOutOfRange`, `TakeOutOfRange` and `ScheduleTooSteep` now use `usize`.
-  Length growth uses checked `usize` arithmetic. Seeds, salts, shuffle arithmetic
-  and the numerical mix limit remain `u64`; supported orders are unchanged.
-
-- **Breaking:** remove `Sampling::DelayedLinear`. `delayed(at)` and
-  `ramp(start, full)` now return `Trapezoid` with `fade: 1.0` and `off: 1.0`.
-  Replace serialized `DelayedLinear` variants with `Trapezoid`, preserving `start`
-  and `full` and adding those two fields; the old variant is rejected.
-  Equivalent constructor and explicit trapezoid values now compare
-  alike; `Uniform` remains distinct. Ordering outputs are unchanged. Debug output
-  and error messages that include these schedules now show `Trapezoid`.
-
-- **Breaking:** move schedule diagnostics into `ErrorKind`. `InvalidSchedule` now
-  contains `schedule` and `reason: ScheduleReason`; `ScheduleTooSteep` contains `len`,
-  `peak_rate` and `limit`. Remove `Error::sampling_detail` and `SamplingDetail`.
-  Read the fields through `kind()` or `into_kind()`, which now preserves schedule
-  diagnostics. Error paths, full error messages and ordering are unchanged.
-
-- **Breaking:** merge `Seq::mix_with` into `Seq::mix`, which now accepts bare
-  sequences, `(seq, schedule)` pairs or `MixPart` values. Replace `mix_with` calls
-  with `mix`. Empty inputs need an explicit element type, such as
-  `Seq::mix(std::iter::empty::<Seq<usize>>())`. Ordering and serialized
-  configurations are unchanged.
-
-- **Breaking:** require every sequence node's length to fit in `usize`, including
-  intermediates later truncated or discarded. Oversized intermediates on 32-bit
-  targets are rejected at their node. Remove `ErrorKind::OrderTooLong`; length
-  overflow uses `ErrorKind::LengthOverflow` on all targets.
-
-- **Breaking:** remove `salt_path`. Choose the dataset identity and its byte
-  representation in the caller, then pass those bytes to `salt`.
-
-- **Breaking:** remove `Cursor::remaining`; use `ExactSizeIterator::len()`
-  (`cursor.len()`) to read the remaining element count.
-
-- Dataset examples derive salts from stable dataset names rather than storage paths.
-
-- Position cursors when constructed and when moved to empty ranges. Remove deferred
-  root initialization and separate tracking of the tree's previous position.
-  `last()` now uses a direct lookup. Construction, empty-range transitions and
-  `last()` can allocate; seeks within an initialized mix still reuse its buffers.
-  Item order and public signatures are unchanged.
-
-- Simplify cursor allocation behavior: clones no longer preserve spare buffer
-  capacity, and concat transitions create fresh child state. Repeated seeks within
-  an initialized mix still reuse its buffers. Item order and public signatures are
-  unchanged; clones and transitions may allocate on subsequent seeks.
-
-- Remove the checkpoint worker example.
-
-- Replace the custom benchmark harness and campaign runner with a small Criterion
-  suite. Run `cargo bench --bench ordering`; use Criterion's saved baselines for
-  comparisons.
-
-- **Breaking:** remove `Seq::check` and `Seq::validate`; all sequence builders
-  accept any `T` and defer configuration checks to `Order::new` or
-  `Order::with_seed`, which require `T: Source`. `BoundsError` is reserved for
-  order and cursor access.
-
-- **Breaking:** replace `Seq::stride(step, offset)` and `Seq::Stride` with
-  `skip(offset).step_by(step)` and `Seq::StepBy { step, inner }`. Remove
-  `Seq::slice` and `Seq::Slice`; use `skip(start).take(len)` for a range.
-  Each operation adds a level of configuration depth. `skip` rejects an offset
-  past the end, while the former `stride` returned an empty sequence.
-  Serialized `Stride` and `Slice` configurations must be rewritten using these
-  operations; they are rejected during deserialization.
-
-- **Breaking:** remove `Seq::shard`, `Seq::Shard` and `ErrorKind::InvalidShard`.
-  Partition worker positions with `skip(index).step_by(count)` and check
-  `index < count` in the caller. Each operation adds a level of configuration
-  depth. Unlike the former `shard`, a skip past the end is an error; for a known
-  length, use `skip(index.min(len))` when those workers should be empty.
-  Serialized `Shard` configurations are rejected.
-
-- **Breaking:** use `Item { source_ordinal, source, record_index }` for both
-  `Order::get` and `Cursor` iteration. Remove `Order::get_indexed`,
-  `Order::source_index`, `Cursor::indexed` and `IndexedCursor`. Every result
-  identifies its source explicitly, including equal and zero-sized handles.
-
-- **Breaking:** remove `Seq::Weighted`, `Seq::weighted`, `Seq::weighted_with`,
-  `WeightedPart`, and the `InvalidWeight`, `ZeroWeights` and `EmptyWeightedPart`
-  error kinds. Choose exact counts with `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count)])`
-  or attach schedules with `Seq::mix`. Remove the exact floating-point quota
-  allocator and its fixtures and benchmarks. Serialized `Weighted` configurations
-  must be rewritten using explicit counts.
-
-- **Breaking:** remove `Order::sources_mut`. Open or transform source handles with
-  `Seq::map_sources` or `Seq::try_map_sources` before compilation.
-- **Breaking:** make checked access the default and remove the corresponding `try_`
-  aliases. `Order::get` returns `Option`; `Order::cursor` and cursor
-  `seek`/`set_range` return `Result`. Invalid cursor
-  operations preserve its state.
-
-- **Breaking:** reduce `MAX_DEPTH` from 256 to 16 and remove `Seq::dispose`.
-  `Seq` remains an enum. Compilation, mapping and cleanup now use ordinary recursion
-  within the supported depth limit;
-  arbitrarily deep hand-built trees are unsupported.
-
-- **Breaking:** remove `Order::prepare` and the `Preparation`, `PreparedNode`,
-  `PreparedKind`, `PreparedParameters`, `PreparedSource`, `PreparedMix` and
-  `WeightedAllocation` report types. Use `Order::new` or `Order::with_seed` to
-  compile orders. Configuration errors retain their paths and sampling details.
-- **Breaking:** schedules now use independent curves on a shared virtual clock.
-  `Uniform` is constant in virtual time, like `delayed(0.0)` or `until(1.0)`.
-  Start/full/fade/off values no longer denote fractions of the final output;
-  all curves adapt when merged, so linear ramps generally become nonlinear in
-  output progress. Overlaps and gaps work without a uniform filler.
-- Remove the uniform-remainder sweep, compensated sum/expansion arithmetic,
-  combined capacity checks and tolerance/clamping policy. Profiles now have at
-  most five segments and compile independently in linear time in the part count.
-  Individual parameter, coefficient and numerical-resolution checks remain.
-- Remove `ErrorKind::Overcommitted`, `ErrorKind::SamplingOverflow`,
-  `SamplingDiagnostics` and `PreparedMix::diagnostics`.
-- Seek by summing integer counts below virtual-time keys and bounded bisection.
-  Counts, source-local order and seek/walk agreement remain exact;
-  shuffle arithmetic is unchanged. Scheduled order fingerprints
-  change: resume existing checkpoints with their original crate version.
+- Replace the custom benchmark harness and campaign runner with a Criterion suite
+  (`cargo bench --bench ordering`), remove the checkpoint worker example, derive the
+  examples' salts from dataset names, and give each documented rule one home in the
+  crate, `Schedule` and `Seq` docs.
 
 ## 0.3.0
 

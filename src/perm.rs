@@ -24,6 +24,22 @@
 //! which determines all six round keys. A [`Key`] stores 384 bits, but has only
 //! 64 bits of independent input. This is for reproducible ordering, not cryptography.
 //!
+//! # Configuration salts
+//!
+//! Besides the order seed and pass number, a key depends on a salt that summarizes the
+//! shuffled input's configuration. The compiler derives it from the original tree,
+//! before pruning or flattening, so compilation never changes it:
+//!
+//! - A source contributes a hash of its [`salt`](crate::Source::salt) and original
+//!   length, even when it is empty or a selection excludes it ([`source_salt`]).
+//! - Plain repetitions, skips, takes and strides pass their child's salt through.
+//! - Each shuffled layer advances the salt by one step, independent of its pass count
+//!   or output length and even when its runtime node folds away. Enclosing shuffles
+//!   therefore get distinct keys while the child keeps its own ([`shuffled_salt`]).
+//! - A concatenation combines its children's salts into an associative polynomial
+//!   fingerprint, so regrouping or adding empty concatenations changes nothing
+//!   ([`combine_salts`]).
+//!
 //! `permute`, its rounds and `key` are `#[inline(always)]`: the shuffle step is one small
 //! function and the permutation is most of it, and an inlined derivation keeps the round
 //! keys in registers instead of returning them through memory.

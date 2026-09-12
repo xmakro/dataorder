@@ -82,64 +82,50 @@
 //!
 //! # Shuffles and repetitions
 //!
-//! A shuffle visits every child position exactly once. Its permutation depends on:
+//! A shuffle visits every position of its input exactly once. Its permutation depends
+//! on the order's seed and on the input's configuration salt: the ordered source salts,
+//! original source lengths and shuffled layers of the original configuration, before
+//! compilation simplifies it. Give datasets stable [`Source::salt`] values to
+//! distinguish their shuffles when their lengths match. [`Order::set_seed`] changes
+//! the seed for all shuffles without rebuilding the order. Shuffles use a six-round
+//! Feistel permutation with cycle walking; they are intended for reproducible
+//! ordering, not cryptography.
 //!
-//! - The order's seed.
-//! - The input configuration's ordered source salts, original source lengths and
-//!   shuffled layers, before pruning or flattening.
-//!
-//! The input configuration of a shuffle or shuffled repetition must contain no mixes,
-//! including empty or single-part mixes and mixes nested under other operations.
-//! Shuffle each input before mixing. [`Order::new`] reports
-//! [`ErrorKind::ShuffleContainsMix`] at the enclosing shuffle.
-//!
-//! Give datasets stable [`Source::salt`] values to distinguish their shuffles when
-//! their lengths match. [`Order::set_seed`] changes the seed for all shuffles
-//! without rebuilding the order. Shuffles use a six-round Feistel permutation with
-//! cycle walking; they are intended for reproducible ordering, not cryptography.
+//! The input of a shuffle or shuffled repetition must contain no mixes, including
+//! empty or single-part mixes and mixes nested under other operations. Shuffle each
+//! input before mixing; [`Order::new`] reports [`ErrorKind::ShuffleContainsMix`] at
+//! the enclosing shuffle.
 //!
 //! `x.repeat(3)` and `x.cycle_to(len)` preserve the input's record order on every pass,
-//! including any nested shuffles. `x.shuffle().repeat(3)` repeats one fixed
-//! permutation three times.
-//!
+//! including any nested shuffles: `x.shuffle().repeat(3)` repeats one permutation three
+//! times, and `x.repeat(3).repeat(2)` has the same order as `x.repeat(6)`.
 //! `x.repeat_shuffled(3)` and `x.cycle_to_shuffled(len)` permute the immediate input's
-//! positions separately on each pass, including the first. Their permutation uses
-//! the order's seed, the local pass number and the input's configuration salt.
-//! `x.shuffle()` produces the same order as `x.repeat_shuffled(1)`.
-//! Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed for all shuffled operations.
-//! Nested shuffles and shuffled repetitions keep their own permutations; enclosing
-//! repeats never reseed them. Each shuffled layer derives a new configuration salt
-//! for enclosing shuffles, so `x.shuffle().shuffle()` uses distinct permutation keys.
-//! Distinct keys can still produce the same permutation, especially for small inputs.
-//! Every child receives the unchanged order seed, with no enclosing epoch.
+//! positions separately on each pass, including the first, using the order's seed, the
+//! pass number and the input's salt. `x.shuffle()` produces the same order as
+//! `x.repeat_shuffled(1)`, and the two can replace each other inside larger sequences.
+//! Nested shuffles and shuffled repetitions keep their own permutations: enclosing
+//! repeats never reseed them, and a plain repetition of a shuffled repetition replays
+//! the same series of permutations. Each shuffled layer advances the salt for the
+//! shuffles above it, so `x.shuffle().shuffle()` uses distinct permutation keys;
+//! distinct keys can still produce the same permutation, especially for small inputs.
 //! A shortened final pass takes a prefix of its full permutation.
 //!
-//! Plain repetition of a shuffled repetition replays the same series of permutations.
-//! Nested shuffled repetitions each permute their own input and therefore do not
-//! flatten into one shuffled repetition.
+//! An existing shuffle survives these configuration changes:
 //!
-//! `x.repeat(3).repeat(2)` has the same order as `x.repeat(6)`.
-//! Adding, reordering or nesting mixture
-//! inputs does not reseed existing inputs, including those with nested repetitions.
-//! Their own configurations and the order seed determine their permutations.
+//! - Adding, reordering or nesting mix inputs. Each input's own configuration and the
+//!   order seed determine its permutations, including those of nested repetitions.
+//! - Adding an outer repeat, which preserves the entire first pass, or extending an
+//!   outermost repeat or cycle, plain or shuffled, which preserves the existing prefix.
+//! - Regrouping concatenations, such as changing `concat([a, b, c])` to
+//!   `concat([a, concat([b, c])])`, or adding empty concatenations.
 //!
-//! Adding an outer repeat preserves the entire first pass. Extending an outermost
-//! repeat or cycle, plain or shuffled, preserves the existing prefix. A selection fixes the positions
-//! that subsequent operations can draw from: `x.repeat_shuffled(1).take(2).repeat_shuffled(2)`
-//! permutes the same selected pair on both outer passes.
-//!
-//! Configuration salts are computed from the original tree. Each source contributes
-//! its salt and original length, even when empty. Plain repetitions and selections
-//! pass that value through unchanged. Each shuffle, shuffled repeat or shuffled cycle
-//! advances the salt once, independent of its count or output length, even when its
-//! runtime node is folded away. These three operations use the same salt step, so
-//! their equivalent one-pass forms remain interchangeable inside larger sequences.
-//! A concatenation combines its children's salts in order, independent of grouping.
-//! Adding empty concatenations or changing `concat([a, b, c])` to
-//! `concat([a, concat([b, c])])` preserves shuffling. An actual source of length zero
-//! still contributes its identity. Compiler pruning and flattening never change
-//! these salts. Modifying an excluded source can change a shuffle above the selection,
-//! even though that source contributes no records.
+//! A selection fixes the positions that later operations draw from:
+//! `x.repeat_shuffled(1).take(2).repeat_shuffled(2)` permutes the same selected pair on
+//! both outer passes. Because the salt follows the original configuration, a source
+//! still contributes its salt and original length when it is empty or excluded by a
+//! selection, so modifying such a source can change a shuffle above the selection even
+//! though it contributes no records. Compilation never changes salts; the derivation
+//! is documented with the permutation code.
 //!
 //! # Validation and limits
 //!
