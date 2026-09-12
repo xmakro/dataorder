@@ -226,7 +226,8 @@ pub(crate) enum NodeCursor<'a> {
     Shuffle(ShuffleCursor<'a>),
     Repeat(RepeatCursor<'a>),
     /// A unit stride: a plain selection of the child, which needs no count of the
-    /// elements left.
+    /// elements left. Kept apart from `Stride`: routing unit strides through the
+    /// stride step costs about a fifth more per element on sliced walks.
     Slice {
         start: usize,
         child: Box<Self>,

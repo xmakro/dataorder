@@ -40,9 +40,8 @@ impl<'a> Iter<'a> {
         let counts = &self.counts;
         // Leaves in part order, so that ties go to the lower part index.
         self.tree.rebuild(counts.iter().enumerate().filter(|&(s, &c)| c < il.parts[s].n).map(|(s, &c)| {
-            let mut seg = 0;
-            let key = il.key(s, c, &mut seg);
-            (key, slot(il, s, c, key, seg))
+            let key = il.key(s, c);
+            (key, slot(il, s, c, key))
         }));
         for _ in base..a {
             advance(il, &mut self.tree);
@@ -82,13 +81,9 @@ impl std::iter::FusedIterator for Iter<'_> {}
 #[derive(Clone, Copy, Debug)]
 struct Slot {
     /// The part.
-    part: u32,
+    part: usize,
     /// Index of the element within the part.
     j: usize,
-    /// Cached profile segment for locating the next key; see
-    /// [`Profile::quantile`](super::profile::Profile::quantile).
-    /// Stored as `u32` to avoid padding on 64-bit targets and widened to `usize` for lookup.
-    seg: u32,
     /// Key of the element after this one, computed ahead of time so that replacing this
     /// element in the tree does not wait for the arithmetic; NaN for the last element
     /// (keys are finite), avoiding a separate exhaustion flag.
@@ -164,11 +159,10 @@ fn count_below(il: &Interleave, part: usize, t: f64) -> usize {
     // Guess from the share function, then make it exact against the real keys.
     let guess = s.n as f64 * il.profile(part).share(t) - s.phi;
     let mut c = (guess.ceil().max(0.0) as usize).min(s.n);
-    let mut seg = 0;
     for _ in 0..4 {
-        if c < s.n && il.key(part, c, &mut seg) < t {
+        if c < s.n && il.key(part, c) < t {
             c += 1;
-        } else if c > 0 && il.key(part, c - 1, &mut seg) >= t {
+        } else if c > 0 && il.key(part, c - 1) >= t {
             c -= 1;
         } else {
             return c;
@@ -178,7 +172,7 @@ fn count_below(il: &Interleave, part: usize, t: f64) -> usize {
     let (mut lo, mut hi) = (0, s.n);
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if il.key(part, mid, &mut seg) < t { lo = mid + 1 } else { hi = mid }
+        if il.key(part, mid) < t { lo = mid + 1 } else { hi = mid }
     }
     lo
 }
@@ -186,15 +180,15 @@ fn count_below(il: &Interleave, part: usize, t: f64) -> usize {
 /// The slot for element `j` of `part` (whose key is `key`), with the following element's
 /// key already computed.
 #[inline(always)]
-fn slot(il: &Interleave, part: usize, j: usize, key: f64, mut seg: usize) -> Slot {
+fn slot(il: &Interleave, part: usize, j: usize, key: f64) -> Slot {
     let next_key = if j + 1 < il.parts[part].n {
-        let next = il.key(part, j + 1, &mut seg);
+        let next = il.key(part, j + 1);
         debug_assert!(next >= key, "interleave: keys of sequence {part} not monotone at {j}");
         next
     } else {
         f64::NAN
     };
-    Slot { part: part as u32, j, seg: seg as u32, next_key }
+    Slot { part, j, next_key }
 }
 
 /// Takes the tree's minimum and replaces it with the part's next element.
@@ -204,13 +198,13 @@ fn slot(il: &Interleave, part: usize, j: usize, key: f64, mut seg: usize) -> Slo
 /// overlap with the tree update.
 #[inline(always)]
 fn advance(il: &Interleave, tree: &mut TournamentTree<Slot>) -> (usize, usize) {
-    let (_, &Slot { part, j, seg, next_key }) = tree.min().expect("interleave: iterator exhausted");
+    let (_, &Slot { part, j, next_key }) = tree.min().expect("interleave: iterator exhausted");
     if next_key.is_nan() {
         tree.remove_min();
     } else {
-        tree.set_min(next_key, slot(il, part as usize, j + 1, next_key, seg as usize));
+        tree.set_min(next_key, slot(il, part, j + 1, next_key));
     }
-    (part as usize, j)
+    (part, j)
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 use super::MAX_TOTAL_LEN;
 use super::profile::Profile;
-use crate::{ErrorKind, ScheduleReason};
+use crate::ErrorKind;
 
 /// Spreads a part's elements along a shared virtual clock from 0 to 1.
 ///
@@ -166,19 +166,16 @@ impl Schedule {
     /// coefficients and satisfy `len × peak rate ≤ MAX_TOTAL_LEN`.
     pub(crate) fn profile(self, len: usize) -> Result<Option<Profile>, ErrorKind> {
         let Self::Trapezoid { start, full, fade, off } = self else { return Ok(None) };
-        let invalid = |reason| ErrorKind::InvalidSchedule { schedule: self, reason };
-        if ![start, full, fade, off].iter().all(|d| d.is_finite()) {
-            return Err(invalid(ScheduleReason::NonFiniteParameter));
-        }
+        // NaN fails every comparison and an infinity lies outside [0, 1].
         if !(0.0 <= start && start <= full && full <= fade && fade <= off && off <= 1.0 && start < off) {
-            return Err(invalid(ScheduleReason::InvalidBreakpoints));
+            return Err(ErrorKind::InvalidSchedule { schedule: self });
         }
         if len == 0 {
             return Ok(None);
         }
         let profile = Profile::trapezoid(start, full, fade, off);
         if !profile.is_finite() {
-            return Err(invalid(ScheduleReason::InvalidBreakpoints));
+            return Err(ErrorKind::InvalidSchedule { schedule: self });
         }
         let peak_rate = profile.max_rate();
         if len as f64 * peak_rate > MAX_TOTAL_LEN as f64 {

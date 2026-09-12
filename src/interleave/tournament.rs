@@ -53,9 +53,6 @@ impl<V> TournamentTree<V> {
     }
 
     /// Replaces the tree by one over new leaves, reusing every allocation.
-    ///
-    /// # Panics
-    /// If there are `u32::MAX / 2` leaves or more.
     pub(crate) fn rebuild(&mut self, leaves: impl IntoIterator<Item = (f64, V)>) {
         // `winner[m]` is the winner of the subtree at node `m`: leaves `n..n+k` hold the
         // keys, `n+k..2n` are the padding, and the internal nodes are filled bottom-up.
@@ -67,11 +64,10 @@ impl<V> TournamentTree<V> {
         self.values.clear();
         self.values.reserve(at_most);
         for (key, value) in leaves {
-            winner.push(Entry::new(key, winner.len() as u32));
+            winner.push(Entry::new(key, winner.len()));
             self.values.push(value);
         }
         let k = winner.len();
-        assert!(k < (u32::MAX / 2) as usize, "tournament tree: too many leaves");
         let n = k.next_power_of_two();
         winner.resize(2 * n, Entry::new(REMOVED, 0));
         // Move the leaves to their nodes, from the back so that nothing is overwritten
@@ -80,7 +76,7 @@ impl<V> TournamentTree<V> {
             winner[n + i] = winner[i];
         }
         for i in k..n {
-            winner[n + i] = Entry::new(REMOVED, i as u32);
+            winner[n + i] = Entry::new(REMOVED, i);
         }
         self.nodes.clear();
         // A cursor first positioned near the end may have only one live leaf. Reserve
@@ -106,7 +102,7 @@ impl<V> TournamentTree<V> {
             return None;
         }
         let w = self.nodes[0];
-        Some((w.key(), &self.values[w.leaf as usize]))
+        Some((w.key(), &self.values[w.leaf]))
     }
 
     /// Gives the winning leaf a new key and value and replays its path.
@@ -117,7 +113,7 @@ impl<V> TournamentTree<V> {
     pub(crate) fn set_min(&mut self, key: f64, value: V) {
         assert!(self.live > 0, "tournament tree: empty");
         let leaf = self.nodes[0].leaf;
-        self.values[leaf as usize] = value;
+        self.values[leaf] = value;
         self.replay(Entry::new(key, leaf));
     }
 
@@ -140,7 +136,7 @@ impl<V> TournamentTree<V> {
     /// once here, instead of testing the live count on every ordinary replacement.
     #[cold]
     fn keep_survivor(&mut self) {
-        let leaf = self.nodes[0].leaf as usize;
+        let leaf = self.nodes[0].leaf;
         self.values.swap(0, leaf);
         self.values.truncate(1);
         self.nodes.truncate(1);
@@ -152,7 +148,7 @@ impl<V> TournamentTree<V> {
     #[inline(always)]
     fn replay(&mut self, mut cand: Entry) {
         let n = self.nodes.len();
-        let mut m = (n + cand.leaf as usize) / 2;
+        let mut m = (n + cand.leaf) / 2;
         while m >= 1 {
             let stored = self.nodes[m];
             let (loser, winner) = trade(stored.beats(cand), cand, stored);
@@ -168,12 +164,12 @@ impl<V> TournamentTree<V> {
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     key: u64,
-    leaf: u32,
+    leaf: usize,
 }
 
 impl Entry {
     #[inline]
-    fn new(key: f64, leaf: u32) -> Self {
+    fn new(key: f64, leaf: usize) -> Self {
         Self { key: sortable(key), leaf }
     }
 

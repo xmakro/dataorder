@@ -42,13 +42,6 @@ impl Error {
     pub fn path(&self) -> &[usize] {
         &self.path
     }
-
-    /// Consumes the error and returns its kind, including schedule diagnostics,
-    /// discarding only the path.
-    #[must_use]
-    pub fn into_kind(self) -> ErrorKind {
-        self.kind
-    }
 }
 
 impl fmt::Display for Error {
@@ -71,36 +64,14 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Why the schedule in [`ErrorKind::InvalidSchedule`] is invalid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ScheduleReason {
-    /// At least one breakpoint is NaN or infinite.
-    NonFiniteParameter,
-    /// Finite breakpoints violate their ordering, range or positive-area constraints,
-    /// or lie too close together for finite profile coefficients.
-    InvalidBreakpoints,
-}
-
-impl fmt::Display for ScheduleReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NonFiniteParameter => write!(f, "a breakpoint is not finite"),
-            Self::InvalidBreakpoints => write!(f, "breakpoints are out of range, out of order, too close together, or have zero area"),
-        }
-    }
-}
-
 /// The reason a configuration failed validation.
 ///
 /// ```
-/// use dataorder::{ErrorKind, Order, Schedule, ScheduleReason, Seq};
+/// use dataorder::{ErrorKind, Order, Schedule, Seq};
 /// let err = Order::new(Seq::source(10).step_by(0)).unwrap_err();
 /// assert!(matches!(err.kind(), ErrorKind::ZeroStep));
 /// let err = Order::new(Seq::mix([(Seq::source(10), Schedule::delayed(1.5))])).unwrap_err();
-/// assert!(matches!(err.into_kind(), ErrorKind::InvalidSchedule {
-///     reason: ScheduleReason::InvalidBreakpoints, ..
-/// }));
+/// assert_eq!(err.kind(), &ErrorKind::InvalidSchedule { schedule: Schedule::delayed(1.5) });
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -126,17 +97,14 @@ pub enum ErrorKind {
     ShuffleContainsMix,
     /// A sequence length exceeds `usize::MAX`, including at an intermediate node.
     LengthOverflow,
-    /// A mix has 2³¹ − 1 parts or more.
-    TooManyMixParts,
     /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
-    /// A schedule parameter is non-finite or its breakpoints are invalid; see
-    /// [`ScheduleReason`].
+    /// A schedule has a non-finite breakpoint, breakpoints out of range or order, no
+    /// time at a positive rate, or breakpoints too close together for finite profile
+    /// coefficients; see [`Schedule`].
     InvalidSchedule {
         /// The schedule.
         schedule: Schedule,
-        /// Why the schedule is invalid.
-        reason: ScheduleReason,
     },
     /// A mix part is too long for the steepness of its schedule (`length × its highest
     /// rate` exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN)).
@@ -160,9 +128,11 @@ impl fmt::Display for ErrorKind {
             Self::ZeroStep => write!(f, "step is zero"),
             Self::ShuffleContainsMix => write!(f, "cannot shuffle a sequence containing a mix; shuffle its inputs before mixing"),
             Self::LengthOverflow => write!(f, "sequence length exceeds usize::MAX"),
-            Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
-            Self::InvalidSchedule { schedule, reason } => write!(f, "invalid schedule {schedule:?}: {reason}"),
+            Self::InvalidSchedule { schedule } => write!(
+                f,
+                "invalid schedule {schedule:?}: breakpoints must be finite, ordered within [0, 1], allow time at a positive rate and not lie too close together"
+            ),
             Self::ScheduleTooSteep { len, peak_rate, limit } => {
                 write!(f, "mix part too long for the steepness of its schedule: length {len} × peak rate {peak_rate} exceeds {limit}")
             }

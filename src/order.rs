@@ -315,15 +315,6 @@ impl<T: fmt::Debug> fmt::Debug for Order<T> {
     }
 }
 
-impl<T: Source> TryFrom<Seq<T>> for Order<T> {
-    type Error = Error;
-
-    /// [`Order::new`].
-    fn try_from(seq: Seq<T>) -> Result<Self, Error> {
-        Self::new(seq)
-    }
-}
-
 impl<'a, T> IntoIterator for &'a Order<T> {
     type Item = Item<'a, T>;
     type IntoIter = Cursor<'a, T>;
@@ -436,7 +427,6 @@ impl<T: Source> Compiler<T> {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts),
             Seq::Mix(parts) => self.mix(parts),
-            Seq::Shuffle { inner } => self.repeat(1, *inner, true),
             Seq::Repeat { times, shuffled, inner } => self.repeat(times, *inner, shuffled),
             Seq::Cycle { len, shuffled, inner } => self.cycled(len, *inner, shuffled),
             Seq::Skip { n, inner } => self.skip(n, *inner),
@@ -545,10 +535,6 @@ impl<T: Source> Compiler<T> {
         }
         let schedules: Vec<Schedule> = parts.iter().map(|part| part.schedule).collect();
         let parts = self.children(parts.into_iter().map(|part| part.seq))?;
-        // The tournament tree indexes parts with u32 and needs a spare bit.
-        if parts.len() >= u32::MAX as usize / 2 {
-            return Err(self.err(ErrorKind::TooManyMixParts));
-        }
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
         let mut len = 0usize;
         for part in &parts {
@@ -594,25 +580,6 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
             // A single element or a unit stride is a plain selection of the child, which
             // may fold further.
             if len == 1 || step == 1 { slice(*child, offset, len) } else { Node::Stride { step, offset, len, child } }
-        }
-        Node::Concat { offsets: mut at, mut children } => {
-            at.clear();
-            let mut offset = 0;
-            children.retain_mut(|child| {
-                let base = offset;
-                offset += child.len();
-                let a = start.max(base);
-                let b = (start + len).min(offset);
-                if a >= b {
-                    return false;
-                }
-                at.push(a - start);
-                let node = std::mem::replace(child, Node::Empty);
-                *child = slice(node, a - base, b - a);
-                true
-            });
-            at.push(len);
-            if children.len() == 1 { children.pop().unwrap() } else { Node::Concat { offsets: at, children } }
         }
         node => Node::Stride { step: 1, offset: start, len, child: Box::new(node) },
     }

@@ -35,9 +35,7 @@ fn config_salt(seq: &Seq<Src>) -> perm::ConfigSalt {
         Seq::Source(s) => perm::source_salt(s.salt(), s.len),
         Seq::Concat(parts) => perm::combine_salts(parts.iter().map(config_salt)),
         Seq::Mix(_) => unreachable!("shuffle inputs cannot contain mixes"),
-        Seq::Shuffle { inner } | Seq::Repeat { shuffled: true, inner, .. } | Seq::Cycle { shuffled: true, inner, .. } => {
-            perm::shuffled_salt(config_salt(inner))
-        }
+        Seq::Repeat { shuffled: true, inner, .. } | Seq::Cycle { shuffled: true, inner, .. } => perm::shuffled_salt(config_salt(inner)),
         Seq::Repeat { inner, .. }
         | Seq::Cycle { inner, .. }
         | Seq::Skip { inner, .. }
@@ -125,11 +123,6 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
             } else {
                 eval(&cycle_of(inner, *len, n), run_seed)?
             }
-        }
-        Seq::Shuffle { inner } => {
-            let v = eval(inner, run_seed)?;
-            let (shape, key) = (Shape::new(v.len()), perm::key(run_seed, 0, config_salt(inner).value));
-            (0..v.len()).map(|i| v[perm::permute(shape, key, i)]).collect()
         }
         Seq::Repeat { times, shuffled: false, inner } => {
             // Validate the input even when the repeat is empty.
@@ -522,10 +515,7 @@ fn errors() {
     assert_eq!(Order::new(Seq::mix([src(0, MAX_MIX_LEN as usize), src(1, 1)])).unwrap_err(), root(ErrorKind::MixTooLong));
     // A mix that folds away is still validated; a schedule problem is found at the part.
     let over1 = Seq::mix([(src(0, 10), Schedule::delayed(2.0))]);
-    assert_eq!(
-        Order::new(over1).unwrap_err(),
-        at(ErrorKind::InvalidSchedule { schedule: Schedule::delayed(2.0), reason: crate::ScheduleReason::InvalidBreakpoints }, &[0])
-    );
+    assert_eq!(Order::new(over1).unwrap_err(), at(ErrorKind::InvalidSchedule { schedule: Schedule::delayed(2.0) }, &[0]));
     let steep = Seq::concat([a.clone(), Seq::mix([(a.clone(), Schedule::Uniform), (src(1, 1 << 30), Schedule::until(1e-6))])]);
     let err = Order::new(steep).unwrap_err();
     assert_eq!(err.kind(), &ErrorKind::ScheduleTooSteep { len: 1 << 30, peak_rate: 1e6, limit: crate::MAX_MIX_LEN });
@@ -537,7 +527,6 @@ fn errors() {
     assert_eq!(err.path(), [0, 1, 1, 0]);
     assert_eq!(err.to_string(), "cannot take 11 of 10 positions (at node 0/1/1/0)");
     assert_eq!(root(ErrorKind::ZeroStep).to_string(), "step is zero (at the root)");
-    assert_eq!(err.into_kind(), ErrorKind::TakeOutOfRange { n: 11, len: 10 });
     assert_eq!(Order::new(src(0, 0).cycle_to(5)).unwrap_err(), root(ErrorKind::EmptyCycle));
     assert_eq!(Order::new(Seq::concat([src(0, 3), src(1, 0).cycle_to(5)])).unwrap_err(), at(ErrorKind::EmptyCycle, &[1]));
     assert_eq!(Order::new(src(0, 5).take(6).cycle_to(5)).unwrap_err(), at(ErrorKind::TakeOutOfRange { n: 6, len: 5 }, &[0]));
@@ -747,14 +736,14 @@ fn folds() {
     assert!(
         matches!(root(a().skip(1).step_by(4).skip(1).step_by(2)), Node::Stride { step: 8, offset: 4, len: 12, ref child } if matches!(**child, Node::Source { offset: 1, .. }))
     );
+    // A selection of a concatenation is a unit stride over the whole concatenation;
+    // nested selections and strides still merge into one node.
     let cat = || Seq::concat([src(1, 10), src(2, 20), src(3, 30)]);
-    assert!(matches!(root(cat().take(10)), Node::Source { src: 0, offset: 0, len: 10 }));
-    assert!(matches!(root(cat().skip(15)), Node::Concat { ref offsets, ref children } if offsets == &[0, 15, 45] && children.len() == 2));
-    assert!(matches!(root(cat().skip(10).take(20)), Node::Source { src: 1, offset: 0, len: 20 }));
-    assert!(matches!(root(cat().skip(10)), Node::Concat { ref children, .. } if children.len() == 2));
-    assert!(
-        matches!(root(cat().skip(5).take(30)), Node::Concat { ref offsets, ref children } if offsets == &[0, 5, 25, 30] && children.len() == 3)
-    );
+    let is_cat = |node: &Node| matches!(node, Node::Concat { offsets, children } if offsets == &[0, 10, 30, 60] && children.len() == 3);
+    assert!(matches!(root(cat().take(10)), Node::Stride { step: 1, offset: 0, len: 10, ref child } if is_cat(child)));
+    assert!(matches!(root(cat().skip(15)), Node::Stride { step: 1, offset: 15, len: 45, ref child } if is_cat(child)));
+    assert!(matches!(root(cat().skip(10).take(20).skip(5)), Node::Stride { step: 1, offset: 15, len: 15, ref child } if is_cat(child)));
+    assert!(matches!(root(cat().skip(5).step_by(3).skip(2)), Node::Stride { step: 3, offset: 11, len: 17, ref child } if is_cat(child)));
     assert_eq!(
         ids(Order::new(cat().skip(15).skip(3).step_by(7)).unwrap().iter()),
         ids(Order::new(cat()).unwrap().iter()).into_iter().skip(18).step_by(7).collect::<Vec<_>>()

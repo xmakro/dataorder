@@ -32,7 +32,7 @@ fn reference(il: &Interleave) -> Vec<(usize, usize)> {
     let mut all = Vec::new();
     for (s, part) in il.parts.iter().enumerate() {
         for j in 0..part.n {
-            all.push((il.key(s, j, &mut 0), s, j));
+            all.push((il.key(s, j), s, j));
         }
     }
     all.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
@@ -200,10 +200,9 @@ fn every_seek_matches_the_slice() {
 fn keys_are_monotone_within_sequences() {
     for il in all_cases() {
         for (s, part) in il.parts.iter().enumerate() {
-            let mut seg = 0;
             let mut prev = f64::NEG_INFINITY;
             for j in 0..part.n {
-                let key = il.key(s, j, &mut seg);
+                let key = il.key(s, j);
                 assert!(key >= prev, "part {s} index {j}: {key} < {prev}");
                 prev = key;
             }
@@ -261,10 +260,9 @@ fn random_configurations() {
         }
         assert_eq!(next, lens);
         for (s, part) in il.parts.iter().enumerate() {
-            let mut seg = 0;
             let mut prev = -1.0;
             for j in 0..part.n {
-                let key = il.key(s, j, &mut seg);
+                let key = il.key(s, j);
                 assert!(key.is_finite() && (0.0..=1.0).contains(&key) && key >= prev, "{lens:?} {schedule:?} part {s} j {j}");
                 prev = key;
             }
@@ -323,7 +321,7 @@ fn schedules_are_followed_on_the_virtual_clock() {
         let all = full(&il);
         for step in 0..=100 {
             let t = step as f64 / 100.0;
-            let prefix = all.partition_point(|&(s, j)| il.key(s, j, &mut 0) < t);
+            let prefix = all.partition_point(|&(s, j)| il.key(s, j) < t);
             let mut counts = vec![0; lens.len()];
             for &(s, _) in &all[..prefix] {
                 counts[s] += 1;
@@ -346,7 +344,7 @@ fn uniform_and_explicit_constant_schedules_are_interchangeable() {
         // Changing another source's schedule does not alter this source's keys.
         let c = build(&lens, &[constant, Schedule::until(0.1), Schedule::delayed(0.9)]).unwrap();
         for j in 0..lens[0] {
-            assert_eq!(a.key(0, j, &mut 0), c.key(0, j, &mut 0));
+            assert_eq!(a.key(0, j), c.key(0, j));
         }
     }
 }
@@ -452,7 +450,7 @@ fn huge_lengths_seek_consistently() {
     // Nothing from the delayed sequences early on.
     assert!(il.iter(0..1000).all(|(s, _)| s != 2 && s != 4));
     // Project the singleton's virtual key through the whole mixture's CDF.
-    let expect = joint_count(&il, il.key(3, 0, &mut 0)) as usize;
+    let expect = joint_count(&il, il.key(3, 0)) as usize;
     let found = il.iter(expect - 100..expect + 100).any(|(s, _)| s == 3);
     assert!(found, "singleton not near {expect}");
 }

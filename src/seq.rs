@@ -44,24 +44,15 @@ pub enum Seq<T> {
     /// Schedules belong to this mix; see [`Schedule`]. The total length cannot exceed
     /// [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     Mix(Vec<MixPart<T>>),
-    /// Every position of `inner` once, in a seeded pseudorandom order.
-    ///
-    /// `inner` must contain no mixes; shuffle inputs before mixing. The permutation
-    /// depends on the order's seed and the input's configuration salt. See the crate's
-    /// [shuffle rules](crate#shuffles-and-repetitions) for both.
-    Shuffle {
-        /// The sequence to permute.
-        inner: Box<Self>,
-    },
     /// `inner` repeated `times` times. Any mix schedules inside restart each epoch.
     ///
     /// A plain repetition preserves the input's record order on every pass:
     /// `x.repeat(1)` is `x`, and `x.repeat(0)` is empty but still validates `inner`.
     /// A shuffled repetition permutes the input's positions separately on every pass,
-    /// including the first; nested shuffles keep their own permutations. Like
-    /// [`Shuffle`](Seq::Shuffle), a shuffled repetition's input must contain no mixes,
-    /// even when `times` is zero. See the crate's
-    /// [repetition rules](crate#shuffles-and-repetitions).
+    /// including the first; nested shuffles keep their own permutations, and
+    /// [`shuffle`](Seq::shuffle) builds a shuffled repetition with one pass. A shuffled
+    /// repetition's input must contain no mixes, even when `times` is zero. See the
+    /// crate's [shuffle and repetition rules](crate#shuffles-and-repetitions).
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -174,9 +165,10 @@ impl<T> Seq<T> {
     }
 
     /// This sequence in a pseudorandom order selected by the order's seed and input salt.
-    /// Produces the same order as `repeat_shuffled(1)`. Select the run with
+    /// Builds [`Repeat`](Seq::Repeat) with one shuffled pass, the same configuration as
+    /// `repeat_shuffled(1)`. Select the run with
     /// [`Order::with_seed`](crate::Order::with_seed) or [`Order::set_seed`](crate::Order::set_seed).
-    /// The sequence must contain no mixes; see [`Shuffle`](Seq::Shuffle).
+    /// The sequence must contain no mixes; see [`Repeat`](Seq::Repeat).
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -189,7 +181,7 @@ impl<T> Seq<T> {
     /// ```
     #[must_use]
     pub fn shuffle(self) -> Self {
-        Self::Shuffle { inner: Box::new(self) }
+        self.repeat_shuffled(1)
     }
 
     /// Repeats this sequence `times` times, preserving its record order on every pass.
@@ -408,7 +400,6 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Mix(parts) => Seq::Mix(
             parts.into_iter().map(|p| Ok(MixPart { seq: map_sources(p.seq, f)?, schedule: p.schedule })).collect::<Result<_, E>>()?,
         ),
-        Seq::Shuffle { inner } => map_sources(*inner, f)?.shuffle(),
         Seq::Repeat { times, shuffled, inner } => Seq::Repeat { times, shuffled, inner: Box::new(map_sources(*inner, f)?) },
         Seq::Cycle { len, shuffled, inner } => Seq::Cycle { len, shuffled, inner: Box::new(map_sources(*inner, f)?) },
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),

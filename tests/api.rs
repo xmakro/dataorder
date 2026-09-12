@@ -85,7 +85,7 @@ fn shuffles_reject_mix_descendants_before_folding() {
     for inner in cases {
         // Build the variant directly and discard its output: validation must still
         // reject the mix and report the shuffle's original configuration path.
-        let shuffled = Seq::Shuffle { inner: Box::new(inner) };
+        let shuffled = Seq::Repeat { times: 1, shuffled: true, inner: Box::new(inner) };
         let error = Order::new(Seq::concat([Seq::source(1), shuffled.repeat(0)])).unwrap_err();
         assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
         assert_eq!(error.path(), [1, 0]);
@@ -121,7 +121,7 @@ fn shuffle_restrictions_follow_ancestors_and_allow_mixed_siblings() {
 #[test]
 #[cfg(feature = "serde")]
 fn deserialized_shuffles_cannot_contain_mixes() {
-    let seq: Seq<usize> = serde_json::from_str(r#"{"Shuffle":{"inner":{"Mix":[]}}}"#).unwrap();
+    let seq: Seq<usize> = serde_json::from_str(r#"{"Repeat":{"times":1,"shuffled":true,"inner":{"Mix":[]}}}"#).unwrap();
     let error = Order::new(seq).unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::ShuffleContainsMix);
     assert!(error.path().is_empty());
@@ -140,8 +140,7 @@ fn configuration_errors_are_validated_only_when_compiling() {
         let error = Order::new(seq.clone()).unwrap_err();
         assert_eq!(error.kind(), &expected);
         assert_eq!(error.path(), [1, 0]);
-        assert_eq!(Order::with_seed(seq.clone(), 7).unwrap_err(), error);
-        assert_eq!(Order::try_from(seq).unwrap_err(), error);
+        assert_eq!(Order::with_seed(seq, 7).unwrap_err(), error);
     }
 }
 
@@ -204,7 +203,7 @@ fn hand_built_configuration() {
     assert_eq!(mixed, Seq::mix([shard("b", 40), shard("c", 5)]));
     let empty = Seq::mix(std::iter::empty::<Seq<Shard>>());
     assert!(Order::new(empty).unwrap().is_empty());
-    let order: Order<Shard> = seq.try_into().unwrap();
+    let order = Order::new(seq).unwrap();
     assert_eq!(order.len(), 100);
     let all = names(order.iter());
     assert_eq!(all.iter().filter(|e| e.0 == "a").count(), 75);
@@ -228,8 +227,7 @@ fn errors_name_kind_and_path() {
     assert_eq!(err.path(), [1, 1]);
     assert_eq!(err.to_string(), "cannot skip 5 of 4 positions (at node 1/1)");
     let _: &dyn std::error::Error = &err;
-    let kind = err.into_kind();
-    assert_eq!(kind, ErrorKind::SkipOutOfRange { n: 5, len: 4 });
+    assert_eq!(err.kind(), &ErrorKind::SkipOutOfRange { n: 5, len: 4 });
     // The numerical mix limit is reachable on 64-bit targets and named in the message.
     #[cfg(target_pointer_width = "64")]
     {
@@ -359,7 +357,7 @@ fn serde_round_trip() {
     let seq: Seq<usize> = Seq::mix([(Seq::source(4).shuffle().cycle_to(9), Schedule::ramp(0.1, 0.2))]);
     assert_eq!(
         serde_json::to_string(&seq).unwrap(),
-        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"shuffled":false,"inner":{"Shuffle":{"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
+        r#"{"Mix":[{"seq":{"Cycle":{"len":9,"shuffled":false,"inner":{"Repeat":{"times":1,"shuffled":true,"inner":{"Source":4}}}}},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0}}}]}"#
     );
     assert_eq!(serde_json::to_string(&Schedule::delayed(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.5,"full":0.5,"fade":1.0,"off":1.0}}"#);
     assert_eq!(serde_json::to_string(&Schedule::until(0.5)).unwrap(), r#"{"Trapezoid":{"start":0.0,"full":0.0,"fade":0.5,"off":0.5}}"#);
@@ -373,7 +371,7 @@ fn serde_round_trip() {
     // Unknown fields are rejected in every variant.
     for json in [
         r#"{"Skip":{"n":1,"inner":{"Source":5},"bogus":1}}"#,
-        r#"{"Shuffle":{"inner":{"Source":5},"extra":true}}"#,
+        r#"{"Repeat":{"times":1,"shuffled":true,"inner":{"Source":5},"extra":true}}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":"Uniform","extra":1}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":{"Trapezoid":{"start":0.1,"full":0.2,"fade":1.0,"off":1.0,"end":0.3}}}]}"#,
     ] {
@@ -383,6 +381,7 @@ fn serde_round_trip() {
     for json in [
         r#"{"Shuffle":{"seed":0,"inner":{"Source":5}}}"#,
         r#"{"Shuffle":{"seed":7,"inner":{"Source":5}}}"#,
+        r#"{"Shuffle":{"inner":{"Source":5}}}"#,
         r#"{"Mix":[{"seq":{"Source":4},"sampling":"Uniform"}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":"Uniform","sampling":"Uniform"}]}"#,
         r#"{"Mix":[{"seq":{"Source":4},"schedule":{"DelayedLinear":{"start":0.1,"full":0.2}}}]}"#,

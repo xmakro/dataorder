@@ -159,18 +159,19 @@ fn sharding_preserves_global_partition_not_worker_mixture() {
 
 #[test]
 fn schedule_errors_describe_independent_profiles() {
-    use dataorder::{MAX_MIX_LEN, ScheduleReason};
-    for (schedule, reason) in [
-        (Schedule::delayed(f64::INFINITY), ScheduleReason::NonFiniteParameter),
-        (Schedule::ramp(0.5, 0.25), ScheduleReason::InvalidBreakpoints),
-        (Schedule::ramp(0.0, f64::from_bits(1)), ScheduleReason::InvalidBreakpoints),
-    ] {
+    use dataorder::MAX_MIX_LEN;
+    // A non-finite breakpoint, breakpoints out of order, and breakpoints too close
+    // together for finite profile coefficients.
+    for schedule in [Schedule::delayed(f64::INFINITY), Schedule::ramp(0.5, 0.25), Schedule::ramp(0.0, f64::from_bits(1))] {
         let err = Order::new(Seq::mix([(Seq::source(1), schedule)])).unwrap_err();
-        let expected = ErrorKind::InvalidSchedule { schedule, reason };
-        assert_eq!(err.kind(), &expected);
+        assert_eq!(err.kind(), &ErrorKind::InvalidSchedule { schedule });
         assert_eq!(err.path(), [0]);
-        assert_eq!(err.to_string(), format!("invalid schedule {schedule:?}: {reason} (at node 0)"));
-        assert_eq!(err.into_kind(), expected);
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "invalid schedule {schedule:?}: breakpoints must be finite, ordered within [0, 1], allow time at a positive rate and not lie too close together (at node 0)"
+            )
+        );
     }
     let seq = Seq::mix([(Seq::source(1usize << 30), Schedule::until(1e-6))]);
     let err = Order::new(seq).unwrap_err();
@@ -181,12 +182,10 @@ fn schedule_errors_describe_independent_profiles() {
         err.to_string(),
         "mix part too long for the steepness of its schedule: length 1073741824 × peak rate 1000000 exceeds 70368744177664 (at node 0)"
     );
-    assert_eq!(err.into_kind(), expected);
     let mixed =
         Seq::mix([(Seq::source(10).cycle_to(3 << 28), Schedule::until(1e-6)), (Seq::source(10).cycle_to(1 << 28), Schedule::Uniform)]);
     let err = Order::new(mixed).unwrap_err();
     let expected = ErrorKind::ScheduleTooSteep { len: 3 << 28, peak_rate: 1e6, limit: MAX_MIX_LEN };
     assert_eq!(err.kind(), &expected);
     assert_eq!(err.path(), [0]);
-    assert_eq!(err.into_kind(), expected);
 }

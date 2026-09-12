@@ -69,7 +69,7 @@ struct Part {
     /// Stagger offset `(2r+1)/(2k)` of the part with rank `r` among the `k` parts.
     phi: f64,
     /// Index into `Interleave::profiles`; 0 is the shared uniform profile.
-    profile: u32,
+    profile: usize,
 }
 
 /// A balanced, order-preserving interleaving of `k` non-empty parts with schedules,
@@ -101,7 +101,7 @@ impl Interleave {
                     None => 0,
                     Some(profile) => {
                         profiles.push(profile);
-                        (profiles.len() - 1) as u32
+                        profiles.len() - 1
                     }
                 };
                 total += n;
@@ -124,14 +124,14 @@ impl Interleave {
     /// Rate profile of `part`.
     #[inline(always)]
     fn profile(&self, part: usize) -> &Profile {
-        &self.profiles[self.parts[part].profile as usize]
+        &self.profiles[self.parts[part].profile]
     }
 
-    /// Virtual time of element `j` of `part`. `seg` caches the profile segment.
+    /// Virtual time of element `j` of `part`.
     #[inline(always)]
-    fn key(&self, part: usize, j: usize, seg: &mut usize) -> f64 {
+    fn key(&self, part: usize, j: usize) -> f64 {
         let s = &self.parts[part];
-        self.profile(part).quantile((j as f64 + s.phi) * s.inv_n, seg)
+        self.profile(part).quantile((j as f64 + s.phi) * s.inv_n)
     }
 
     /// Iterates the merged range in merged order, yielding `(part, index within the part)`.

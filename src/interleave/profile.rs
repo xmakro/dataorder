@@ -61,25 +61,19 @@ impl Profile {
     }
 
     /// Inverts share `y` to virtual time, using the left endpoint of a flat interval.
-    /// The hint walks within at most five segments. Each segment's inverse uses
-    /// monotone operations; clamping to its endpoints preserves monotonicity across
-    /// segments too. Rising segments always start at rate zero.
+    /// Each segment's inverse uses monotone operations; clamping to its endpoints
+    /// preserves monotonicity across segments too. Rising segments always start at
+    /// rate zero.
     #[inline(always)]
-    pub(crate) fn quantile(&self, y: f64, hint: &mut usize) -> f64 {
-        // The last segment whose starting share is strictly below `y` (or the first
-        // segment at zero). Equality belongs to the preceding segment, so a flat share
-        // interval is inverted at its left endpoint, including with a hint beyond it.
-        let mut m = *hint;
-        loop {
-            if m + 1 < self.segs.len() && y > self.segs[m + 1].share {
-                m += 1;
-            } else if m > 0 && y <= self.segs[m].share {
-                m -= 1;
-            } else {
-                break;
-            }
+    pub(crate) fn quantile(&self, y: f64) -> f64 {
+        // The last segment whose starting share is strictly below `y`, or the first
+        // segment. Equality belongs to the preceding segment, so a flat share interval
+        // is inverted at its left endpoint. A profile has at most five segments, and
+        // the uniform one has a single segment, for which this loop does nothing.
+        let mut m = self.segs.len() - 1;
+        while m > 0 && self.segs[m].share >= y {
+            m -= 1;
         }
-        *hint = m;
         let s = &self.segs[m];
         // Solve c·x² + r0·x = z for x ≥ 0; a constant rate is the common case.
         let z = (y - s.share).max(0.0);
@@ -192,10 +186,9 @@ mod tests {
                 assert!(v >= prev);
                 prev = v;
             }
-            let mut hint = 0;
             let mut prev = -1.0;
             for i in 0..=10_000 {
-                let t = p.quantile(i as f64 / 10_000.0, &mut hint);
+                let t = p.quantile(i as f64 / 10_000.0);
                 assert!(t >= prev && t <= 1.0);
                 prev = t;
             }
@@ -204,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn inverse_is_monotone_and_independent_of_hint() {
+    fn inverse_is_monotone() {
         for p in [
             Profile::trapezoid(0.0, 0.0, 1.0, 1.0),
             Profile::trapezoid(0.2, 0.6, 1.0, 1.0),
@@ -214,11 +207,10 @@ mod tests {
         ] {
             for center in grid() {
                 let mut y = center;
-                let mut previous = p.quantile(y, &mut 0);
+                let mut previous = p.quantile(y);
                 for _ in 0..32 {
                     y = y.next_up().min(1.0);
-                    let t = p.quantile(y, &mut (p.segs.len() - 1));
-                    assert_eq!(t, p.quantile(y, &mut 0));
+                    let t = p.quantile(y);
                     assert!(t >= previous, "y={y}: {t} < {previous}");
                     assert!((p.share(t) - y).abs() < 8.0 * f64::EPSILON);
                     previous = t;
@@ -230,9 +222,7 @@ mod tests {
     #[test]
     fn inverse_uses_left_endpoint_of_flat_shares() {
         let p = Profile::trapezoid(0.25, 0.25, 0.75, 0.75);
-        for start in 0..p.segs.len() {
-            assert_eq!(p.quantile(0.0, &mut { start }), 0.0);
-            assert_eq!(p.quantile(1.0, &mut { start }), 0.75);
-        }
+        assert_eq!(p.quantile(0.0), 0.0);
+        assert_eq!(p.quantile(1.0), 0.75);
     }
 }

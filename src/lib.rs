@@ -64,8 +64,7 @@
 //! | [`Source`](Seq::Source) | Source length | Index `p` of the source |
 //! | [`Concat`](Seq::Concat) | Sum of part lengths | Parts read one after another |
 //! | [`Mix`](Seq::Mix) | Sum of part lengths | Parts interleaved, preserving each part's order |
-//! | [`Shuffle`](Seq::Shuffle) | `n` | A seeded permutation of the child's positions |
-//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in the unchanged input, or in a separate permutation per pass when `shuffled` |
+//! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in the unchanged input, or in a separate permutation per pass when `shuffled`; [`shuffle`](Seq::shuffle) is one shuffled pass |
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last pass truncated as needed |
 //! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
@@ -101,8 +100,7 @@
 //! times, and `x.repeat(3).repeat(2)` has the same order as `x.repeat(6)`.
 //! `x.repeat_shuffled(3)` and `x.cycle_to_shuffled(len)` permute the immediate input's
 //! positions separately on each pass, including the first, using the order's seed, the
-//! pass number and the input's salt. `x.shuffle()` produces the same order as
-//! `x.repeat_shuffled(1)`, and the two can replace each other inside larger sequences.
+//! pass number and the input's salt. `x.shuffle()` builds `x.repeat_shuffled(1)`.
 //! Nested shuffles and shuffled repetitions keep their own permutations: enclosing
 //! repeats never reseed them, and a plain repetition of a shuffled repetition replays
 //! the same series of permutations. Each shuffled layer advances the salt for the
@@ -212,7 +210,7 @@
 //! with the documented variant and field names. For example:
 //!
 //! ```json
-//! {"Mix":[{"seq":{"Shuffle":{"inner":{"Source":50}}},"schedule":"Uniform"}]}
+//! {"Mix":[{"seq":{"Repeat":{"times":1,"shuffled":true,"inner":{"Source":50}}},"schedule":"Uniform"}]}
 //! ```
 //!
 //! Unknown fields are rejected. Changes to this format follow the [stability policy](#stability).
@@ -270,7 +268,7 @@ mod source;
 mod tests;
 
 pub use cursor::Cursor;
-pub use error::{BoundsError, Error, ErrorKind, ScheduleReason};
+pub use error::{BoundsError, Error, ErrorKind};
 pub use interleave::Schedule;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};

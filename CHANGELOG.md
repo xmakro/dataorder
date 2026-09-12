@@ -7,9 +7,10 @@ order seed, and changes how shuffles and schedules are computed. Every order tha
 contains a shuffle or a scheduled mix differs from 0.3.0; resume such orders with the
 crate version that produced them.
 
-- **Breaking:** shuffles take no seed of their own. `shuffle()` replaces
-  `shuffle(seed)`; select the run with `Order::with_seed` or `Order::set_seed`. A
-  permutation depends on that order seed and on the input's configuration salt, which
+- **Breaking:** shuffles take no seed of their own, and `Seq::Shuffle` is gone.
+  `shuffle()` replaces `shuffle(seed)` and builds a `Seq::Repeat` with one shuffled
+  pass; select the run with `Order::with_seed` or `Order::set_seed`. A permutation
+  depends on that order seed and on the input's configuration salt, which
   follows the original configuration: every source contributes its `Source::salt` and
   original length, even when empty or excluded by a selection; plain repetitions and
   selections pass the salt through; each shuffled layer advances it once, so nested
@@ -21,8 +22,7 @@ crate version that produced them.
   repetition context: enclosing repeats never reseed inner shuffles, and
   `x.repeat(3).repeat(2)` orders like `x.repeat(6)`. Add `repeat_shuffled(times)` and
   `cycle_to_shuffled(len)`, which permute the immediate input separately on each pass,
-  including the first; `shuffle()` orders like `repeat_shuffled(1)`. `Seq::Repeat` and
-  `Seq::Cycle` gain a `shuffled` field.
+  including the first. `Seq::Repeat` and `Seq::Cycle` gain a `shuffled` field.
 
 - **Breaking:** a shuffle or shuffled repetition rejects any mix in its input
   configuration, including empty or single-part mixes and mixes under other operations,
@@ -60,6 +60,7 @@ crate version that produced them.
   `Order::cursor(range)` a checked `Result<Cursor, BoundsError>`. `Cursor::reset(range)`
   replaces `seek`, `set_range` and their `try_` forms, using absolute order positions;
   a failed reset leaves the cursor unchanged. Remove `Cursor::remaining`; use `len()`.
+  Remove `TryFrom<Seq<T>> for Order<T>`; use `Order::new`.
   `BoundsError` gains `StartOutOfBounds`, merges `StartOverflow` and `EndOverflow`
   into `Overflow`, and loses `InvalidShard` and `SeekOutOfBounds`. Cursors are
   positioned when constructed, `last()` uses a direct lookup, clones keep no spare
@@ -72,35 +73,39 @@ crate version that produced them.
   `validate` and `dispose`. Builders accept any `T` and defer validation to
   `Order::new`, which requires `T: Source`.
 
-- **Breaking:** schedule diagnostics live in `ErrorKind`: `InvalidSchedule { schedule,
-  reason: ScheduleReason }` and `ScheduleTooSteep { len, peak_rate, limit }` replace
-  `InvalidSampling`, `TooSteep`, `SamplingDetail` and `Error::sampling_detail`.
-  `ScheduleReason` is `NonFiniteParameter` or `InvalidBreakpoints`, the latter also
-  for breakpoints too close together for finite coefficients. Remove `Overcommitted`,
-  `SamplingOverflow`, `InvalidWeight`, `ZeroWeights`, `EmptyWeightedPart`,
-  `OrderTooLong`, `TooManySources` and `TooDeep`.
+- **Breaking:** schedule diagnostics live in `ErrorKind`: `InvalidSchedule { schedule }`
+  and `ScheduleTooSteep { len, peak_rate, limit }` replace `InvalidSampling`,
+  `TooSteep`, `SamplingDetail` and `Error::sampling_detail`. An invalid schedule has a
+  non-finite breakpoint, breakpoints out of range or order, no time at a positive rate,
+  or breakpoints too close together for finite coefficients; the message says so and
+  the schedule itself is in the error. Remove `Error::into_kind`, which `kind`
+  covers. Remove `Overcommitted`, `SamplingOverflow`, `InvalidWeight`, `ZeroWeights`,
+  `EmptyWeightedPart`, `OrderTooLong`, `TooManySources`, `TooManyMixParts` and
+  `TooDeep`.
 
 - **Breaking:** lengths, positions and counts are `usize` throughout, including the
   `len` fields of `ErrorKind`, and every sequence node must fit, including
   intermediates a parent later truncates; overflow is `LengthOverflow` at that node.
-  Sources are indexed with `usize`. Remove `MAX_DEPTH`: configurations of any depth
+  Sources and mix parts are indexed with `usize`. Remove `MAX_DEPTH`: configurations of any depth
   compile, though compilation, mapping, cloning, comparison and destruction still
   recurse with depth.
 
-- **Breaking:** serialized configurations change accordingly. `Shuffle` has no
-  `seed`; `Repeat` and `Cycle` accept a `shuffled` field that defaults to false; mix
-  parts use `schedule`; schedules are `Uniform` or `Trapezoid`; `StepBy { step, inner }`
-  is new. Seeded `Shuffle`, `Weighted`, `Stride`, `Slice`, `Shard`, `DelayedLinear`
-  and `sampling` fields are rejected rather than reinterpreted.
+- **Breaking:** serialized configurations change accordingly. A shuffle is a `Repeat`
+  with `times: 1` and `shuffled: true`, and `Repeat` and `Cycle` accept a `shuffled`
+  field that defaults to false; mix parts use `schedule`; schedules are `Uniform` or
+  `Trapezoid`; `StepBy { step, inner }` is new. `Shuffle`, `Weighted`, `Stride`,
+  `Slice`, `Shard`, `DelayedLinear` and `sampling` fields are rejected rather than
+  reinterpreted.
 
 - **Breaking:** remove `salt_path`; pass the dataset identity's bytes to `salt`.
   Rename `ORDERING_VERSION` to `CRATE_VERSION`.
 
 - Store each shuffled node's first-pass key in the compiled order and derive later
   passes' keys only when a cursor enters them; `set_seed` re-derives the stored keys
-  in time proportional to the number of shuffled nodes. Compile a shuffle as a
-  one-pass shuffled repetition, and keep concat and repetition cursor state in
-  dedicated structs.
+  in time proportional to the number of shuffled nodes. Keep concat and repetition
+  cursor state in dedicated structs, compile a selection of a concatenation as a unit
+  stride over it, and select a profile's segment with a short scan instead of a
+  cached hint.
 
 - Replace the custom benchmark harness and campaign runner with a Criterion suite
   (`cargo bench --bench ordering`), remove the checkpoint worker example, derive the
