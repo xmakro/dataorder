@@ -56,6 +56,11 @@ fn ids<'a>(it: impl Iterator<Item = crate::Item<'a, Src>>) -> Vec<(u32, usize)> 
 }
 
 /// An error at the root, for comparisons.
+/// A schedule or length rejection of a mix.
+fn is_schedule(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::MixTooLong | ErrorKind::InvalidSchedule { .. } | ErrorKind::ScheduleTooSteep { .. })
+}
+
 fn root(kind: ErrorKind) -> Error {
     Error::new(kind, Vec::new())
 }
@@ -244,8 +249,8 @@ fn random_configurations_match_reference() {
         let seed = rng.next();
         let order = match Order::with_seed(seq.clone(), seed) {
             Ok(o) => o,
-            Err(e) if e.is_schedule() => {
-                assert!(eval(&seq, seed).is_err_and(|e| e.is_schedule()), "round {round}: {seq:?}");
+            Err(e) if is_schedule(&e) => {
+                assert!(eval(&seq, seed).is_err_and(|e| is_schedule(&e)), "round {round}: {seq:?}");
                 assert!(!e.path().is_empty() || matches!(seq, Seq::Mix(_)), "round {round}: {e}");
                 skipped += 1;
                 continue;
@@ -312,7 +317,7 @@ fn large_configurations_match_reference() {
         let seq = random_seq(&mut rng, 5, &lens, true);
         let order = match Order::new(seq.clone()) {
             Ok(o) => o,
-            Err(e) if e.is_schedule() => continue,
+            Err(e) if is_schedule(&e) => continue,
             Err(e) => panic!("round {round}: {e}"),
         };
         let reference = eval(&seq, 0).unwrap();
