@@ -173,8 +173,8 @@
 //! [`MAX_DEPTH`]. [`Seq`] documents stack use; its builders work with any source type.
 //!
 //! Compilation simplifies nodes without changing their order. It flattens nested
-//! concatenations, removes empty parts, merges nested strides, and folds skips and
-//! takes into sources or slices where possible. A mix with one non-empty part becomes
+//! concatenations, removes empty parts, merges nested selections and strides, and folds
+//! skips and takes into sources where possible. A mix with one non-empty part becomes
 //! that part; a shuffle of at most one element and a single plain repetition need no wrapper.
 //! A plain cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.

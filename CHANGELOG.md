@@ -2,6 +2,9 @@
 
 ## Unreleased (0.4.0)
 
+- Compile skips and takes as unit strides instead of a separate slice node; cursors
+  keep their direct path for them. Ordering and the public API are unchanged.
+
 - **Breaking:** remove `ErrorKind::TooManySources`. Sources are indexed with `usize`
   throughout, so a configuration can hold as many sources as memory allows; compiled
   node sizes are unchanged. Ordering and the serialized format are unchanged.

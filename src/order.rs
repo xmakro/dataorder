@@ -43,11 +43,8 @@ pub(crate) enum Node {
         shuffle: Option<u64>,
         child: Box<Self>,
     },
-    Slice {
-        start: usize,
-        len: usize,
-        child: Box<Self>,
-    },
+    /// Child positions `offset + i × step` for `i < len`. A unit step is a plain
+    /// selection: a skip and a take.
     Stride {
         step: usize,
         offset: usize,
@@ -60,7 +57,7 @@ impl Node {
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::Empty => 0,
-            Self::Source { len, .. } | Self::Repeat { len, .. } | Self::Slice { len, .. } | Self::Stride { len, .. } => *len,
+            Self::Source { len, .. } | Self::Repeat { len, .. } | Self::Stride { len, .. } => *len,
             Self::Concat { offsets, .. } => *offsets.last().unwrap(),
             Self::Mix { il, .. } => il.len(),
         }
@@ -329,10 +326,6 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (usize, u
                 }
                 node = child;
             }
-            Node::Slice { start, child, .. } => {
-                pos += start;
-                node = child;
-            }
             Node::Stride { step, offset, child, .. } => {
                 pos = offset + pos * step;
                 node = child;
@@ -563,10 +556,11 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
         Node::Empty => unreachable!("dataorder: nonempty slice of an empty sequence"),
         Node::Source { src, offset, .. } => Node::Source { src, offset: offset + start, len },
         Node::Repeat { child_len, shuffle, child, .. } if start == 0 => Node::Repeat { child_len, len, shuffle, child },
-        Node::Slice { start: inner, child, .. } => slice(*child, inner + start, len),
         Node::Stride { step, offset, child, .. } => {
             let offset = offset + start * step;
-            if len == 1 { slice(*child, offset, 1) } else { Node::Stride { step, offset, len, child } }
+            // A single element or a unit stride is a plain selection of the child, which
+            // may fold further.
+            if len == 1 || step == 1 { slice(*child, offset, len) } else { Node::Stride { step, offset, len, child } }
         }
         Node::Concat { offsets: mut at, mut children } => {
             at.clear();
@@ -587,7 +581,7 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
             at.push(len);
             if children.len() == 1 { children.pop().unwrap() } else { Node::Concat { offsets: at, children } }
         }
-        node => Node::Slice { start, len, child: Box::new(node) },
+        node => Node::Stride { step: 1, offset: start, len, child: Box::new(node) },
     }
 }
 
@@ -598,7 +592,6 @@ fn stride(child: Node, step: usize) -> Node {
         return slice(child, 0, len);
     }
     match child {
-        Node::Slice { start, child, .. } => Node::Stride { step, offset: start, len, child },
         Node::Stride { step: inner, offset: base, child, .. } => Node::Stride { step: step * inner, offset: base, len, child },
         child => Node::Stride { step, offset: 0, len, child: Box::new(child) },
     }
