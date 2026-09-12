@@ -2,29 +2,22 @@
 
 Shuffle and mix billions of records. Seek anywhere, then stream from there.
 
-`dataorder` provides deterministic ordering for datasets too large to keep a full
-index array in memory. Each lookup tells you **which dataset to read and the record's
-index within it**, leaving record loading to you. Ordering memory grows with the
-number of datasets and the sequence structure, not the number of records.
+`dataorder` computes the order in which to read records from one or more datasets,
+without building an index array. Describe the order you want: shuffle a dataset, mix
+several, repeat for a few epochs, shard across workers. Each lookup then tells you
+which dataset to read and which record within it. Loading the record is up to you.
 
-The default build has **no dependencies**.
+- **Shuffle without materializing.** Each shuffled index is computed on demand, in
+  O(1) time on average and O(1) space, so the permutation is never stored.
+- **Seek anywhere.** Jumping to any position costs about the same wherever it is;
+  nothing before it is replayed.
+- **Stream cheaply.** After a seek, a mix picks the next dataset with O(log k)
+  comparisons for k datasets.
+- **Reproduce exactly.** The same configuration, dataset lengths and seed give the
+  same order on every supported platform.
 
-- **Shuffle on demand.** Compute each shuffled index in **O(1) time on average**
-  and O(1) space, without generating or storing the full permutation.
-- **Jump into a mix.** Counting and binary searches locate the position within each
-  input sequence, without replaying the preceding records. Seek cost depends on the
-  input sequences and their schedules, rather than how far into the dataset you go.
-- **Walk cheaply after seeking.** A mix chooses which sequence to read next with
-  **O(log k) comparisons** for `k` input sequences. Pay for the seek once, then
-  iterate from there.
-
-Combine these operations with schedules, repeated epochs and worker sharding.
-The same configuration, source metadata and seed reproduce the same order within the
-crate's ordering compatibility policy. For restarts, also preserve the crate version
-and worker settings.
-
-[API documentation](https://docs.rs/dataorder) · [Runnable example](examples/demo.rs) ·
-[Performance](#performance)
+No dependencies by default.
+[API documentation](https://docs.rs/dataorder) · [Runnable example](examples/demo.rs)
 
 ## Getting started
 
@@ -33,41 +26,39 @@ and worker settings.
 dataorder = "0.4"
 ```
 
-Start with `Seq::source(dataset)`, add ordering operations, then validate and prepare
-the sequence with `Order::new`. A `usize` can stand in for a dataset when you only
-need its length:
+Describe a sequence with `Seq`, then compile it into an `Order`. A `usize` stands in
+for a dataset when only its length matters:
 
 ```rust
 use dataorder::{Order, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Two passes over a billion records, with a fresh shuffle for each pass.
+    // Two passes over a billion records, each pass shuffled differently.
     let seq = Seq::source(1_000_000_000).repeat_shuffled(2);
     let order = Order::with_seed(seq, 42)?;
     assert_eq!(order.len(), 2_000_000_000);
 
-    // Resume deep into the second epoch without replaying the earlier positions.
+    // Resume deep into the second pass. Nothing before it is computed.
     let resume = 1_200_000_000;
     for item in order.cursor(resume..resume + 10)? {
-        println!("record {} from a dataset of {} records", item.record_index, item.source);
+        println!("record {} of {}", item.record_index, item.source);
     }
-    assert_eq!(order.cursor(resume..)?.next(), order.get(resume));
     Ok(())
 }
 ```
 
-The position in an order differs from the index within a dataset: position
-1,200,000,000 above selects one of the original billion records. `get(pos)` returns
-`Option<Item>`; `iter()` visits the whole order, while `cursor(range)?` selects a range.
-Both return a seekable `Cursor` yielding the same `Item` values in order. Each item
-contains `source_ordinal`, `source` (a reference to the dataset handle), and `record_index`.
+Each position of an order maps to an `Item` with three fields: `source`, a reference
+to the dataset; `record_index`, the record's index within that dataset; and
+`source_ordinal`, the dataset's index in `order.sources()`. `get(pos)` returns the
+item at one position. `iter()` and `cursor(range)?` return a `Cursor`, an iterator
+over the whole order or a range of it that yields the same items as `get` and can be
+moved with `reset(range)?`.
 
-## Using your datasets
+## Your datasets
 
-Implement `Source`, the dataset trait, for your own handle type. Only its length is
-required. A stable `salt` distinguishes its shuffle from those of other datasets
-with the same length and seed. Use a stable dataset name so moving its files does
-not change its shuffle.
+Implement `Source` for your dataset handle; only its length is required. Give each
+dataset a stable salt, such as a hash of its name, so that datasets of the same length
+shuffle differently and moving their files does not change the order:
 
 ```rust
 use dataorder::{Order, Seq, Source};
@@ -88,76 +79,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let order = Order::new(Seq::mix([web, code]))?;
 
     for item in order.cursor(..10)? {
-        // Use your own loader to read this record.
+        // Load the record with your own reader.
         println!("{}: record {}", item.source.name, item.record_index);
     }
     Ok(())
 }
 ```
 
-`Order` owns your dataset handles and yields references to them. Slices, arrays and
-vectors also implement `Source`, as do references to any type implementing the trait.
-Keep dataset lengths stable after building an order: it uses the lengths recorded
-at construction.
+The order owns the handles and yields references to them. Slices, arrays, vectors and
+`usize` implement `Source` too. Lengths are read once, when the order is built; keep
+them stable afterwards. A `Seq` can also hold plain names or paths, and `map_sources`
+turns them into handles before you build the order.
 
-## Combining sequences
-
-Each input sequence can represent a single dataset or combine several datasets,
-so you can nest mixes and concatenations.
+## Building sequences
 
 | To… | Use |
 | --- | --- |
-| Read sequences one after another | `Seq::concat(sequences)` |
-| Interleave sequences, preserving the order within each | `Seq::mix(sequences)` |
-| Choose exact counts for each dataset | `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count), …])` |
-| Control when a sequence contributes records | `Seq::mix`, with a `Schedule` for each part |
-| Shuffle positions in a sequence containing no mixes | `.shuffle()` |
-| Repeat whole passes, preserving the input order | `.repeat(times)` |
-| Repeat or truncate to an exact length, preserving the input order | `.cycle_to(len)` |
-| Shuffle the input separately on each pass | `.repeat_shuffled(times)` |
-| Shuffle each pass and truncate to an exact length | `.cycle_to_shuffled(len)` |
+| Shuffle | `.shuffle()` |
+| Read sequences one after another | `Seq::concat([a, b])` |
+| Interleave sequences, each keeping its own order | `Seq::mix([a, b])` |
+| Mix in chosen proportions | `Seq::mix([a.cycle_to_shuffled(750), b.cycle_to_shuffled(250)])` |
+| Control when a part of a mix contributes | `Seq::mix([(a, Schedule::Uniform), (b, Schedule::delayed(0.5))])` |
+| Repeat, in the same order every pass | `.repeat(times)` |
+| Repeat, reshuffled on every pass | `.repeat_shuffled(times)` |
+| Repeat or cut to an exact length | `.cycle_to(len)` or `.cycle_to_shuffled(len)` |
 | Keep a range of positions | `.skip(start).take(len)` |
-| Keep every nth position from an offset | `.skip(offset).step_by(step)` |
-| Assign every nth position to a worker | `.skip(worker_index).step_by(worker_count)` |
+| Split across workers | `.skip(worker).step_by(workers)` |
 
-A mix uses every input element once, drawing more often from longer sequences.
-Choose each dataset's count with `.cycle_to(count)` to preserve its order, or
-`.cycle_to_shuffled(count)` to shuffle each pass. This gives a 75/25 mixture of one million records:
+Sequences nest freely, with one rule: shuffle before mixing. A shuffle's input must
+not contain a mix, and `Order::new` rejects one that does.
+
+### Proportions
+
+A mix uses every element of every part once, so longer parts appear more often. To
+choose the proportions, give each part an exact count with `cycle_to_shuffled`, which
+repeats or cuts the part over freshly shuffled passes, or `cycle_to`, which keeps the
+part's order. A 75/25 mixture of one million records:
 
 ```rust
 use dataorder::{Order, Seq};
 
-let web = Seq::source(100_000);
-let code = Seq::source(500_000);
-let seq = Seq::mix([
-    web.cycle_to_shuffled(750_000),
-    code.cycle_to_shuffled(250_000),
-]);
-assert_eq!(Order::new(seq)?.len(), 1_000_000);
-# Ok::<(), dataorder::Error>(())
+fn main() -> Result<(), dataorder::Error> {
+    let seq = Seq::mix([
+        Seq::source(100_000).cycle_to_shuffled(750_000), // 7.5 shuffled passes
+        Seq::source(500_000).cycle_to_shuffled(250_000), // half of a shuffled pass
+    ]);
+    assert_eq!(Order::new(seq)?.len(), 1_000_000);
+    Ok(())
+}
 ```
 
-Plain `.repeat(times)` and `.cycle_to(count)` replay the input order; the shuffled
-variants permute every pass with the order's seed, set for all shuffles with
-`Order::with_seed(seq, seed)` or `order.set_seed(seed)`. See the
-[shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
-for what a permutation depends on and which configuration changes preserve it.
-Changing a part's count can change the mixed order's prefix. Keep the original
-configuration and concatenate additional data when the existing prefix must stay fixed.
+Changing a part's count changes the whole mix, including the elements before the
+change. To extend a run without disturbing its prefix, keep the original configuration
+and concatenate the new data after it. To change the mixture partway through, build a
+new order from what remains, either by skipping what each retained part has already
+contributed or by keeping the old mix as one part: `Seq::mix([old.skip(consumed), new])`.
+With the same seed, each retained shuffle continues where it left off.
 
-To change the mixture during training, resume each retained input with
-`.skip(consumed_from_that_input)` and keep the same order seed; each retained input
-keeps its shuffle stream. You can also keep the remaining old mixture as one input:
-`Seq::mix([old_mix.skip(consumed), new_data])`. This starts a new training phase;
-its positions start at zero.
+### Schedules
 
-Schedules assign each part's elements positions on a **shared virtual clock** from
-0 to 1. Part lengths control **how many** elements each part contributes.
-Each curve is normalized independently, and the mix merges its virtual-time keys.
-`Schedule::Uniform` has a constant rate on that clock, just like `delayed(0.0)`.
-
-For example, this order draws 75% from one dataset and introduces the other at
-virtual time 0.5:
+A schedule controls when a part of a mix contributes. Every part is spread over a
+shared virtual clock from 0 to 1: `Schedule::Uniform` draws at a constant rate the
+whole time, `delayed(0.5)` starts halfway along the clock, `ramp(0.2, 0.6)` rises from
+zero, and `until`, `fade` and `trapezoid` stop or fall off. The clock is not output
+progress. At virtual time 0.5, a uniform part has contributed half of its elements, so
+the delayed part below starts after about 375 of the 750 uniform elements, not at
+position 500:
 
 ```rust
 use dataorder::{Order, Schedule, Seq};
@@ -168,139 +155,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Seq::source(100).cycle_to_shuffled(250), Schedule::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
-    assert_eq!(order.len(), 1000);
     let first_delayed = order.iter().position(|item| item.source_ordinal == 1).unwrap();
-    // Half of the 750 uniform items have appeared by virtual time 0.5.
-    // The delayed source starts around output position 375, not 500.
     assert!((374..=377).contains(&first_delayed));
     Ok(())
 }
 ```
 
-**Virtual time is not output progress.** A delay of 0.5 need not start halfway
-through the output, and changing another part's count or schedule can move a part's
-actual start or end position. Schedules can overlap or leave gaps, and there is no
-shared capacity check or filler source. See
+A schedule belongs to its mix, and repeating the mix restarts the clock on every pass.
+To run a schedule across several epochs, repeat the parts and mix them once, as in the
+[example](examples/demo.rs). See
 [`Schedule`](https://docs.rs/dataorder/latest/dataorder/enum.Schedule.html) for the
-continuous model, ramps, fade-outs and limits.
+model, ramps, fade-outs and limits.
 
-**Migration from 0.3:** scheduled orders change in 0.4. `Uniform` no longer fills
-other schedules' unused capacity, and start/full/fade/off values now refer to
-virtual time. Revisit schedules that relied on output-percentage deadlines, and
-resume existing checkpoints with their original crate version.
+### Workers
 
-## Things to know
+To share an order between workers, apply `.skip(index).step_by(count)` to the finished
+sequence. Worker `index` receives positions `index, index + count, …`, so the workers
+cover the order exactly once between them; their lengths can differ by one. Sharding a
+mix this way can multiply the total interleaving work by up to the worker count, and
+the workers' mixtures need not be balanced; see
+[`Seq::step_by`](https://docs.rs/dataorder/latest/dataorder/enum.Seq.html#method.step_by).
 
-- **Composition matters.** Shuffle each input sequence before mixing: `Order::new`
-  rejects a shuffle or shuffled repetition containing any mix with
-  `ErrorKind::ShuffleContainsMix`. Repeat a schedule's input sequence to span
-  several epochs; repeating the whole mix restarts its schedules each epoch.
-- **Workers partition positions.** Apply `.skip(index).step_by(count)` to the
-  completed sequence to divide its positions without overlap. See
-  [`Seq::step_by`](https://docs.rs/dataorder/latest/dataorder/enum.Seq.html#method.step_by)
-  for worker indices, uneven shard lengths, unbalanced per-worker mixtures and the
-  cost of sharding a mix.
-- **Seeds are reproducible.** The same configuration, source lengths and salts, and
-  seed give the same order on supported platforms, and `Order::with_seed` and
-  `set_seed` reseed all shuffles at once. The
-  [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
-  say what else a permutation depends on.
-- **Bounds are checked.** `Order::new` reports invalid configurations with an error
-  kind and node path. `take` and `skip` past the end are errors. `get`
-  returns `None` for invalid positions. `cursor` and `reset` return
-  `Result` for range operations. `step_by(0)` is an error when the order is built.
-  Failed cursor operations leave their state unchanged.
-- **Lengths must fit `usize`.** Every intermediate sequence must fit,
-  even when a later `take`, `cycle_to`, or `step_by` would shorten it. Original nested
-  repeat counts impose no additional limit after a selection shortens the input.
-  `LengthOverflow` identifies the offending node.
-- **Reuse cursors.** Use `iter()` for the whole order or `cursor(range)?` for a range,
-  and `reset(range)?` to move an existing cursor to another range of absolute order
-  positions while reusing its buffers. See the
-  [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) for what a move
-  keeps and when it allocates.
+## Reproducibility
 
-Every item's `source_ordinal` indexes `order.sources()` and distinguishes equal and
-zero-sized handles. Ordinals follow the original configuration, including sources
-whose nodes were removed during compilation. They are local to the order, not persistent dataset IDs.
+The same configuration, dataset lengths and salts, and seed produce the same order.
+`Order::with_seed(seq, seed)` and `order.set_seed(seed)` select the seed for every
+shuffle at once. The
+[shuffle rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
+say exactly what a permutation depends on and which configuration changes keep it.
 
-`Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders
-defer configuration validation to `Order::new`, where `T: Source` is required.
-Use `map_sources` or `try_map_sources` to resolve sources before compiling.
-Tree operations and ordinary Rust cleanup recurse with configuration depth;
-arbitrarily deep hand-built trees are unsupported.
+To resume a run, save the configuration, the seed and the position, then rebuild the
+order and open a cursor at that position. The optional `serde` feature serializes
+configurations; with JSON, enable `serde_json/float_roundtrip` so that schedule
+parameters survive a round trip. Also save `dataorder::CRATE_VERSION`: a release that
+changes any order is a breaking change, and a saved run should be resumed with the crate
+version that produced it.
 
-`Seq` can be cloned, compared and mapped to another dataset handle type with
-`map_sources` or `try_map_sources`. The optional `serde` feature adds configuration
-serialization. When using JSON, also enable `serde_json/float_roundtrip` to preserve
-schedule parameters.
-See the [feature documentation](https://docs.rs/dataorder/latest/dataorder/#feature-flags)
-for details.
+## Errors
+
+`Order::new` validates the whole configuration and returns an `Error` with a kind and
+the path to the offending node: skipping or taking past the end, a zero step, a length
+that overflows `usize`, an invalid schedule, a shuffle over a mix. `get` returns `None`
+past the end. `cursor` and `reset` return a `BoundsError` for a bad range and leave the
+cursor unchanged. See
+[validation and limits](https://docs.rs/dataorder/latest/dataorder/#validation-and-limits).
 
 ## Performance
 
-Run the [Criterion](https://criterion-rs.github.io/book/) benchmarks:
+Building an order costs time that depends on the configuration, not on the data.
+`get` walks from the root to a dataset: a binary search per concat, one permutation
+per shuffle and a bounded seek per mix. A cursor pays for one seek, then streams;
+reuse it with `reset` when seeking often, since it keeps its buffers. The
+[cost model](https://docs.rs/dataorder/latest/dataorder/#cost) has the details.
+
+The [Criterion](https://criterion-rs.github.io/book/) benchmarks time construction,
+random lookup, seeking and streaming over a billion-record shuffle, a shuffled repeat,
+mixes of 100 and 1,000 shuffled datasets and sliced and strided selections, with no
+record I/O:
 
 ```sh
 cargo bench --bench ordering
-cargo bench --bench ordering -- mix_100
 ```
 
-The [benchmark suite](benches/ordering.rs) covers a billion-record shuffle, a shuffled repeat, a mix
-of 100 shuffled datasets, and a mix of 1,000 shuffled datasets with 20% scheduled.
-Each measures construction, random lookup, fresh seek, reused cursor seek, and a
-100,000-item walk. Sources are lengths only; no record I/O is included.
-Configuration cloning is excluded from construction timing. Lookup positions are
-precomputed. Both seek measurements include the first item; fresh seek also
-includes cursor construction and destruction. Walk timing includes its initial
-seek and reports throughput in elements per second.
-
-The `selection` workloads measure a slice and a stride over the same shuffle, which
-compares the two selection cursors, and a stride over a mix, which exercises the
-mix's short-skip path. Each uses the same construction, lookup, seek and walk
-measurements. Run them with `cargo bench --bench ordering -- selection`.
-
-The `cursor_state` group measures cloning after entering a smaller concat child,
-seeking the clone back, repeated seeks between children, and walking across children
-and epochs. Clone setup is excluded from `cloned_seek_back`; that measurement includes
-the seek, first item, and destruction of the clone.
-
-Criterion handles warmup, sampling and comparison with the previous run. To keep
-a baseline across changes, run these before and after the change on the same
-machine with the same toolchain and benchmark workloads:
-
-```sh
-cargo bench --bench ordering -- --save-baseline before
-# Make the change, then compare against the saved baseline.
-cargo bench --bench ordering -- --baseline before
-```
-
-Results are stored under `target/criterion`. For a quick smoke test without timing,
-run `cargo bench --bench ordering -- --test`. Allocation behavior is checked by
-[regression tests](tests/cost.rs).
+Allocation behavior is pinned by [tests/cost.rs](tests/cost.rs).
 
 ## Development
 
 Requires Rust 1.89 or newer.
 
 ```sh
-cargo run --release --example demo
 cargo test --locked --all-features
 cargo test --locked --all-features --examples
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo doc --locked --no-deps --all-features
-python3 tests/fixtures/generate_schedule_oracle.py --check
 ```
 
-The README's Rust examples are tested with the crate's documentation examples.
-The schedule fixture generator uses Python's standard library and a fixed seed.
-Schedule expectations use rational CDFs and 96-digit
-inverse calculations independent of the Rust implementation. Omit `--check` to
-regenerate the fixtures after changing the generator. The fixtures include
-independent overlapping schedules without uniform parts, gaps, interacting ramps,
-reordered minorities, nearby boundaries, exact ties and lengths up to `MAX_MIX_LEN`.
-CI checks the generated file. Small oracle fixtures check complete continuous walks; large fixtures include
-independently computed contiguous windows. Stateful cursor tests combine seeks, range
-changes, clones, skips, exhaustion and failed operations; failures print a reproducible
-`DATAORDER_STATE_SEED` and minimize the operation history.
+The README's examples run as doctests. The schedule tests compare against fixtures
+from an independent Python oracle: `python3 tests/fixtures/generate_schedule_oracle.py`
+regenerates them after a change to the generator, and `--check` verifies them, as CI
+does. To compare benchmarks across a change, save a Criterion baseline first:
+
+```sh
+cargo bench --bench ordering -- --save-baseline before
+cargo bench --bench ordering -- --baseline before
+```
 
 Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

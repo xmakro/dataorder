@@ -12,9 +12,9 @@ use crate::ErrorKind;
 /// same meaning as `delayed(0.0)` or `until(1.0)`.
 ///
 /// **Virtual time is not the fraction of the output already consumed.** A delay
-/// of 0.6 does not promise a start 60% through the output. Changing another part's
-/// count or schedule can change that position. Linear ramps are linear in virtual
-/// time; the final mixture generally transforms both ramps and constant rates.
+/// of 0.6 does not promise a start 60% through the output, and changing another
+/// part's count or schedule can move that start. A ramp is linear in virtual time,
+/// not in output position.
 ///
 /// | Schedule | Rate in virtual time |
 /// | --- | --- |

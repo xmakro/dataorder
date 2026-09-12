@@ -1,4 +1,7 @@
-//! `cargo bench --bench ordering`; source lengths only, no record I/O.
+//! `cargo bench --bench ordering`: for each workload, construction, random lookup, a
+//! fresh and a reused seek, and a 100,000-element walk. Sources are lengths only, with
+//! no record I/O. Compare two runs with Criterion baselines: `-- --save-baseline before`
+//! on the old code, then `-- --baseline before` on the new.
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use dataorder::{Order, Schedule, Seq};
 use std::hint::black_box;
@@ -80,6 +83,7 @@ fn cursor_state(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("cursor_state");
     group.bench_function("clone_after_small_mix", |b| b.iter(|| black_box(cursor.clone())));
+    // The clone is made outside timing; the measurement covers its seek, first item and drop.
     group.bench_function("cloned_seek_back", |b| {
         b.iter_batched(
             || cursor.clone(),

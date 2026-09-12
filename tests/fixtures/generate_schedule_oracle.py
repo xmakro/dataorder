@@ -3,6 +3,10 @@
 Run: python3 tests/fixtures/generate_schedule_oracle.py [--check]
 Uses only Python's standard library; never imports or executes dataorder.
 Breakpoints are interpreted as their exact binary64 values, as in the Rust API.
+Small cases list every position of the merged order; sparse cases list independently
+computed windows around selected keys of orders up to MAX_MIX_LEN elements. Together
+they cover overlapping schedules without uniform parts, gaps, interacting ramps,
+reordered minorities, nearly coincident boundaries and exact ties.
 """
 from decimal import Decimal, localcontext
 from fractions import Fraction as F
