@@ -223,6 +223,8 @@ pub(crate) enum NodeCursor<'a> {
     // per active mix, but substantially shrinks wide mixes and worker-local cursors.
     Mix(Box<MixCursor<'a>>),
     Shuffle(ShuffleCursor<'a>),
+    /// A local permutation per pass, independent of the accumulated item epoch.
+    ShuffledRepeat(Box<ShuffledRepeatCursor<'a>>),
     /// The original count determines the child's accumulated epoch number.
     Repeat {
         child_len: usize,
@@ -264,7 +266,23 @@ impl<'a> NodeCursor<'a> {
                 pos: 0,
                 ctx: Context::new(0),
             }),
-            Node::Repeat { child_len, times, child, .. } => NodeCursor::Repeat {
+            Node::Repeat { child_len, times, shuffle: Some(salt), child, .. } => {
+                NodeCursor::ShuffledRepeat(Box::new(ShuffledRepeatCursor {
+                    shuffle: ShuffleCursor {
+                        seed: 0,
+                        salt: *salt,
+                        shape: Shape::new(*child_len),
+                        child,
+                        key: Key::UNSET,
+                        pos: 0,
+                        ctx: Context::new(0),
+                    },
+                    times: *times,
+                    epoch: 0,
+                    ctx: Context::new(0),
+                }))
+            }
+            Node::Repeat { child_len, times, shuffle: None, child, .. } => NodeCursor::Repeat {
                 child_len: *child_len,
                 times: *times,
                 epoch: 0,
@@ -299,9 +317,13 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.seek(pos, ctx),
             NodeCursor::Shuffle(sh) => {
-                sh.key = perm::key(sh.seed, ctx, sh.salt);
+                sh.key = perm::key(sh.seed, ctx.seed, 0, sh.salt);
                 sh.pos = pos;
                 sh.ctx = ctx;
+            }
+            NodeCursor::ShuffledRepeat(sh) => {
+                sh.ctx = ctx;
+                sh.position(pos / sh.shuffle.shape.n, pos % sh.shuffle.shape.n);
             }
             NodeCursor::Repeat { child_len, times, epoch, left, ctx: c, child } => {
                 let e = pos / *child_len;
@@ -341,6 +363,7 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.next(),
             NodeCursor::Shuffle(sh) => sh.next(),
+            NodeCursor::ShuffledRepeat(sh) => sh.next(),
             NodeCursor::Repeat { child_len, times, epoch, left, ctx, child } => {
                 if *left == 0 {
                     *epoch += 1;
@@ -392,6 +415,13 @@ impl<'a> NodeCursor<'a> {
             }
             NodeCursor::Mix(mix) => mix.skip(m),
             NodeCursor::Shuffle(sh) => sh.pos += m,
+            NodeCursor::ShuffledRepeat(sh) => {
+                // The absolute target fits even when the total length is usize::MAX.
+                let n = sh.shuffle.shape.n;
+                let pos = sh.epoch * n + sh.shuffle.pos + m;
+                // At the endpoint, defer entering another epoch until next() needs it.
+                sh.position((pos - 1) / n, (pos - 1) % n + 1);
+            }
             NodeCursor::Repeat { child_len, times, epoch, left, ctx, child } => {
                 if m <= *left {
                     child.skip(m);
@@ -530,5 +560,30 @@ impl ShuffleCursor<'_> {
             Node::Source { src, offset, .. } => (*src, offset + p, self.ctx.epoch),
             _ => get(self.child, p, self.ctx),
         }
+    }
+}
+
+/// Reuses the shuffle step while deriving keys only from this repetition's local pass.
+#[derive(Clone, Debug)]
+pub(crate) struct ShuffledRepeatCursor<'a> {
+    shuffle: ShuffleCursor<'a>,
+    times: usize,
+    epoch: usize,
+    ctx: Context,
+}
+
+impl ShuffledRepeatCursor<'_> {
+    fn position(&mut self, epoch: usize, pos: usize) {
+        self.epoch = epoch;
+        self.shuffle.pos = pos;
+        self.shuffle.key = perm::key(0, self.ctx.seed, epoch, self.shuffle.salt);
+        self.shuffle.ctx = self.ctx.repeat(self.times, epoch);
+    }
+
+    fn next(&mut self) -> (u32, usize, usize) {
+        if self.shuffle.pos == self.shuffle.shape.n {
+            self.position(self.epoch + 1, 0);
+        }
+        self.shuffle.next()
     }
 }

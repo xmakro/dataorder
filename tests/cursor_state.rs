@@ -25,11 +25,19 @@ fn configuration(r: &mut Rng, depth: usize, allow_mix: bool) -> (Seq<usize>, usi
         };
         return (Seq::source(n), n);
     }
-    let kind = r.below(9);
-    let (s, n) = configuration(r, depth - 1, allow_mix && kind != 0);
+    let kind = r.below(11);
+    let (s, n) = configuration(r, depth - 1, allow_mix && !matches!(kind, 0 | 9 | 10));
     match kind {
         7 | 8 if !allow_mix => (s, n),
         0 => (s.shuffle(r.next()), n),
+        9 => {
+            let k = r.below(5);
+            if let Some(len) = n.checked_mul(k) { (s.shuffled_repeat(k), len) } else { (s, n) }
+        }
+        10 => {
+            let k = if r.below(3) == 0 { usize::MAX } else { r.below(100) };
+            if n > 0 { (s.shuffled_cycle_to(k), k) } else { (s, n) }
+        }
         1 => {
             let k = r.below(5);
             if let Some(len) = n.checked_mul(k) { (s.repeat(k), len) } else { (s, n) }

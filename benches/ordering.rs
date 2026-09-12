@@ -8,6 +8,8 @@ const WALK_LEN: usize = 100_000;
 fn ordering(c: &mut Criterion) {
     let workloads = [
         ("shuffle", Seq::source(1_000_000_000).shuffle(1)),
+        ("shuffled_repeat", Seq::source(1024).shuffled_repeat(1_000_000)),
+        ("shuffled_cycle", Seq::source(1024).shuffled_cycle_to(1_000_000_001)),
         ("mix_100", Seq::mix((0..100).map(|i| Seq::source(1_000_000).shuffle(i + 1)))),
         (
             "scheduled_1000",

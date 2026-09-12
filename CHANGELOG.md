@@ -2,6 +2,16 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** `repeat(times)` and `cycle_to(len)` now preserve their input's record
+  order on every pass, including nested shuffles. Add `shuffled_repeat(times)` and
+  `shuffled_cycle_to(len)` to permute the immediate input separately on each pass,
+  including the first, using the order seed and local pass number. These operations
+  reject mix descendants like `shuffle`; shuffle the inputs before mixing.
+  Shuffle keys no longer use accumulated repetition context. `Item::epoch` still
+  counts both kinds of repetition. Add serialized `ShuffledRepeat` and `ShuffledCycle`
+  variants; existing `Repeat` and `Cycle` configurations adopt the plain behavior.
+  Resume older orders with their original crate version.
+
 - **Breaking:** expose `Item::epoch: usize`, the zero-based accumulated repetition epoch
   at the returned source. Random access and cursors report it for shuffled and
   unshuffled inputs. Item equality includes the epoch; struct literals and exhaustive
@@ -12,13 +22,13 @@
 - Simplify concatenation pruning to one pass over child ranges, reusing the existing
   vectors. Shuffle salts, epoch counts and output orders are unchanged.
 
-- **Breaking:** flatten nested repetitions into one runtime epoch number. Each repeat
+- **Breaking:** flatten nested repetition metadata into one runtime epoch number. Each repeat
   computes `parent_epoch * times + local_epoch`; mixtures pass it through unchanged.
-  Adding or nesting mixture inputs no longer lets sibling repeat depth alter existing
-  inputs' shuffles. Consecutive `.repeat(a).repeat(b)` matches `.repeat(a * b)` when
+  Sibling repeat depth does not affect an input's epoch numbers.
+  Consecutive `.repeat(a).repeat(b)` matches `.repeat(a * b)` when
   their lengths fit. Keep original repeat counts through selections, including a
   cycle's partial final pass. Remove compiler repeat levels and their folding traversal.
-  Single-repeat outputs are unchanged; nested-repeat outputs change. Resume older orders with their original crate version.
+  Epoch metadata does not enter shuffle keys.
 
 - **Breaking:** derive shuffle salts from the original configuration during compilation.
   Sources contribute their salts and original lengths, including empty or discarded

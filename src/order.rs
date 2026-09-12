@@ -47,6 +47,8 @@ pub(crate) enum Node {
         child_len: usize,
         len: usize,
         times: usize,
+        /// Input salt when this node shuffles each pass; nested shuffles stay fixed.
+        shuffle: Option<u64>,
         child: Box<Self>,
     },
     Slice {
@@ -331,12 +333,15 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, mut ctx: Context) -> (u32, us
                 node = &children[s];
             }
             Node::Shuffle { seed, salt, shape, child } => {
-                pos = perm::permute(*shape, perm::key(*seed, ctx, *salt), pos);
+                pos = perm::permute(*shape, perm::key(*seed, ctx.seed, 0, *salt), pos);
                 node = child;
             }
-            Node::Repeat { child_len, times, child, .. } => {
+            Node::Repeat { child_len, times, shuffle, child, .. } => {
                 let epoch = pos / child_len;
                 pos -= epoch * child_len;
+                if let Some(salt) = shuffle {
+                    pos = perm::permute(Shape::new(*child_len), perm::key(0, ctx.seed, epoch, *salt), pos);
+                }
                 ctx = ctx.repeat(*times, epoch);
                 node = child;
             }
@@ -408,8 +413,10 @@ impl<T: Source> Compiler<T> {
             Seq::Concat(parts) => self.concat(parts, depth),
             Seq::Mix(parts) => self.mix_parts(parts, depth),
             Seq::Shuffle { seed, inner } => self.shuffle(seed, *inner, depth),
-            Seq::Repeat { times, inner } => self.repeat(times, *inner, depth),
-            Seq::Cycle { len, inner } => self.cycled(len, *inner, depth),
+            Seq::Repeat { times, inner } => self.repeat(times, *inner, false, depth),
+            Seq::Cycle { len, inner } => self.cycled(len, *inner, false, depth),
+            Seq::ShuffledRepeat { times, inner } => self.repeat(times, *inner, true, depth),
+            Seq::ShuffledCycle { len, inner } => self.cycled(len, *inner, true, depth),
             Seq::Skip { n, inner } => self.skip(n, *inner, depth),
             Seq::Take { n, inner } => self.take(n, *inner, depth),
             Seq::StepBy { step, inner } => self.stepped(step, *inner, depth),
@@ -472,42 +479,53 @@ impl<T: Source> Compiler<T> {
     }
 
     fn shuffle(&mut self, seed: u64, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let enclosing = self.shuffle_path_len.replace(self.path.len());
-        let child = self.child(0, inner, depth);
-        self.shuffle_path_len = enclosing;
-        let mut child = child?;
+        let mut child = self.shuffle_child(inner, depth)?;
         if child.len > 1 {
             child.node = Node::Shuffle { seed, salt: child.salt, shape: Shape::new(child.len), child: Box::new(child.node) };
         }
         Ok(child)
     }
 
-    /// A single repetition leaves both positions and epoch numbers unchanged.
-    fn repeat(&mut self, times: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node: child, len: child_len, salt, epoch_count } = self.child(0, inner, depth)?;
+    /// Validate the original input even if the shuffle or its output folds away.
+    fn shuffle_child(&mut self, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
+        let enclosing = self.shuffle_path_len.replace(self.path.len());
+        let child = self.child(0, inner, depth);
+        self.shuffle_path_len = enclosing;
+        child
+    }
+
+    fn repeat_child(&mut self, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
+        if shuffled { self.shuffle_child(inner, depth) } else { self.child(0, inner, depth) }
+    }
+
+    /// A single plain repetition leaves both positions and epoch numbers unchanged.
+    fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
+        let Compiled { node: child, len: child_len, salt, epoch_count } = self.repeat_child(inner, shuffled, depth)?;
         let len = times.checked_mul(child_len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
         let epoch_count = times.checked_mul(epoch_count).ok_or_else(|| self.err(ErrorKind::EpochOverflow))?;
+        let shuffle = (shuffled && child_len > 1).then_some(salt);
         let node = if len == 0 {
             Node::Empty
-        } else if times == 1 {
+        } else if times == 1 && shuffle.is_none() {
             child
         } else {
-            Node::Repeat { child_len, len, times, child: Box::new(child) }
+            Node::Repeat { child_len, len, times, shuffle, child: Box::new(child) }
         };
         Ok(Compiled { node, len, salt, epoch_count })
     }
 
-    fn cycled(&mut self, len: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len: child_len, salt, mut epoch_count } = self.child(0, inner, depth)?;
+    fn cycled(&mut self, len: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
+        let Compiled { node, len: child_len, salt, mut epoch_count } = self.repeat_child(inner, shuffled, depth)?;
         if len > 0 && child_len == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
-        let node = if len <= child_len {
+        let shuffle = (shuffled && child_len > 1).then_some(salt);
+        let node = if len == 0 || (len <= child_len && shuffle.is_none()) {
             slice(node, 0, len)
         } else {
             let times = len.div_ceil(child_len);
             epoch_count = times.checked_mul(epoch_count).ok_or_else(|| self.err(ErrorKind::EpochOverflow))?;
-            Node::Repeat { child_len, len, times, child: Box::new(node) }
+            Node::Repeat { child_len, len, times, shuffle, child: Box::new(node) }
         };
         Ok(Compiled { node, len, salt, epoch_count })
     }
@@ -576,7 +594,7 @@ fn slice(node: Node, start: usize, len: usize) -> Node {
         Node::Source { src, offset, .. } => Node::Source { src, offset: offset + start, len },
         // Even an epoch-zero prefix must keep `times`: a later enclosing repeat
         // multiplies its epoch by this original count before reaching the child.
-        Node::Repeat { child_len, times, child, .. } if start == 0 => Node::Repeat { child_len, len, times, child },
+        Node::Repeat { child_len, times, shuffle, child, .. } if start == 0 => Node::Repeat { child_len, len, times, shuffle, child },
         Node::Slice { start: inner, child, .. } => slice(*child, inner + start, len),
         Node::Stride { step, offset, child, .. } => {
             let offset = offset + start * step;

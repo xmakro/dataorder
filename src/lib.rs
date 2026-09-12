@@ -28,8 +28,8 @@
 //! use dataorder::{Order, Seq};
 //!
 //! // Shuffle a billion records and repeat for two epochs.
-//! let seq = Seq::source(1_000_000_000).shuffle(42).repeat(2);
-//! let order = Order::new(seq)?;
+//! let seq = Seq::source(1_000_000_000).shuffled_repeat(2);
+//! let order = Order::with_seed(seq, 42)?;
 //! assert_eq!(order.len(), 2_000_000_000);
 //!
 //! // Start anywhere, without replaying the earlier positions.
@@ -68,13 +68,15 @@
 //! | [`Shuffle`](Seq::Shuffle) | `n` | A seeded permutation of the child's positions |
 //! | [`Repeat`](Seq::Repeat) | `times × n` | Index `p % n` in epoch `p / n` |
 //! | [`Cycle`](Seq::Cycle) | `len` | Like repeat, with the last epoch truncated as needed |
+//! | [`ShuffledRepeat`](Seq::ShuffledRepeat) | `times × n` | A separate permutation of the child's positions per pass |
+//! | [`ShuffledCycle`](Seq::ShuffledCycle) | `len` | Like shuffled repeat, truncated to an exact length |
 //! | [`Skip`](Seq::Skip) | `n − skip` | Child position `skip + p` |
 //! | [`Take`](Seq::Take) | `take` | Child position `p` |
 //! | [`StepBy`](Seq::StepBy) | `⌈n / step⌉` | Child position `p × step` |
 //!
 //! A mix uses every element of every part once. Set each part's exact count with
-//! [`Seq::cycle_to`] before mixing. A mix preserves the order within each part;
-//! add a shuffle to a part to change that order.
+//! [`Seq::cycle_to`] or [`Seq::shuffled_cycle_to`] before mixing. A mix preserves
+//! the order within each part; use the shuffled variant to shuffle each pass.
 //!
 //! [`Schedule`] assigns each part's elements keys on a shared virtual clock.
 //! Curves are independent: `Uniform` is constant in virtual time, and all parts
@@ -95,7 +97,6 @@
 //! A shuffle visits every child position exactly once. Its permutation depends on:
 //!
 //! - The shuffle's seed and the order's seed.
-//! - The accumulated epoch number of its enclosing repetitions.
 //! - The input configuration's source salts, original source lengths and concatenation
 //!   grouping, before pruning or flattening.
 //!
@@ -108,23 +109,38 @@
 //! without rebuilding the order. Shuffles use a six-round Feistel permutation with
 //! cycle walking; they are intended for reproducible ordering, not cryptography.
 //!
-//! `x.shuffle(seed).repeat(3)` selects a shuffle for each epoch. The first epoch keeps
-//! its original context. In contrast, concatenating three copies of `x.shuffle(seed)`
-//! repeats the same order. Repetition alone does not add a shuffle.
+//! `x.repeat(3)` and `x.cycle_to(len)` preserve the input's record order on every pass,
+//! including any nested shuffles. `x.shuffle(seed).repeat(3)` repeats one fixed
+//! permutation three times.
+//!
+//! `x.shuffled_repeat(3)` and `x.shuffled_cycle_to(len)` permute the immediate input's
+//! positions separately on each pass, including the first. Their permutation uses
+//! the order's seed, the local pass number and the input's configuration salt, with
+//! shuffle seed zero. Use [`Order::with_seed`] or [`Order::set_seed`] to select the seed.
+//! Nested shuffles and shuffled repetitions keep their own permutations; enclosing
+//! repeats never reseed them. The shuffled variants reject mixes in their inputs,
+//! just like `shuffle`. A shortened final pass takes a prefix of its full permutation.
+//!
+//! Plain repetition of a shuffled repetition replays the same series of permutations.
+//! Nested shuffled repetitions each permute their own input and therefore do not
+//! flatten into one shuffled repetition. Extending an outermost shuffled repeat or
+//! cycle preserves its existing prefix.
 //!
 //! Epochs start at zero. Entering a repeat with count `times` and local epoch `e`
 //! computes `epoch = epoch * times + e`. Thus `x.repeat(3).repeat(2)` has the same
 //! order as `x.repeat(6)`. A cycle's count includes its partial final pass, if any.
 //! Mixtures pass the epoch through unchanged: adding, reordering or nesting mixture
 //! inputs does not reseed existing inputs, including those with nested repetitions.
-//! Their own configurations, enclosing repeat counts and the order seed must stay fixed.
+//! Their own configurations and the order seed determine their permutations.
+//! Enclosing repeat counts affect only the reported epoch numbers.
 //!
 //! Adding an outer repeat preserves the entire first pass. Extending an outermost
 //! repeat or cycle preserves the existing prefix. Changing an inner repeat's count
-//! can change its epoch numbers in later enclosing passes.
+//! can change its reported epoch numbers in later enclosing passes, but not shuffle keys.
 //! Selections keep original repeat counts, even when retaining only the first pass:
-//! for an `n`-element source `x`, `x.shuffle(1).repeat(3).take(n).repeat(2)` uses shuffle
-//! epochs 0 and 3. A single repetition leaves the epoch unchanged.
+//! for an `n`-element source `x`, `x.shuffle(1).repeat(3).take(n).repeat(2)` reports
+//! epochs 0 and 3 while using the same permutation. Both plain and shuffled repetitions
+//! contribute to these metadata epochs. A single repetition leaves the epoch unchanged.
 //! Epoch numbers use `usize` and never wrap. For each nonempty sequence, the product
 //! of original repeat counts along any source path must fit in `usize`, even after
 //! selections. Compilation reports [`ErrorKind::EpochOverflow`] when this bound fails.
@@ -164,8 +180,8 @@
 //! Compilation simplifies nodes without changing their order. It flattens nested
 //! concatenations, removes empty parts, merges nested strides, and folds skips and
 //! takes into sources or slices where possible. A mix with one non-empty part becomes
-//! that part; a shuffle of at most one element and a single repetition need no wrapper.
-//! A cycle that fits within one epoch becomes a take. Source handles remain available
+//! that part; a shuffle of at most one element and a single plain repetition need no wrapper.
+//! A plain cycle that fits within one epoch becomes a take. Source handles remain available
 //! through [`Order::sources`], including those whose nodes were removed.
 //!
 //! [`Order::get`] returns `None` for an invalid position. [`Order::cursor`] and
@@ -191,6 +207,7 @@
 //! | --- | --- |
 //! | Concat | `O(log k)` search over `k` part offsets |
 //! | Shuffle | Constant average permutation cost; an individual position can take longer |
+//! | Shuffled repeat or cycle | Pass arithmetic and a permutation, as for shuffle |
 //! | Mix | A seek over its parts, with the cost described below |
 //! | Repeat, skip, take, step by | Position arithmetic |
 //!

@@ -38,6 +38,8 @@ fn config_salt(seq: &Seq<Src>) -> u64 {
         Seq::Shuffle { inner, .. }
         | Seq::Repeat { inner, .. }
         | Seq::Cycle { inner, .. }
+        | Seq::ShuffledRepeat { inner, .. }
+        | Seq::ShuffledCycle { inner, .. }
         | Seq::Skip { inner, .. }
         | Seq::Take { inner, .. }
         | Seq::StepBy { inner, .. } => config_salt(inner),
@@ -112,9 +114,17 @@ fn eval_epoch(seq: &Seq<Src>, run_seed: u64, epoch: usize) -> Result<Vec<(u32, u
             }
             eval_epoch(&cycle_of(inner, *len, n), run_seed, epoch)?
         }
+        Seq::ShuffledCycle { len, inner } => {
+            let n = eval_epoch(inner, run_seed, epoch)?.len();
+            if n == 0 && *len > 0 {
+                return Err(root(ErrorKind::EmptyCycle));
+            }
+            let times = if n == 0 { 0 } else { len.div_ceil(n) };
+            eval_epoch(&inner.clone().shuffled_repeat(times).take(*len), run_seed, epoch)?
+        }
         Seq::Shuffle { seed, inner } => {
             let v = eval_epoch(inner, run_seed, epoch)?;
-            let (shape, key) = (Shape::new(v.len()), perm::key(*seed, perm::Context { seed: run_seed, epoch }, config_salt(inner)));
+            let (shape, key) = (Shape::new(v.len()), perm::key(*seed, run_seed, 0, config_salt(inner)));
             (0..v.len()).map(|i| v[perm::permute(shape, key, i)]).collect()
         }
         Seq::Repeat { times, inner } => {
@@ -123,6 +133,16 @@ fn eval_epoch(seq: &Seq<Src>, run_seed: u64, epoch: usize) -> Result<Vec<(u32, u
             out.clear();
             for e in 0..*times {
                 out.extend(eval_epoch(inner, run_seed, epoch * times + e)?);
+            }
+            out
+        }
+        Seq::ShuffledRepeat { times, inner } => {
+            let n = eval_epoch(inner, run_seed, epoch)?.len();
+            let mut out = Vec::new();
+            for pass in 0..*times {
+                let v = eval_epoch(inner, run_seed, epoch * times + pass)?;
+                let key = perm::key(0, run_seed, pass, config_salt(inner));
+                out.extend((0..n).map(|i| v[perm::permute(Shape::new(n), key, i)]));
             }
             out
         }
@@ -163,7 +183,13 @@ fn random_seq(rng: &mut Rng, depth: u32, lens: &[usize], allow_mix: bool) -> Seq
         return src(id as u32, lens[id]);
     }
     let parts = |rng: &mut Rng, depth| (0..1 + rng.below(3)).map(|_| random_seq(rng, depth, lens, allow_mix)).collect::<Vec<_>>();
-    match rng.below(9) {
+    match rng.below(11) {
+        9 => random_seq(rng, depth - 1, lens, false).shuffled_repeat(rng.below(4)),
+        10 => {
+            let inner = random_seq(rng, depth - 1, lens, false);
+            let n = eval(&inner, 0).map(|v| v.len()).unwrap_or(0);
+            inner.shuffled_cycle_to(if n == 0 { 0 } else { rng.below(70) })
+        }
         1 | 2 | 7 if !allow_mix => Seq::concat(parts(rng, depth - 1)),
         8 => {
             let inner = random_seq(rng, depth - 1, lens, allow_mix);
@@ -315,7 +341,7 @@ fn large_configurations_match_reference() {
 }
 
 #[test]
-fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
+fn shuffle_is_a_permutation_and_plain_repeats_preserve_it() {
     let seq = src(7, 1000).shuffle(3).repeat(3);
     let order = Order::new(seq.clone()).unwrap();
     assert_eq!(order.len(), 3000);
@@ -336,9 +362,8 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
         sorted.sort_unstable();
         assert_eq!(sorted, (0..1000).collect::<Vec<_>>());
     }
-    assert_ne!(epochs[0], epochs[1]);
-    assert_ne!(epochs[1], epochs[2]);
-    assert_ne!(epochs[0], epochs[2]);
+    assert_eq!(epochs[0], epochs[1]);
+    assert_eq!(epochs[1], epochs[2]);
     // The first repetition is the sequence itself, and repeating once changes nothing,
     // even around nested repeats.
     let once = Order::new(src(7, 1000).shuffle(3)).unwrap();
@@ -360,10 +385,10 @@ fn shuffle_is_a_permutation_and_reshuffles_per_epoch() {
         let extended = Order::new(extended).unwrap();
         assert_eq!(ids(extended.cursor(..200).unwrap()), alone);
     }
-    // Nested repeats: (outer 0, inner 1) and (outer 1, inner 0) are different orders.
+    // Nested repeats preserve the same shuffle on every pass.
     let nested = Order::new(src(7, 100).shuffle(3).repeat(2).repeat(2)).unwrap();
     let block = |b: usize| ids(nested.cursor(b * 100..(b + 1) * 100).unwrap());
-    assert_ne!(block(1), block(2));
+    assert_eq!(block(1), block(2));
     assert_eq!(block(0), ids(Order::new(src(7, 100).shuffle(3)).unwrap().cursor(0..100).unwrap()));
     // Same seed twice under a concat: the same order twice.
     let twice = Order::new(Seq::concat([src(7, 1000).shuffle(3), src(7, 1000).shuffle(3)])).unwrap();
@@ -402,8 +427,8 @@ fn extending_nested_repetitions_preserves_every_existing_position() {
                 assert_eq!(ids(order.iter()), all[..len], "prefix length {len}");
             }
         }
-        assert_ne!(all[..n], all[n..2 * n]);
-        assert_ne!(all[n..2 * n], all[2 * n..]);
+        assert_eq!(all[..n], all[n..2 * n]);
+        assert_eq!(all[n..2 * n], all[2 * n..]);
     }
 }
 
@@ -915,7 +940,7 @@ fn steep_schedule_at_scale() {
 /// Explicit counts repeat short parts (reshuffled) and truncate long ones before mixing.
 #[test]
 fn mix_with_explicit_counts() {
-    let seq = Seq::mix([src(0, 100).shuffle(1).cycle_to(1800), src(1, 5000).shuffle(2).cycle_to(1200)]);
+    let seq = Seq::mix([src(0, 100).shuffled_cycle_to(1800), src(1, 5000).shuffled_cycle_to(1200)]);
     let order = Order::new(seq).unwrap();
     assert_eq!(order.len(), 3000);
     let all = ids(order.cursor(0..3000).unwrap());

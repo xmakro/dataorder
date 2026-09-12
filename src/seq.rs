@@ -55,7 +55,7 @@ pub enum Seq<T> {
     /// [`Order::new`](crate::Order::new) rejects this combination with
     /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
-    /// The permutation depends on `seed`, the order's seed, enclosing repetitions,
+    /// The permutation depends on `seed`, the order's seed,
     /// and the input configuration's source salts, original lengths and concat grouping.
     /// Empty or discarded sources still contribute. See the crate's
     /// [shuffle rules](crate#shuffles-and-repetitions) for details.
@@ -65,8 +65,8 @@ pub enum Seq<T> {
         /// The sequence to permute.
         inner: Box<Self>,
     },
-    /// `inner` repeated `times` times, reseeding existing shuffles after the first epoch.
-    /// Repetition does not add shuffling. Any mix schedules inside restart each epoch.
+    /// `inner` repeated `times` times, preserving its record order on every pass.
+    /// Any mix schedules inside restart each epoch.
     /// `x.repeat(1)` is `x`; `x.repeat(0)` is empty but still validates `inner`.
     ///
     /// Nested repeats accumulate one epoch number: `x.repeat(3).repeat(2)` has the
@@ -81,11 +81,11 @@ pub enum Seq<T> {
     },
     /// Exactly `len` positions of `inner`, repeating or truncating it as needed.
     ///
-    /// Each additional epoch reseeds existing shuffles, as [`Repeat`](Seq::Repeat)
+    /// Each pass preserves the input's record order, as [`Repeat`](Seq::Repeat)
     /// does. Adding an outer cycle preserves the first pass, including nested epochs.
     /// Increasing its length preserves the existing prefix when it is outermost.
     /// Its repetition count includes a partial final pass; changing that count can
-    /// change shuffle epochs when the cycle is inside another repetition.
+    /// change reported epochs when the cycle is inside another repetition.
     /// When `len` fits within `inner`, this is equivalent to `inner.take(len)`.
     /// A positive `len` requires a non-empty child. `cycle_to(usize::MAX)` creates the
     /// longest supported order; it is still finite.
@@ -93,6 +93,29 @@ pub enum Seq<T> {
         /// Length of the sequence.
         len: usize,
         /// The sequence to repeat and cut.
+        inner: Box<Self>,
+    },
+    /// `inner` repeated `times` times, with a separate permutation of its positions
+    /// on every pass, including the first. Nested shuffles keep their own permutations.
+    ///
+    /// Uses the order's seed, the local pass number and the input's configuration salt.
+    /// Enclosing repetitions do not affect the permutation. Like [`Shuffle`](Seq::Shuffle),
+    /// the input must contain no mixes, even when `times` is zero.
+    ShuffledRepeat {
+        /// Number of shuffled repetitions.
+        times: usize,
+        /// The sequence to permute on each pass.
+        inner: Box<Self>,
+    },
+    /// Exactly `len` positions from separately shuffled passes over `inner`.
+    ///
+    /// Like [`ShuffledRepeat`](Seq::ShuffledRepeat), with the last pass truncated
+    /// as needed. Shuffles before truncating, including when `len` fits in one pass.
+    /// A positive length requires a non-empty input; the input must contain no mixes.
+    ShuffledCycle {
+        /// Length of the sequence.
+        len: usize,
+        /// The sequence to permute on each pass and cut.
         inner: Box<Self>,
     },
     /// `inner` without its first `n` positions. Skipping more than there are is an error
@@ -201,7 +224,7 @@ impl<T> Seq<T> {
         Self::Shuffle { seed, inner: Box::new(self) }
     }
 
-    /// Repeats this sequence `times` times, reseeding existing shuffles after the first epoch.
+    /// Repeats this sequence `times` times, preserving its record order on every pass.
     /// The first pass preserves the sequence, including all nested epochs;
     /// see [`Repeat`](Seq::Repeat).
     ///
@@ -209,10 +232,8 @@ impl<T> Seq<T> {
     /// use dataorder::{Order, Seq};
     /// let order = Order::new(Seq::source(1000).shuffle(1).repeat(2))?;
     /// let first: Vec<_> = order.cursor(..1000)?.map(|item| item.record_index).collect();
-    /// let mut second: Vec<_> = order.cursor(1000..)?.map(|item| item.record_index).collect();
-    /// assert_ne!(first, second);
-    /// second.sort_unstable();
-    /// assert_eq!(second, (0..1000).collect::<Vec<_>>());
+    /// let second: Vec<_> = order.cursor(1000..)?.map(|item| item.record_index).collect();
+    /// assert_eq!(first, second);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
@@ -221,7 +242,7 @@ impl<T> Seq<T> {
     }
 
     /// Repeats or truncates this sequence to exactly `len` positions.
-    /// Existing shuffles are reseeded for each additional epoch; see [`Cycle`](Seq::Cycle).
+    /// Every pass preserves the input's record order; see [`Cycle`](Seq::Cycle).
     /// Even `cycle_to(usize::MAX)` is finite.
     ///
     /// ```
@@ -238,6 +259,42 @@ impl<T> Seq<T> {
     #[must_use]
     pub fn cycle_to(self, len: usize) -> Self {
         Self::Cycle { len, inner: Box::new(self) }
+    }
+
+    /// Repeats this sequence with a separate shuffle of its positions on every pass.
+    /// Includes the first pass and uses the order's seed. Nested shuffles stay fixed;
+    /// the input must contain no mixes. See [`ShuffledRepeat`](Seq::ShuffledRepeat).
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::with_seed(Seq::source(1000).shuffled_repeat(3), 42)?;
+    /// let first: Vec<_> = order.cursor(..1000)?.map(|item| item.record_index).collect();
+    /// let mut second: Vec<_> = order.cursor(1000..2000)?.map(|item| item.record_index).collect();
+    /// assert_ne!(first, second);
+    /// second.sort_unstable();
+    /// assert_eq!(second, (0..1000).collect::<Vec<_>>());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn shuffled_repeat(self, times: usize) -> Self {
+        Self::ShuffledRepeat { times, inner: Box::new(self) }
+    }
+
+    /// Produces exactly `len` positions from separately shuffled passes over this sequence.
+    /// Uses the order's seed and shuffles before truncating the last pass.
+    /// See [`ShuffledCycle`](Seq::ShuffledCycle) for input restrictions.
+    ///
+    /// ```
+    /// use dataorder::{Order, Seq};
+    /// let order = Order::new(Seq::source(1000).shuffled_cycle_to(2500))?;
+    /// let epochs = Order::new(Seq::source(1000).shuffled_repeat(3))?;
+    /// assert_eq!(order.len(), 2500);
+    /// assert!(order.iter().eq(epochs.cursor(..2500)?));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn shuffled_cycle_to(self, len: usize) -> Self {
+        Self::ShuffledCycle { len, inner: Box::new(self) }
     }
 
     /// The first `n` positions (an error when the order is built if there are fewer).
@@ -386,6 +443,8 @@ fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> R
         Seq::Shuffle { seed, inner } => map_sources(*inner, f)?.shuffle(seed),
         Seq::Repeat { times, inner } => map_sources(*inner, f)?.repeat(times),
         Seq::Cycle { len, inner } => map_sources(*inner, f)?.cycle_to(len),
+        Seq::ShuffledRepeat { times, inner } => map_sources(*inner, f)?.shuffled_repeat(times),
+        Seq::ShuffledCycle { len, inner } => map_sources(*inner, f)?.shuffled_cycle_to(len),
         Seq::Skip { n, inner } => map_sources(*inner, f)?.skip(n),
         Seq::Take { n, inner } => map_sources(*inner, f)?.take(n),
         Seq::StepBy { step, inner } => map_sources(*inner, f)?.step_by(step),

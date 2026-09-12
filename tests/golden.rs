@@ -66,7 +66,7 @@ fn golden_orders() {
         ("repeat of mix", Seq::mix([src(0, 200).shuffle(1), src(1, 100).shuffle(2)]).repeat(4), 0),
         ("mix with explicit counts", Seq::mix([src(0, 100).shuffle(1).cycle_to(1800), src(1, 5000).shuffle(2).cycle_to(1200)]), 0),
         ("nested repeats", src(0, 100).shuffle(3).repeat(3).repeat(2), 0),
-        ("cycle of a shuffled repeat", src(0, 300).shuffle(5).repeat(2).cycle_to(1000), 0),
+        ("cycle of a repeated shuffle", src(0, 300).shuffle(5).repeat(2).cycle_to(1000), 0),
         (
             "mix fading",
             Seq::mix([
@@ -76,25 +76,31 @@ fn golden_orders() {
             ]),
             0,
         ),
+        ("shuffled repeat", src(0, 777).shuffled_repeat(3), 0),
+        ("shuffled repeat, seeded order", src(0, 777).shuffled_repeat(3), 42),
+        ("shuffled cycle", src(0, 300).shuffled_cycle_to(1000), 0),
     ];
-    // Nested-repeat, cycle-of-repeat and shuffle(concat) entries were independently
-    // recomputed from total epochs, configuration salts and Feistel arithmetic for
-    // 0.4.0. Other entries retain their outputs.
-    const EXPECTED: [u64; 14] = [
+    // Repeat entries independently recomputed using Python integer Feistel arithmetic
+    // and rational uniform-interleave keys: plain repeats replay the input, while
+    // shuffled repeats use their local pass number. Other entries retain their outputs.
+    const EXPECTED: [u64; 17] = [
         13510848840803686825,
         5734682759774056529,
-        2152343650903757428,
+        3287178459042382076,
         1077492288285509245,
         2420967535336859100,
         11125969817394475988,
         3696955324159907089,
-        905848074036688221,
+        4369987832402671921,
         12216569398622504889,
-        4113493865489899877,
-        16159320458550980399,
-        5178620365869428389,
-        5043228978147298754,
+        4935321577852654885,
+        4787768506023466187,
+        543417429321880357,
+        11240630329514219006,
         16685696649537605013,
+        3667822865842139108,
+        4895949453059197240,
+        10785437813920805584,
     ];
     let actual: Vec<u64> = cases
         .iter()

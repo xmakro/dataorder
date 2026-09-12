@@ -42,8 +42,8 @@ use dataorder::{Order, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Two passes over a billion records, with a fresh shuffle for each pass.
-    let seq = Seq::source(1_000_000_000).shuffle(42).repeat(2);
-    let order = Order::new(seq)?;
+    let seq = Seq::source(1_000_000_000).shuffled_repeat(2);
+    let order = Order::with_seed(seq, 42)?;
     assert_eq!(order.len(), 2_000_000_000);
 
     // Resume deep into the second epoch without replaying the earlier positions.
@@ -115,15 +115,17 @@ so you can nest mixes and concatenations.
 | Choose exact counts for each dataset | `Seq::mix([a.cycle_to(a_count), b.cycle_to(b_count), …])` |
 | Control when a sequence contributes records | `Seq::mix`, with a `Schedule` for each part |
 | Shuffle positions in a sequence containing no mixes | `.shuffle(seed)` |
-| Repeat whole epochs, reseeding existing shuffles | `.repeat(times)` |
-| Repeat or truncate to an exact length | `.cycle_to(len)` |
+| Repeat whole passes, preserving the input order | `.repeat(times)` |
+| Repeat or truncate to an exact length, preserving the input order | `.cycle_to(len)` |
+| Shuffle the input separately on each pass | `.shuffled_repeat(times)` |
+| Shuffle each pass and truncate to an exact length | `.shuffled_cycle_to(len)` |
 | Keep a range of positions | `.skip(start).take(len)` |
 | Keep every nth position from an offset | `.skip(offset).step_by(step)` |
 | Assign every nth position to a worker | `.skip(worker_index).step_by(worker_count)` |
 
 A mix uses every input element once, drawing more often from longer sequences.
-Choose each dataset's count with `.cycle_to(count)`, which repeats or truncates the
-sequence as needed. This gives a 75/25 mixture of one million records:
+Choose each dataset's count with `.cycle_to(count)` to preserve its order, or
+`.shuffled_cycle_to(count)` to shuffle each pass. This gives a 75/25 mixture of one million records:
 
 ```rust
 use dataorder::{Order, Seq};
@@ -131,14 +133,17 @@ use dataorder::{Order, Seq};
 let web = Seq::source(100_000);
 let code = Seq::source(500_000);
 let seq = Seq::mix([
-    web.shuffle(1).cycle_to(750_000),
-    code.shuffle(2).cycle_to(250_000),
+    web.shuffled_cycle_to(750_000),
+    code.shuffled_cycle_to(250_000),
 ]);
 assert_eq!(Order::new(seq)?.len(), 1_000_000);
 # Ok::<(), dataorder::Error>(())
 ```
 
-Each input keeps its order; existing shuffles are reseeded for additional epochs.
+Each shuffled cycle permutes its immediate input on every pass, including the first,
+using the order's seed and its local pass number. Nested shuffles keep their own
+permutations. Plain `.repeat(times)` and `.cycle_to(count)` replay the input order;
+for example, `.shuffle(1).repeat(3)` repeats the same permutation three times.
 Changing a part's count can change the mixed order's prefix. Keep the original
 configuration and concatenate additional data when the existing prefix must stay fixed.
 
@@ -162,8 +167,8 @@ use dataorder::{Order, Schedule, Seq};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq = Seq::mix([
-        (Seq::source(300).shuffle(1).cycle_to(750), Schedule::Uniform),
-        (Seq::source(100).shuffle(2).cycle_to(250), Schedule::delayed(0.5)),
+        (Seq::source(300).shuffled_cycle_to(750), Schedule::Uniform),
+        (Seq::source(100).shuffled_cycle_to(250), Schedule::delayed(0.5)),
     ]);
     let order = Order::new(seq)?;
     assert_eq!(order.len(), 1000);
@@ -198,7 +203,7 @@ resume existing checkpoints with their original crate version.
 ## Things to know
 
 - **Composition matters.** Shuffle each input sequence before mixing. `Order::new`
-  rejects a shuffle containing any mix, including empty or single-part mixes and
+  rejects a shuffle or shuffled repetition containing any mix, including empty or single-part mixes and
   mixes nested beneath other operations, with `ErrorKind::ShuffleContainsMix`.
   To make a schedule span several epochs, repeat its input sequence;
   repeating the whole mix restarts its schedules each epoch.
@@ -221,7 +226,9 @@ resume existing checkpoints with their original crate version.
   Nested repeats count total epochs: `.repeat(3).repeat(2)` matches `.repeat(6)`.
   Adding an outer repeat preserves the entire first pass, including nested epochs.
   Mixtures pass epoch numbers through without depending on sibling inputs.
-  Selections retain original repeat counts for epoch numbering. See the
+  Selections retain original repeat counts for epoch numbering. Epoch metadata
+  never changes shuffle keys. Nested shuffled repetitions permute their own inputs
+  separately and do not flatten into one shuffled repetition. See the
   [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
@@ -275,7 +282,7 @@ cargo bench --bench ordering
 cargo bench --bench ordering -- mix_100
 ```
 
-The [benchmark suite](benches/ordering.rs) covers a billion-record shuffle, a mix
+The [benchmark suite](benches/ordering.rs) covers a billion-record shuffle, shuffled repeats and cycles, a mix
 of 100 shuffled datasets, and a mix of 1,000 shuffled datasets with 20% scheduled.
 Each measures construction, random lookup, fresh seek, reused cursor seek, and a
 100,000-item walk. Sources are lengths only; no record I/O is included.

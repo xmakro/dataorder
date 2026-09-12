@@ -20,7 +20,7 @@
 //! seeds and lengths, including powers of two and lengths on either side. Passing these
 //! tests is evidence of statistical quality, not a guarantee for every seed and length.
 //!
-//! A seed, repetition context and source salt are combined into one 64-bit word,
+//! Seeds, a local shuffle pass and source salt are combined into one 64-bit word,
 //! which determines all six round keys. A [`Key`] stores 384 bits, but has only
 //! 64 bits of independent input. This is for reproducible ordering, not cryptography.
 //!
@@ -67,7 +67,8 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// Runtime shuffle inputs: a fixed order seed and one accumulated epoch number.
+/// Traversal state: a fixed order seed and an accumulated epoch for item metadata.
+/// Shuffle keys never use this accumulated epoch.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Context {
     pub(crate) seed: u64,
@@ -87,18 +88,16 @@ impl Context {
     }
 }
 
-/// The key of a shuffle with `seed` inside context `ctx` over sources
-/// with the given configuration `salt`: the three are hashed together, not merely
-/// xored, so no simple relation between them reproduces another triple's key. Not a
+/// The key of a shuffle with `seed`, `order_seed`, local `pass` and configuration
+/// `salt`. Ordinary shuffles use pass zero. These inputs are hashed together, not merely
+/// xored, so no simple relation between them reproduces another combination's key. Not a
 /// security boundary: seeds are for reproducibility.
 #[inline]
-pub(crate) fn key(seed: u64, ctx: Context, salt: u64) -> Key {
-    // Preserve the original single-repeat seed arithmetic, now applied once to the
-    // accumulated epoch instead of repeatedly hashing at each enclosing repeat.
-    let ctx = if ctx.epoch == 0 {
-        ctx.seed
+pub(crate) fn key(seed: u64, order_seed: u64, pass: usize, salt: u64) -> Key {
+    let ctx = if pass == 0 {
+        order_seed
     } else {
-        mix64(mix64(ctx.seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((ctx.epoch as u64).wrapping_mul(PHI)) ^ PHI)
+        mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
     };
     let a =
         mix64(mix64(seed ^ 0x2545_F491_4F6C_DD1D).wrapping_add(ctx.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
@@ -163,7 +162,7 @@ mod tests {
     use crate::{Order, Seq};
 
     fn perm(n: usize, seed: u64) -> Vec<usize> {
-        let (shape, key) = (Shape::new(n), key(seed, Context::new(0), 0));
+        let (shape, key) = (Shape::new(n), key(seed, 0, 0, 0));
         (0..n).map(|i| permute(shape, key, i)).collect()
     }
 
@@ -185,7 +184,7 @@ mod tests {
     fn huge_domain_is_a_bijection_locally() {
         // n near usize::MAX: the forward map must still be invertible; check distinct images of a
         // window and that the walk terminates.
-        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, Context::new(0), 0));
+        let (shape, key) = (Shape::new(usize::MAX - 5), key(9, 0, 0, 0));
         let mut images: Vec<usize> = (0..10_000).map(|i| permute(shape, key, i)).collect();
         images.sort_unstable();
         images.dedup();
@@ -193,16 +192,16 @@ mod tests {
     }
 
     #[test]
-    fn seeds_and_contexts_differ() {
+    fn seeds_and_local_passes_differ() {
         let n = 1000;
         let a = perm(n, 1);
         let b = perm(n, 2);
         assert!(a.iter().zip(&b).filter(|(x, y)| x == y).count() < 10);
-        let (shape, k) = (Shape::new(n), key(1, Context::new(0).repeat(2, 1), 0));
+        let (shape, k) = (Shape::new(n), key(1, 0, 1, 0));
         let c: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
-        let k = key(1, Context::new(0), source_salt(7, n));
+        let k = key(1, 0, 0, source_salt(7, n));
         let d: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
         assert_ne!(source_salt(0, 1000), source_salt(0, 999));
@@ -214,7 +213,7 @@ mod tests {
                 let nested = Context::new(5).repeat(2, outer).repeat(3, inner);
                 let flat = Context::new(5).repeat(6, outer * 3 + inner);
                 assert_eq!(nested.epoch, outer * 3 + inner);
-                assert_eq!(key(1, nested, 7), key(1, flat, 7));
+                assert_eq!(nested.epoch, flat.epoch);
             }
         }
     }
