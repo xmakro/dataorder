@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- Compile a shuffle as a shuffled repetition with one pass and merge the two shuffle
+  cursors. Random access into a single pass skips the pass division, cursors derive a
+  pass's key once rather than on every seek or skip, and shuffled repetitions keep
+  their cursor state inline instead of boxing it. Ordering and the public API are
+  unchanged.
+
 - Keep concat and repetition cursor state and boundary handling in dedicated
   structs. Preserve direct skips, deferred boundary entry and child buffer reuse.
   Ordering and the public API are unchanged.
