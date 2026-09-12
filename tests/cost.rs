@@ -44,7 +44,7 @@ fn element(order: &Order<usize>, pos: usize) -> (usize, usize) {
 
 #[test]
 fn unary_traversals_do_not_allocate_temporary_child_lists() {
-    let (parts, depth) = (128, dataorder::MAX_DEPTH as usize - 2);
+    let (parts, depth) = (128, 14);
     let make = || Seq::mix((0..parts).map(|_| (0..depth).fold(Seq::source(10), |seq, _| seq.take(10))));
     let seq = make();
     let count = allocations(|| {

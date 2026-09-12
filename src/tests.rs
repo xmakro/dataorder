@@ -594,32 +594,6 @@ fn cycles() {
     assert_eq!(ids(narrowed.iter()), ids(plain.iter()));
 }
 
-#[test]
-fn depth_limit() {
-    let chain = |levels: u32| (1..levels).fold(src(0, 10), |s, _| s.take(10));
-    assert_eq!(Order::new(chain(MAX_DEPTH)).unwrap().len(), 10);
-    let err = Order::new(chain(MAX_DEPTH + 1)).unwrap_err();
-    assert_eq!(err.kind(), &ErrorKind::TooDeep);
-    assert_eq!(err.path().len(), MAX_DEPTH as usize);
-}
-
-/// Configurations just beyond the supported limit report the first invalid node.
-#[test]
-fn configurations_over_the_depth_limit_are_rejected() {
-    let run = || {
-        let deep = || (0..MAX_DEPTH).fold(src(0, 10), |s, _| s.take(10));
-        assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
-        let bad = || src(0, 10).take(99);
-        let out_of_range = ErrorKind::TakeOutOfRange { n: 99, len: 10 };
-        assert_eq!(Order::new(Seq::concat([bad(), deep()])).unwrap_err().kind(), &out_of_range);
-        assert_eq!(Order::new(Seq::mix([bad(), deep()])).unwrap_err().kind(), &out_of_range);
-        assert_eq!(Order::new(deep().step_by(0)).unwrap_err().kind(), &ErrorKind::ZeroStep);
-        let first_too_deep = Seq::concat([deep(), bad()]);
-        assert_eq!(Order::new(first_too_deep).unwrap_err().kind(), &ErrorKind::TooDeep);
-    };
-    std::thread::Builder::new().stack_size(2 << 20).spawn(run).unwrap().join().unwrap();
-}
-
 /// Sources removed from the compiled tree still distinguish the shuffle above them.
 #[test]
 fn discarded_sources_contribute_to_shuffle_salts() {

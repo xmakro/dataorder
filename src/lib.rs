@@ -158,8 +158,8 @@
 //! [`Order::new`] returns an [`Error`] with a kind and a path to the invalid node.
 //! All sequence builders defer validation until an order is built, including parts
 //! that would contribute no elements, such as the child of `repeat(0)`.
-//! Configurations support up to [`MAX_DEPTH`] levels and use ordinary recursive
-//! traversal and destruction. Arbitrarily deep hand-built trees are unsupported.
+//! Configurations use ordinary recursive traversal and destruction, so arbitrarily
+//! deep hand-built trees are unsupported.
 //!
 //! Skips and takes must stay within the child sequence. `step_by` requires a nonzero
 //! step, and an empty sequence cannot be cycled to a positive length. Schedules must
@@ -169,8 +169,8 @@
 //! Lengths and positions use `usize` throughout. Every sequence node must fit in
 //! `usize`, even if a parent truncates or discards it. Seeds, salts and shuffle
 //! arithmetic use fixed-width `u64` values for reproducibility across platforms.
-//! A mix is limited to [`MAX_MIX_LEN`] elements, and configuration depth is limited to
-//! [`MAX_DEPTH`]. [`Seq`] documents stack use; its builders work with any source type.
+//! A mix is limited to [`MAX_MIX_LEN`] elements. [`Seq`] documents stack use; its
+//! builders work with any source type.
 //!
 //! Compilation simplifies nodes without changing their order. It flattens nested
 //! concatenations, removes empty parts, merges nested selections and strides, and folds
@@ -306,22 +306,6 @@ pub use interleave::Schedule;
 pub use order::{Item, Order};
 pub use seq::{MixPart, Seq};
 pub use source::{Source, salt};
-
-/// Maximum configuration depth accepted by [`Order::new`], counting the root as level 1.
-///
-/// A source alone has depth 1. Each enclosing transform adds a level, so a source
-/// with `MAX_DEPTH` transforms is too deep. The limit bounds recursive compilation;
-/// deeper configurations are rejected during compilation. Tree destruction and
-/// other operations still recurse, so arbitrarily deep inputs are unsupported.
-/// See [`Seq`] for stack use.
-///
-/// ```
-/// use dataorder::{ErrorKind, MAX_DEPTH, Order, Seq};
-/// let chain = |levels: u32| (1..levels).fold(Seq::source(10), |s, _| s.take(10));
-/// assert_eq!(Order::new(chain(MAX_DEPTH)).map(|order| order.len()), Ok(10));
-/// assert_eq!(Order::new(chain(MAX_DEPTH + 1)).unwrap_err().kind(), &ErrorKind::TooDeep);
-/// ```
-pub const MAX_DEPTH: u32 = 16;
 
 /// Numerical limit on mix length: 2⁴⁶ elements.
 ///

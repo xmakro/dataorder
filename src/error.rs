@@ -130,8 +130,6 @@ pub enum ErrorKind {
     LengthOverflow,
     /// A mix has 2³¹ − 1 parts or more.
     TooManyMixParts,
-    /// The configuration nests deeper than [`MAX_DEPTH`](crate::MAX_DEPTH).
-    TooDeep,
     /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
     /// A schedule parameter is out of range or non-finite, or its derived profile
@@ -165,7 +163,6 @@ impl fmt::Display for ErrorKind {
             Self::ShuffleContainsMix => write!(f, "cannot shuffle a sequence containing a mix; shuffle its inputs before mixing"),
             Self::LengthOverflow => write!(f, "sequence length exceeds usize::MAX"),
             Self::TooManyMixParts => write!(f, "mix with 2^31 - 1 parts or more"),
-            Self::TooDeep => write!(f, "configuration nests deeper than {} levels", crate::MAX_DEPTH),
             Self::MixTooLong => write!(f, "mix longer than {MAX_TOTAL_LEN}"),
             Self::InvalidSchedule { schedule, reason } => write!(f, "invalid schedule {schedule:?}: {reason}"),
             Self::ScheduleTooSteep { len, peak_rate, limit } => {

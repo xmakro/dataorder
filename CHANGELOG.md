@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `MAX_DEPTH` and `ErrorKind::TooDeep`. Compilation no longer
+  counts nesting levels, so configurations of any depth compile. Compilation, mapping,
+  cloning, comparison and destruction recurse with depth as before, so arbitrarily
+  deep hand-built trees remain unsupported. Ordering and the serialized format are
+  unchanged.
+
 - Compile skips and takes as unit strides instead of a separate slice node; cursors
   keep their direct path for them. Ordering and the public API are unchanged.
 

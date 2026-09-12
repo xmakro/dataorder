@@ -22,14 +22,12 @@ use std::convert::Infallible;
 ///
 /// [`Order::new`](crate::Order::new) reports invalid configurations as an
 /// [`Error`](crate::Error) with the path to the invalid node. This includes
-/// out-of-range skips and takes, zero steps, overflow, invalid schedules,
-/// excessive depth and shuffles containing mixes. All sequence builders accept
-/// any `T` and defer these checks until the order is built.
+/// out-of-range skips and takes, zero steps, overflow, invalid schedules and
+/// shuffles containing mixes. All sequence builders accept any `T` and defer these
+/// checks until the order is built.
 ///
 /// # Depth
 ///
-/// [`Order::new`](crate::Order::new) stops at [`MAX_DEPTH`](crate::MAX_DEPTH) (16 levels).
-/// Keep configurations within this supported limit.
 /// Tree operations and ordinary Rust destruction recurse with tree depth;
 /// arbitrarily deep hand-built trees are unsupported. Stack use also depends on
 /// the size of `T`; prefer small dataset handles over large inline sources.
@@ -433,7 +431,7 @@ impl<T> From<Seq<T>> for MixPart<T> {
     }
 }
 
-/// Map the supported, bounded-depth configuration using ordinary recursive ownership.
+/// Map the configuration using ordinary recursive ownership.
 fn map_sources<T, U, E>(seq: Seq<T>, f: &mut impl FnMut(T) -> Result<U, E>) -> Result<Seq<U>, E> {
     Ok(match seq {
         Seq::Source(source) => Seq::source(f(source)?),

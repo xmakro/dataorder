@@ -146,23 +146,6 @@ fn configuration_errors_are_validated_only_when_compiling() {
 }
 
 #[test]
-fn position_operations_count_as_configuration_nodes() {
-    for operation in ["skip", "take", "step_by"] {
-        let chain = |levels| {
-            (1..levels).fold(Seq::source(10), |seq, _| match operation {
-                "skip" => seq.skip(0),
-                "take" => seq.take(10),
-                _ => seq.step_by(1),
-            })
-        };
-        assert_eq!(Order::new(chain(dataorder::MAX_DEPTH)).unwrap().len(), 10);
-        let error = Order::new(chain(dataorder::MAX_DEPTH + 1)).unwrap_err();
-        assert_eq!(error.kind(), &ErrorKind::TooDeep);
-        assert_eq!(error.path().len(), dataorder::MAX_DEPTH as usize);
-    }
-}
-
-#[test]
 fn workers_partition_short_sequences_with_explicit_offsets() {
     let workers = 4;
     for len in [0, 1, 3, 10] {
@@ -406,9 +389,9 @@ fn serde_round_trip() {
 
 #[cfg(feature = "serde")]
 #[test]
-fn serde_round_trips_at_the_supported_depth_limit() {
+fn serde_round_trips_nested_configurations() {
     for variant in ["Take", "Mix"] {
-        let seq = (1..dataorder::MAX_DEPTH).fold(Seq::source(10usize), |seq, _| match variant {
+        let seq = (1..16).fold(Seq::source(10usize), |seq, _| match variant {
             "Take" => seq.take(10),
             _ => Seq::mix([seq]),
         });

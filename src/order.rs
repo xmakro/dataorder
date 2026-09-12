@@ -8,7 +8,7 @@ use crate::cursor::{Cursor, resolve_range};
 use crate::interleave::{Interleave, Schedule};
 use crate::perm::{self, Shape};
 use crate::seq::MixPart;
-use crate::{BoundsError, Error, ErrorKind, MAX_DEPTH, MAX_MIX_LEN, Seq, Source};
+use crate::{BoundsError, Error, ErrorKind, MAX_MIX_LEN, Seq, Source};
 use std::fmt;
 use std::ops::RangeBounds;
 
@@ -124,8 +124,8 @@ impl<T: Source> Order<T> {
     ///
     /// # Errors
     /// Skips and takes past the end, a zero step, shuffles containing mixes,
-    /// lengths that overflow, nesting deeper than [`MAX_DEPTH`],
-    /// and schedules the mix rejects; see [`ErrorKind`]. The error identifies the invalid node.
+    /// lengths that overflow, and schedules the mix rejects; see [`ErrorKind`].
+    /// The error identifies the invalid node.
     pub fn new(seq: Seq<T>) -> Result<Self, Error> {
         Self::with_seed(seq, 0)
     }
@@ -148,7 +148,7 @@ impl<T: Source> Order<T> {
     /// As for [`Order::new`].
     pub fn with_seed(seq: Seq<T>, seed: u64) -> Result<Self, Error> {
         let mut c = Compiler { sources: Vec::new(), path: Vec::new(), shuffle_path_len: None };
-        let Compiled { node: root, .. } = c.compile(seq, 1)?;
+        let Compiled { node: root, .. } = c.compile(seq)?;
         Ok(Self { root, seed, sources: c.sources })
     }
 }
@@ -378,38 +378,34 @@ impl<T: Source> Compiler<T> {
         self.err_at(kind, None)
     }
 
-    /// Compiles child `i` one configuration level below the node being compiled.
-    fn child(&mut self, i: usize, seq: Seq<T>, depth: u32) -> Result<Compiled, Error> {
+    /// Compiles child `i` of the node being compiled.
+    fn child(&mut self, i: usize, seq: Seq<T>) -> Result<Compiled, Error> {
         self.path.push(i);
-        let result = self.compile(seq, depth + 1);
+        let result = self.compile(seq);
         self.path.pop();
         result
     }
 
     /// Compile every child before combining their summaries, preserving validation order.
-    fn children(&mut self, parts: impl IntoIterator<Item = Seq<T>>, depth: u32) -> Result<Vec<Compiled>, Error> {
-        parts.into_iter().enumerate().map(|(i, seq)| self.child(i, seq, depth)).collect()
+    fn children(&mut self, parts: impl IntoIterator<Item = Seq<T>>) -> Result<Vec<Compiled>, Error> {
+        parts.into_iter().enumerate().map(|(i, seq)| self.child(i, seq)).collect()
     }
 
-    /// `depth` counts configuration nodes from the root. Each visit returns its node,
-    /// length and configuration salt to the parent.
+    /// Each visit returns its node, length and configuration salt to the parent.
     /// Lengths must fit before a parent can truncate them.
-    fn compile(&mut self, seq: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        if depth > MAX_DEPTH {
-            return Err(self.err(ErrorKind::TooDeep));
-        }
+    fn compile(&mut self, seq: Seq<T>) -> Result<Compiled, Error> {
         match seq {
             Seq::Source(source) => self.source(source),
-            Seq::Concat(parts) => self.concat(parts, depth),
-            Seq::Mix(parts) => self.mix(parts, depth),
-            Seq::Shuffle { inner } => self.repeat(1, *inner, true, depth),
-            Seq::Repeat { times, inner } => self.repeat(times, *inner, false, depth),
-            Seq::Cycle { len, inner } => self.cycled(len, *inner, false, depth),
-            Seq::ShuffledRepeat { times, inner } => self.repeat(times, *inner, true, depth),
-            Seq::ShuffledCycle { len, inner } => self.cycled(len, *inner, true, depth),
-            Seq::Skip { n, inner } => self.skip(n, *inner, depth),
-            Seq::Take { n, inner } => self.take(n, *inner, depth),
-            Seq::StepBy { step, inner } => self.stepped(step, *inner, depth),
+            Seq::Concat(parts) => self.concat(parts),
+            Seq::Mix(parts) => self.mix(parts),
+            Seq::Shuffle { inner } => self.repeat(1, *inner, true),
+            Seq::Repeat { times, inner } => self.repeat(times, *inner, false),
+            Seq::Cycle { len, inner } => self.cycled(len, *inner, false),
+            Seq::ShuffledRepeat { times, inner } => self.repeat(times, *inner, true),
+            Seq::ShuffledCycle { len, inner } => self.cycled(len, *inner, true),
+            Seq::Skip { n, inner } => self.skip(n, *inner),
+            Seq::Take { n, inner } => self.take(n, *inner),
+            Seq::StepBy { step, inner } => self.stepped(step, *inner),
         }
     }
 
@@ -423,8 +419,8 @@ impl<T: Source> Compiler<T> {
     }
 
     /// Flatten concats using their existing offsets and the summaries returned by visits.
-    fn concat(&mut self, parts: Vec<Seq<T>>, depth: u32) -> Result<Compiled, Error> {
-        let parts = self.children(parts, depth)?;
+    fn concat(&mut self, parts: Vec<Seq<T>>) -> Result<Compiled, Error> {
+        let parts = self.children(parts)?;
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
         let mut children = Vec::new();
         let mut offsets = Vec::new();
@@ -456,62 +452,62 @@ impl<T: Source> Compiler<T> {
 
     /// Compiles a repetition's input. A shuffled input must contain no mix, and is
     /// validated as such even if the repetition or its output folds away.
-    fn repeat_child(&mut self, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
+    fn repeat_child(&mut self, inner: Seq<T>, shuffled: bool) -> Result<Compiled, Error> {
         if !shuffled {
-            return self.child(0, inner, depth);
+            return self.child(0, inner);
         }
         let enclosing = self.shuffle_path_len.replace(self.path.len());
-        let child = self.child(0, inner, depth);
+        let child = self.child(0, inner);
         self.shuffle_path_len = enclosing;
         child
     }
 
-    fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        let child = self.repeat_child(inner, shuffled, depth)?;
+    fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool) -> Result<Compiled, Error> {
+        let child = self.repeat_child(inner, shuffled)?;
         let len = times.checked_mul(child.len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
         Ok(child.repeat_to(len, shuffled))
     }
 
-    fn cycled(&mut self, len: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        let child = self.repeat_child(inner, shuffled, depth)?;
+    fn cycled(&mut self, len: usize, inner: Seq<T>, shuffled: bool) -> Result<Compiled, Error> {
+        let child = self.repeat_child(inner, shuffled)?;
         if len > 0 && child.len == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
         Ok(child.repeat_to(len, shuffled))
     }
 
-    fn skip(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
+    fn skip(&mut self, n: usize, inner: Seq<T>) -> Result<Compiled, Error> {
+        let Compiled { node, len, salt } = self.child(0, inner)?;
         if n > len {
             return Err(self.err(ErrorKind::SkipOutOfRange { n, len }));
         }
         Ok(Compiled { node: slice(node, n, len - n), len: len - n, salt })
     }
 
-    fn take(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
+    fn take(&mut self, n: usize, inner: Seq<T>) -> Result<Compiled, Error> {
+        let Compiled { node, len, salt } = self.child(0, inner)?;
         if n > len {
             return Err(self.err(ErrorKind::TakeOutOfRange { n, len }));
         }
         Ok(Compiled { node: slice(node, 0, n), len: n, salt })
     }
 
-    fn stepped(&mut self, step: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
+    fn stepped(&mut self, step: usize, inner: Seq<T>) -> Result<Compiled, Error> {
         if step == 0 {
             return Err(self.err(ErrorKind::ZeroStep));
         }
-        let Compiled { node, len, salt } = self.child(0, inner, depth)?;
+        let Compiled { node, len, salt } = self.child(0, inner)?;
         Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt })
     }
 
     /// Validates every part's length and schedule, then compiles the mix over its
     /// non-empty parts. Empty parts and a mix that folds away are still validated.
-    fn mix(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
+    fn mix(&mut self, parts: Vec<MixPart<T>>) -> Result<Compiled, Error> {
         if let Some(len) = self.shuffle_path_len {
             return Err(Error::new(ErrorKind::ShuffleContainsMix, self.path[..len].to_vec()));
         }
         let schedules: Vec<Schedule> = parts.iter().map(|part| part.schedule).collect();
-        let parts = self.children(parts.into_iter().map(|part| part.seq), depth)?;
+        let parts = self.children(parts.into_iter().map(|part| part.seq))?;
         // The tournament tree indexes parts with u32 and needs a spare bit.
         if parts.len() >= u32::MAX as usize / 2 {
             return Err(self.err(ErrorKind::TooManyMixParts));

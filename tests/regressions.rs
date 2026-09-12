@@ -1,7 +1,7 @@
 //! Adversarial inputs from the numerical and compilation review. Run potential hangs and
 //! stack aborts in a subprocess so a regression fails with a bounded diagnostic.
 
-use dataorder::{ErrorKind, MAX_DEPTH, Order, Schedule, Seq, Source};
+use dataorder::{ErrorKind, Order, Schedule, Seq, Source};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -37,18 +37,13 @@ fn large_inline_sources_fit_a_thread_stack() {
 }
 
 #[test]
-fn order_rejects_configurations_over_the_depth_limit() {
-    isolated("depth");
-}
-
-#[test]
 fn isolated_case() {
     let Ok(case) = std::env::var("DATAORDER_REGRESSION_CASE") else { return };
     match case.as_str() {
         "map" => std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(|| {
-                let deep = || (0..MAX_DEPTH - 2).fold(Seq::source("later"), |s, _| s.take(1));
+                let deep = || (0..14).fold(Seq::source("later"), |s, _| s.take(1));
                 // Success, an untouched deep sibling, and an already mapped deep sibling.
                 drop(deep().map_sources(|_| 1usize));
                 for seq in [Seq::concat([Seq::source("missing"), deep()]), Seq::concat([deep(), Seq::source("missing")])] {
@@ -67,25 +62,13 @@ fn isolated_case() {
             .unwrap()
             .join()
             .unwrap(),
-        "depth" => std::thread::Builder::new()
-            .stack_size(2 << 20)
-            .spawn(|| {
-                let deep = || (0..MAX_DEPTH).fold(Seq::source(1usize), |s, _| s.take(1));
-                assert_eq!(Order::new(deep()).unwrap_err().kind(), &ErrorKind::TooDeep);
-                assert!(Order::new(deep().step_by(0)).is_err());
-                assert_eq!(Order::new(Seq::source(3)).unwrap().len(), 3);
-            })
-            .unwrap()
-            .join()
-            .unwrap(),
         "stack" => std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(|| {
                 let chain = |depth| (1..depth).fold(Seq::source([0u8; 8192]), |s, _| s.take(8192));
-                let order = Order::new(chain(MAX_DEPTH)).unwrap();
+                let order = Order::new(chain(16)).unwrap();
                 assert_eq!(order.len(), 8192);
                 assert_eq!(order.get(8191).unwrap().record_index, 8191);
-                assert_eq!(Order::new(chain(MAX_DEPTH + 1)).unwrap_err().kind(), &ErrorKind::TooDeep);
             })
             .unwrap()
             .join()
