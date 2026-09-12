@@ -27,11 +27,11 @@ fn uniform(lens: &[usize]) -> Interleave {
     build(lens, &vec![Uniform; lens.len()]).unwrap()
 }
 
-/// Brute force: sort every element by (key, sequence, index).
+/// Brute force: sort every element by (key, part, index).
 fn reference(il: &Interleave) -> Vec<(usize, usize)> {
     let mut all = Vec::new();
-    for (s, seq) in il.seqs.iter().enumerate() {
-        for j in 0..seq.n {
+    for (s, part) in il.parts.iter().enumerate() {
+        for j in 0..part.n {
             all.push((il.key(s, j, &mut 0), s, j));
         }
     }
@@ -39,20 +39,20 @@ fn reference(il: &Interleave) -> Vec<(usize, usize)> {
     all.into_iter().map(|(_, s, j)| (s, j)).collect()
 }
 
-/// Share of sequence `s` that its share function prescribes at `t`.
+/// Share of part `s` that its share function prescribes at `t`.
 fn share(il: &Interleave, s: usize, t: f64) -> f64 {
     il.profile(s).share(t).clamp(0.0, 1.0)
 }
 
-/// Largest `|count_s(t) − n_s·F_s(t/N)|` over all `t`, per sequence (in elements of `s`).
+/// Largest `|count_s(t) − n_s·F_s(t/N)|` over all `t`, per part (in elements of `s`).
 fn worst_deviation(il: &Interleave, all: &[(usize, usize)]) -> Vec<f64> {
-    let k = il.seqs.len();
+    let k = il.parts.len();
     let n = il.len() as f64;
     let mut counts = vec![0usize; k];
     let mut worst = vec![0.0f64; k];
     for t in 0..=all.len() {
         for s in 0..k {
-            let ideal = il.seqs[s].n as f64 * share(il, s, t as f64 / n);
+            let ideal = il.parts[s].n as f64 * share(il, s, t as f64 / n);
             worst[s] = worst[s].max((counts[s] as f64 - ideal).abs());
         }
         if t < all.len() {
@@ -146,12 +146,12 @@ fn matches_brute_force_sort() {
 #[test]
 fn is_a_permutation_preserving_order() {
     for il in all_cases() {
-        let mut next = vec![0usize; il.seqs.len()];
+        let mut next = vec![0usize; il.parts.len()];
         for (t, (s, j)) in full(&il).into_iter().enumerate() {
             assert_eq!(j, next[s], "pos {t}");
             next[s] += 1;
         }
-        let lens: Vec<usize> = il.seqs.iter().map(|s| s.n).collect();
+        let lens: Vec<usize> = il.parts.iter().map(|s| s.n).collect();
         assert_eq!(next, lens);
     }
 }
@@ -199,12 +199,12 @@ fn every_seek_matches_the_slice() {
 #[test]
 fn keys_are_monotone_within_sequences() {
     for il in all_cases() {
-        for (s, seq) in il.seqs.iter().enumerate() {
+        for (s, part) in il.parts.iter().enumerate() {
             let mut seg = 0;
             let mut prev = f64::NEG_INFINITY;
-            for j in 0..seq.n {
+            for j in 0..part.n {
                 let key = il.key(s, j, &mut seg);
-                assert!(key >= prev, "seq {s} index {j}: {key} < {prev}");
+                assert!(key >= prev, "part {s} index {j}: {key} < {prev}");
                 prev = key;
             }
         }
@@ -215,7 +215,7 @@ fn keys_are_monotone_within_sequences() {
 fn random_configurations() {
     // Random lengths and schedules: the merge is a permutation in order, equals the
     // brute-force sort, keys are monotone, every seek matches the slice, and nothing of a
-    // scheduled sequence appears before its start.
+    // scheduled part appears before its start.
     let mut rng = Rng(0xC0FF_EE00_1234_5678);
     let mut checked = 0;
     while checked < 2000 {
@@ -260,12 +260,12 @@ fn random_configurations() {
             next[s] += 1;
         }
         assert_eq!(next, lens);
-        for (s, seq) in il.seqs.iter().enumerate() {
+        for (s, part) in il.parts.iter().enumerate() {
             let mut seg = 0;
             let mut prev = -1.0;
-            for j in 0..seq.n {
+            for j in 0..part.n {
                 let key = il.key(s, j, &mut seg);
-                assert!(key.is_finite() && (0.0..=1.0).contains(&key) && key >= prev, "{lens:?} {schedule:?} seq {s} j {j}");
+                assert!(key.is_finite() && (0.0..=1.0).contains(&key) && key >= prev, "{lens:?} {schedule:?} part {s} j {j}");
                 prev = key;
             }
         }
@@ -280,10 +280,10 @@ fn random_configurations() {
                 Uniform => continue,
             };
             if let Some(first) = all.iter().position(|&(x, _)| x == s) {
-                assert!(first as f64 >= joint_count(&il, start) - k as f64 - 1.0, "{lens:?} {schedule:?} seq {s} first at {first}");
+                assert!(first as f64 >= joint_count(&il, start) - k as f64 - 1.0, "{lens:?} {schedule:?} part {s} first at {first}");
             }
             if let Some(last) = all.iter().rposition(|&(x, _)| x == s) {
-                assert!(last as f64 <= joint_count(&il, off) + k as f64 + 1.0, "{lens:?} {schedule:?} seq {s} last at {last}");
+                assert!(last as f64 <= joint_count(&il, off) + k as f64 + 1.0, "{lens:?} {schedule:?} part {s} last at {last}");
             }
         }
     }
@@ -295,7 +295,7 @@ fn uniform_balance() {
         let il = uniform(&lens);
         let worst = worst_deviation(&il, &full(&il));
         for (s, w) in worst.iter().enumerate() {
-            assert!(*w <= 2.0, "lens {lens:?} seq {s}: deviation {w}");
+            assert!(*w <= 2.0, "lens {lens:?} part {s}: deviation {w}");
         }
     }
 }
@@ -313,7 +313,7 @@ fn equal_lengths_round_robin_in_input_order() {
 
 /// Expected prefix size on the shared virtual clock, before discrete rounding.
 fn joint_count(il: &Interleave, t: f64) -> f64 {
-    il.seqs.iter().enumerate().map(|(s, seq)| seq.n as f64 * share(il, s, t)).sum()
+    il.parts.iter().enumerate().map(|(s, part)| part.n as f64 * share(il, s, t)).sum()
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn schedules_are_followed_on_the_virtual_clock() {
             }
             for (s, &n) in lens.iter().enumerate() {
                 let expected = n as f64 * share(&il, s, t);
-                assert!((counts[s] as f64 - expected).abs() <= 1.0 + 1e-10, "{lens:?} {schedule:?} seq {s} at virtual time {t}");
+                assert!((counts[s] as f64 - expected).abs() <= 1.0 + 1e-10, "{lens:?} {schedule:?} part {s} at virtual time {t}");
             }
         }
     }

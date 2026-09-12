@@ -60,23 +60,23 @@ use std::ops::Range;
 pub(crate) const MAX_TOTAL_LEN: u64 = 1 << 46;
 
 #[derive(Clone, Copy, Debug)]
-struct Seq {
+struct Part {
     n: usize,
     /// `1/n`: keys multiply by it instead of dividing (monotone in `j` all the same).
     inv_n: f64,
-    /// Stagger offset `(2r+1)/(2k)` of the sequence with rank `r` among the `k` sequences.
+    /// Stagger offset `(2r+1)/(2k)` of the part with rank `r` among the `k` parts.
     phi: f64,
     /// Index into `Interleave::profiles`; 0 is the shared uniform profile.
     profile: u32,
 }
 
-/// A balanced, order-preserving interleaving of `k` non-empty sequences with schedules,
+/// A balanced, order-preserving interleaving of `k` non-empty parts with schedules,
 /// given only their lengths. Build it with [`Interleave::new`] and walk any merged range
 /// with [`Interleave::iter`].
 #[derive(Clone, Debug)]
 pub(crate) struct Interleave {
-    seqs: Vec<Seq>,
-    /// Rate profiles: `profiles[0]` for the uniform sequences, one more per scheduled one.
+    parts: Vec<Part>,
+    /// Rate profiles: `profiles[0]` for the uniform parts, one more per scheduled one.
     profiles: Vec<Profile>,
     total: usize,
 }
@@ -88,48 +88,51 @@ impl Interleave {
     /// Costs `O(k)` for `k` parts, independent of their lengths.
     pub(crate) fn new(parts: Vec<(usize, Option<Profile>)>) -> Self {
         let k = parts.len();
-        let mut seqs = Vec::with_capacity(k);
         let mut profiles = vec![Profile::trapezoid(0.0, 0.0, 1.0, 1.0)];
         let mut total = 0;
-        for (rank, (n, profile)) in parts.into_iter().enumerate() {
-            debug_assert!(n > 0, "interleave: empty part");
-            let profile = match profile {
-                None => 0,
-                Some(profile) => {
-                    profiles.push(profile);
-                    (profiles.len() - 1) as u32
-                }
-            };
-            total += n;
-            seqs.push(Seq { n, inv_n: 1.0 / n as f64, phi: (2 * rank + 1) as f64 / (2 * k) as f64, profile });
-        }
-        Self { seqs, profiles, total }
+        let parts = parts
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (n, profile))| {
+                debug_assert!(n > 0, "interleave: empty part");
+                let profile = match profile {
+                    None => 0,
+                    Some(profile) => {
+                        profiles.push(profile);
+                        (profiles.len() - 1) as u32
+                    }
+                };
+                total += n;
+                Part { n, inv_n: 1.0 / n as f64, phi: (2 * rank + 1) as f64 / (2 * k) as f64, profile }
+            })
+            .collect();
+        Self { parts, profiles, total }
     }
 
-    /// Length of the merged sequence (sum of all sequence lengths).
+    /// Length of the merged sequence (sum of all part lengths).
     pub(crate) fn len(&self) -> usize {
         self.total
     }
 
-    /// `true` when some non-empty sequence has a schedule.
+    /// `true` when some part has a schedule.
     pub(crate) fn is_scheduled(&self) -> bool {
         self.profiles.len() > 1
     }
 
-    /// Rate profile of `seq`.
+    /// Rate profile of `part`.
     #[inline(always)]
-    fn profile(&self, seq: usize) -> &Profile {
-        &self.profiles[self.seqs[seq].profile as usize]
+    fn profile(&self, part: usize) -> &Profile {
+        &self.profiles[self.parts[part].profile as usize]
     }
 
-    /// Virtual time of element `j` of `seq`. `seg` caches the profile segment.
+    /// Virtual time of element `j` of `part`. `seg` caches the profile segment.
     #[inline(always)]
-    fn key(&self, seq: usize, j: usize, seg: &mut usize) -> f64 {
-        let s = &self.seqs[seq];
-        self.profile(seq).quantile((j as f64 + s.phi) * s.inv_n, seg)
+    fn key(&self, part: usize, j: usize, seg: &mut usize) -> f64 {
+        let s = &self.parts[part];
+        self.profile(part).quantile((j as f64 + s.phi) * s.inv_n, seg)
     }
 
-    /// Iterates the merged range in merged order, yielding `(sequence, index_in_sequence)`.
+    /// Iterates the merged range in merged order, yielding `(part, index within the part)`.
     ///
     /// # Panics
     /// If `range.end > len()` or `range.start > range.end`.
