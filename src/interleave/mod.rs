@@ -30,11 +30,13 @@
 //! # Seeking and iteration
 //!
 //! Count each part's keys below a trial virtual time and sum those integer counts.
-//! A seek tries `position / N`, then interpolates between observed integer ranks
-//! before falling back to bounded bisection. It locates a prefix at
-//! most `2k` elements before its target. Per-part CDF estimates are checked against
-//! the actual keys; bounded index searches correct rounding differences. Equal-key
-//! runs are consumed by counts in part order, without walking through the run.
+//! A seek tries `position / N`, then up to eight secant interpolations between
+//! observed integer ranks, then at most 63 virtual-time bisections, each counting all
+//! `k` parts. It locates a prefix at most `2k` elements before its target. Each
+//! per-part count starts from a constant-time CDF estimate and corrects it against
+//! the actual keys with at most four steps, then a bounded index bisection of at most
+//! 46 steps; profiles have at most five segments. Equal-key runs are consumed by
+//! counts in part order, without walking through the run.
 //!
 //! A tournament tree merges the remaining heads and replays to the exact target.
 //! Each subsequent step uses `ceil(log2 k)` comparisons, dropping to none when one

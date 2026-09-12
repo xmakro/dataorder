@@ -2,6 +2,11 @@
 
 ## Unreleased (0.4.0)
 
+- Give each documented rule one home. The crate docs keep the reference text on
+  shuffles, repetitions and salts, `Schedule` keeps the virtual-clock model, and the
+  README, sequence and source docs point to them instead of restating them. Move the
+  seek probe bounds from the crate's cost section into the interleave module docs.
+
 - **Breaking:** merge `BoundsError::StartOverflow` and `BoundsError::EndOverflow` into
   `BoundsError::Overflow`, and remove `ScheduleReason::CoefficientOverflow`:
   breakpoints too close together for finite profile coefficients are reported as

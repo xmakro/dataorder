@@ -137,16 +137,13 @@ assert_eq!(Order::new(seq)?.len(), 1_000_000);
 # Ok::<(), dataorder::Error>(())
 ```
 
-Each shuffled cycle permutes its immediate input on every pass, including the first,
-using the order's seed and its local pass number. Nested shuffles keep their own
-permutations. Plain `.repeat(times)` and `.cycle_to(count)` replay the input order;
-for example, `.shuffle().repeat(3)` repeats the same permutation three times.
-`.shuffle()` produces the same order as `.repeat_shuffled(1)`. Set the seed for all
-shuffled operations with `Order::with_seed(seq, seed)` or `order.set_seed(seed)`;
-source salts distinguish datasets within that run.
-Each shuffled layer derives a new salt for enclosing shuffles, so nested shuffles
-use distinct keys. The input's permutation stays fixed; equal permutations can still
-occur by chance, especially with few records.
+Each shuffled pass uses the order's seed, the input's configuration salt and its
+pass number, so `.shuffle()` produces the same order as `.repeat_shuffled(1)`, while
+plain `.repeat(times)` and `.cycle_to(count)` replay the input order. Set the seed
+for all shuffled operations with `Order::with_seed(seq, seed)` or
+`order.set_seed(seed)`; source salts distinguish datasets within that run. See the
+[shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
+for what else a permutation depends on.
 Changing a part's count can change the mixed order's prefix. Keep the original
 configuration and concatenate additional data when the existing prefix must stay fixed.
 
@@ -183,20 +180,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**Virtual time is not output progress.** With normalized cumulative curves `F_i`,
-part counts `n_i` and total count `N`, the continuous model reaches output progress
-`sum(n_i * F_i(t)) / N` at virtual time `t`. A part's fraction of the output rate is
-`n_i * rate_i(t) / sum(n_j * rate_j(t))` when the combined rate is positive.
-Changing another part's count or schedule can therefore move its actual start or
-end position. Linear ramps remain smooth in virtual time but generally become
-nonlinear against output progress; constant curves adapt in the same way.
-Discrete items approximate the curves, while counts and source-local order remain exact.
-
-Schedules can overlap or leave gaps, including mixes with no uniform parts. Clock
-intervals with no active parts produce no output. There is no shared capacity check
-or special filler source. Individual breakpoint and numerical-resolution limits still
-apply. See [`Schedule`](https://docs.rs/dataorder/latest/dataorder/enum.Schedule.html)
-for ramps, fade-outs, limits and the virtual-clock model.
+**Virtual time is not output progress.** A delay of 0.5 need not start halfway
+through the output, and changing another part's count or schedule can move a part's
+actual start or end position. Schedules can overlap or leave gaps, and there is no
+shared capacity check or filler source. See
+[`Schedule`](https://docs.rs/dataorder/latest/dataorder/enum.Schedule.html) for the
+continuous model, ramps, fade-outs and limits.
 
 **Migration from 0.3:** scheduled orders change in 0.4. `Uniform` no longer fills
 other schedules' unused capacity, and start/full/fade/off values now refer to
@@ -205,11 +194,10 @@ resume existing checkpoints with their original crate version.
 
 ## Things to know
 
-- **Composition matters.** Shuffle each input sequence before mixing. `Order::new`
-  rejects a shuffle or shuffled repetition containing any mix, including empty or single-part mixes and
-  mixes nested beneath other operations, with `ErrorKind::ShuffleContainsMix`.
-  To make a schedule span several epochs, repeat its input sequence;
-  repeating the whole mix restarts its schedules each epoch.
+- **Composition matters.** Shuffle each input sequence before mixing: `Order::new`
+  rejects a shuffle or shuffled repetition containing any mix with
+  `ErrorKind::ShuffleContainsMix`. Repeat a schedule's input sequence to span
+  several epochs; repeating the whole mix restarts its schedules each epoch.
 - **Workers partition positions.** Apply `.skip(index).step_by(count)` to the
   completed sequence to divide its positions without overlap. Check `index < count`
   in your calling code. For a known sequence length `len`, use `skip(index.min(len))`
@@ -222,18 +210,10 @@ resume existing checkpoints with their original crate version.
   must choose their truncation or padding policy.
 - **Seeds are reproducible.** The same configuration and seed give the same order on
   supported platforms. `Order::with_seed` and `set_seed` reseed all existing shuffles.
-  Shuffle salts follow the original source configuration, including empty and
-  selected-away sources. Each shuffle, shuffled repeat or shuffled cycle advances
-  the salt once, even if its runtime node folds away. Plain repetitions and selections
-  pass it through unchanged. Changing a source's salt or original length, or changing
-  shuffled layers, can change a shuffle above it. Regrouping concatenations or adding
-  empty concatenations preserves shuffling. Compiler pruning has no effect on these salts.
-  Nested plain repeats compose: `.repeat(3).repeat(2)` matches `.repeat(6)`.
-  Adding an outer repeat preserves the entire first pass, including nested epochs.
-  The order seed passes down unchanged; each shuffled repeat uses only its local
-  pass number. Nested shuffled repetitions permute their own inputs
-  separately and do not flatten into one shuffled repetition. See the
-  [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions).
+  A permutation depends on the order seed and the input's configuration salt, which
+  follows the original source configuration. See the
+  [shuffle and repetition rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
+  for what preserves an existing shuffle when a configuration changes.
 - **Bounds are checked.** `Order::new` reports invalid configurations with an error
   kind and node path. `take` and `skip` past the end are errors. `get`
   returns `None` for invalid positions. `cursor` and `reset` return

@@ -41,23 +41,14 @@ pub enum Seq<T> {
     Concat(Vec<Self>),
     /// Every element of every part, interleaved according to each part's [`Schedule`].
     /// Each part keeps its own order. Empty parts do not affect the other parts' order.
-    ///
-    /// Schedules span this mix's length. Repeating the mix restarts them each epoch;
-    /// repeat its parts instead to schedule over the whole run. The total length
-    /// cannot exceed [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
+    /// Schedules belong to this mix; see [`Schedule`]. The total length cannot exceed
+    /// [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     Mix(Vec<MixPart<T>>),
     /// Every position of `inner` once, in a seeded pseudorandom order.
     ///
-    /// `inner` must contain no `Mix` nodes, including empty or single-part mixes
-    /// and mixes nested beneath other operations. Shuffle inputs before mixing.
-    /// [`Order::new`](crate::Order::new) rejects this combination with
-    /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
-    ///
-    /// The permutation depends on the order's seed
-    /// and the input configuration's ordered source salts, original lengths and shuffled layers.
-    /// Concatenation grouping and empty concatenations do not affect it.
-    /// Empty or discarded sources still contribute. See the crate's
-    /// [shuffle rules](crate#shuffles-and-repetitions) for details.
+    /// `inner` must contain no mixes; shuffle inputs before mixing. The permutation
+    /// depends on the order's seed and the input's configuration salt. See the crate's
+    /// [shuffle rules](crate#shuffles-and-repetitions) for both.
     Shuffle {
         /// The sequence to permute.
         inner: Box<Self>,
@@ -65,9 +56,7 @@ pub enum Seq<T> {
     /// `inner` repeated `times` times, preserving its record order on every pass.
     /// Any mix schedules inside restart each epoch.
     /// `x.repeat(1)` is `x`; `x.repeat(0)` is empty but still validates `inner`.
-    ///
-    /// Nested plain repeats compose: `x.repeat(3).repeat(2)` has the
-    /// same order as `x.repeat(6)`. Adding an outer repeat preserves the first pass.
+    /// See the crate's [repetition rules](crate#shuffles-and-repetitions).
     Repeat {
         /// Number of repetitions.
         times: usize,
@@ -76,9 +65,7 @@ pub enum Seq<T> {
     },
     /// Exactly `len` positions of `inner`, repeating or truncating it as needed.
     ///
-    /// Each pass preserves the input's record order, as [`Repeat`](Seq::Repeat)
-    /// does. Adding an outer cycle preserves the first pass, including nested epochs.
-    /// Increasing its length preserves the existing prefix when it is outermost.
+    /// Each pass preserves the input's record order, as [`Repeat`](Seq::Repeat) does.
     /// When `len` fits within `inner`, this is equivalent to `inner.take(len)`.
     /// A positive `len` requires a non-empty child. `cycle_to(usize::MAX)` creates the
     /// longest supported order; it is still finite.
@@ -90,10 +77,8 @@ pub enum Seq<T> {
     },
     /// `inner` repeated `times` times, with a separate permutation of its positions
     /// on every pass, including the first. Nested shuffles keep their own permutations.
-    ///
-    /// Uses the order's seed, the local pass number and the input's configuration salt.
-    /// Enclosing repetitions do not affect the permutation. Like [`Shuffle`](Seq::Shuffle),
-    /// the input must contain no mixes, even when `times` is zero.
+    /// Like [`Shuffle`](Seq::Shuffle), the input must contain no mixes, even when
+    /// `times` is zero; see the crate's [shuffle rules](crate#shuffles-and-repetitions).
     ShuffledRepeat {
         /// Number of shuffled repetitions.
         times: usize,
@@ -200,11 +185,7 @@ impl<T> Seq<T> {
     /// This sequence in a pseudorandom order selected by the order's seed and input salt.
     /// Produces the same order as `repeat_shuffled(1)`. Select the run with
     /// [`Order::with_seed`](crate::Order::with_seed) or [`Order::set_seed`](crate::Order::set_seed).
-    /// Nested shuffled layers use distinct derived keys without reseeding their inputs.
-    ///
-    /// The sequence must contain no mixes, even beneath other operations or in
-    /// subtrees that would fold away. Shuffle each input before mixing instead.
-    /// This restriction is checked by [`Order::new`](crate::Order::new).
+    /// The sequence must contain no mixes; see [`Shuffle`](Seq::Shuffle).
     ///
     /// ```
     /// use dataorder::{Order, Seq};
@@ -260,9 +241,6 @@ impl<T> Seq<T> {
     /// Repeats this sequence with a separate shuffle of its positions on every pass.
     /// Includes the first pass and uses the order's seed. Nested shuffles stay fixed;
     /// the input must contain no mixes. See [`ShuffledRepeat`](Seq::ShuffledRepeat).
-    /// Only the unchanged order seed passes to the input. For example,
-    /// `x.repeat_shuffled(1).take(2).repeat_shuffled(2)` permutes the same two
-    /// selected positions on both outer passes.
     ///
     /// ```
     /// use dataorder::{Order, Seq};

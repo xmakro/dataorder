@@ -77,19 +77,10 @@
 //! [`Seq::cycle_to`] or [`Seq::cycle_to_shuffled`] before mixing. A mix preserves
 //! the order within each part; use the shuffled variant to shuffle each pass.
 //!
-//! [`Schedule`] assigns each part's elements keys on a shared virtual clock.
-//! Curves are independent: `Uniform` is constant in virtual time, and all parts
-//! adapt equally when their keys are merged. Clock values are not fractions of
-//! final output progress; a delay of 0.5 need not start halfway through the output,
-//! and a linear ramp generally becomes nonlinear against output positions. See
-//! [`Schedule`] for the conversion and an example. Overlaps and gaps are allowed.
-//! Schedules belong to their mix:
-//! repeating a mix restarts its schedules each epoch. To schedule over several epochs,
-//! repeat the parts and mix them once. `skip(index).step_by(count)` partitions the
-//! resulting positions among workers; see [`Seq::step_by`] for worker configuration,
-//! costs, and the difference between partitioning a mix and partitioning its parts. The global position partition does not
-//! guarantee a balanced dataset mix on each worker: two equal interleaved parts
-//! sharded two ways send one part exclusively to each worker.
+//! [`Schedule`] assigns each part's elements keys on a shared virtual clock, which is
+//! not output progress; see [`Schedule`] for the model, its limits and an example.
+//! `skip(index).step_by(count)` partitions the resulting positions among workers; see
+//! [`Seq::step_by`] for worker configuration and costs.
 //!
 //! # Shuffles and repetitions
 //!
@@ -99,9 +90,10 @@
 //! - The input configuration's ordered source salts, original source lengths and
 //!   shuffled layers, before pruning or flattening.
 //!
-//! A shuffle's input configuration must contain no mixes, including empty or single-part
-//! mixes and mixes nested under other operations. Shuffle each input before mixing.
-//! [`Order::new`] reports [`ErrorKind::ShuffleContainsMix`] at the enclosing shuffle.
+//! The input configuration of a shuffle or shuffled repetition must contain no mixes,
+//! including empty or single-part mixes and mixes nested under other operations.
+//! Shuffle each input before mixing. [`Order::new`] reports
+//! [`ErrorKind::ShuffleContainsMix`] at the enclosing shuffle.
 //!
 //! Give datasets stable [`Source::salt`] values to distinguish their shuffles when
 //! their lengths match. [`Order::set_seed`] changes the seed for all shuffles
@@ -121,14 +113,12 @@
 //! repeats never reseed them. Each shuffled layer derives a new configuration salt
 //! for enclosing shuffles, so `x.shuffle().shuffle()` uses distinct permutation keys.
 //! Distinct keys can still produce the same permutation, especially for small inputs.
-//! Every child receives the unchanged order seed, with
-//! no enclosing epoch. The shuffled variants reject mixes in their inputs,
-//! just like `shuffle`. A shortened final pass takes a prefix of its full permutation.
+//! Every child receives the unchanged order seed, with no enclosing epoch.
+//! A shortened final pass takes a prefix of its full permutation.
 //!
 //! Plain repetition of a shuffled repetition replays the same series of permutations.
 //! Nested shuffled repetitions each permute their own input and therefore do not
-//! flatten into one shuffled repetition. Extending an outermost shuffled repeat or
-//! cycle preserves its existing prefix.
+//! flatten into one shuffled repetition.
 //!
 //! `x.repeat(3).repeat(2)` has the same order as `x.repeat(6)`.
 //! Adding, reordering or nesting mixture
@@ -136,7 +126,7 @@
 //! Their own configurations and the order seed determine their permutations.
 //!
 //! Adding an outer repeat preserves the entire first pass. Extending an outermost
-//! repeat or cycle preserves the existing prefix. A selection fixes the positions
+//! repeat or cycle, plain or shuffled, preserves the existing prefix. A selection fixes the positions
 //! that subsequent operations can draw from: `x.repeat_shuffled(1).take(2).repeat_shuffled(2)`
 //! permutes the same selected pair on both outer passes.
 //!
@@ -206,20 +196,15 @@
 //! | Mix | A seek over its parts, with the cost described below |
 //! | Repeat, skip, take, step by | Position arithmetic |
 //!
-//! For a mix with `k` non-empty parts, seeking counts elements below a trial virtual
-//! time, then replays at most `2k` tournament steps. It tries `position / N` first,
-//! which is a good estimate for uniform mixes. Scheduled mixes generally require
-//! rank interpolation or bisection because virtual time differs from output progress.
-//! After at most eight interpolation probes, there are at most 63 virtual-time
-//! bisections, each counting all `k` parts. Each count starts with
-//! a constant-time CDF estimate; correcting it against actual keys takes at most
-//! 46 index bisections. Profiles have at most five segments. Building and replaying
-//! the tournament costs `O(k log(k + 1))`; long equal-key runs are handled by counts.
+//! For a mix with `k` non-empty parts, seeking counts each part's elements below a
+//! bounded number of trial virtual times, then replays at most `2k` tournament steps.
+//! It tries `position / N` first, which is a good estimate for uniform mixes;
+//! scheduled mixes generally need more probes because virtual time differs from
+//! output progress. Building and replaying the tournament costs `O(k log(k + 1))`.
 //!
 //! Sequential iteration keeps cursor state. A mix uses `⌈log2 k⌉` tournament comparisons
 //! per element plus one key computation, with no comparisons once one part remains.
-//! A shuffle reads scattered child positions without allocating; its input cannot
-//! contain mixes. Shuffle the parts before mixing.
+//! A shuffle reads scattered child positions without allocating.
 //!
 //! Stepping through a sequence skips unselected child positions. Mixes advance their
 //! interleave for short skips and seek for longer ones. Sharding a mix across `count`
