@@ -24,8 +24,9 @@
 //! which determines all six round keys. A [`Key`] stores 384 bits, but has only
 //! 64 bits of independent input. This is for reproducible ordering, not cryptography.
 //!
-//! `permute` and its rounds are `#[inline(always)]`: the shuffle step is one small function
-//! and the permutation is most of it.
+//! `permute`, its rounds and `key` are `#[inline(always)]`: the shuffle step is one small
+//! function and the permutation is most of it, and an inlined derivation keeps the round
+//! keys in registers instead of returning them through memory.
 
 /// Shape of the domain: `n` and the widths and masks of the two Feistel halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,8 +34,10 @@ pub(crate) struct Shape {
     pub(crate) n: usize,
     /// Width of the right half, which is at least as wide as the left half.
     rb: u32,
-    lmask: u64,
-    rmask: u64,
+    /// Masks of the left and right halves. Each half has at most 32 bits, which keeps
+    /// the shape, and the cursor slot holding it, small.
+    lmask: u32,
+    rmask: u32,
 }
 
 impl Shape {
@@ -42,7 +45,7 @@ impl Shape {
         let bits = usize::BITS - n.saturating_sub(1).leading_zeros();
         let lb = bits / 2;
         let rb = bits - lb;
-        Self { n, rb, lmask: (1u64 << lb) - 1, rmask: (1u64 << rb) - 1 }
+        Self { n, rb, lmask: ((1u64 << lb) - 1) as u32, rmask: ((1u64 << rb) - 1) as u32 }
     }
 }
 
@@ -71,13 +74,9 @@ const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 /// `salt`. Ordinary shuffles use pass zero. These inputs are hashed together, not merely
 /// xored, so no simple relation between them reproduces another combination's key. Not a
 /// security boundary: seeds are for reproducibility.
-#[inline]
+#[inline(always)]
 pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
-    let pass_seed = if pass == 0 {
-        order_seed
-    } else {
-        mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
-    };
+    let pass_seed = if pass == 0 { order_seed } else { pass_seed(order_seed, pass) };
     // Keep the former zero-local-seed offset to preserve shuffled-repeat ordering.
     let a = mix64(mix64(0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
     let mut k = Key::UNSET;
@@ -85,6 +84,13 @@ pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
         *rk = mix64(a.wrapping_add((i as u64).wrapping_mul(PHI)));
     }
     k
+}
+
+/// The seed of a pass after the first. Out of line so that the first pass, which every
+/// shuffle uses, does not wait for the compiler to speculatively compute it as well.
+#[inline(never)]
+fn pass_seed(order_seed: u64, pass: usize) -> u64 {
+    mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
 }
 
 /// An ordered configuration fingerprint and the multiplier needed to append it.
@@ -140,13 +146,14 @@ fn round(l: u64, r: u64, mask: u64, rk: u64) -> (u64, u64) {
 /// One application of the keyed bijection on `0..2^k`.
 #[inline(always)]
 fn mix(s: Shape, k: Key, x: u64) -> u64 {
-    let (l, r) = (x >> s.rb, x & s.rmask);
-    let (l, r) = round(l, r, s.lmask, k.rk[0]);
-    let (l, r) = round(l, r, s.rmask, k.rk[1]);
-    let (l, r) = round(l, r, s.lmask, k.rk[2]);
-    let (l, r) = round(l, r, s.rmask, k.rk[3]);
-    let (l, r) = round(l, r, s.lmask, k.rk[4]);
-    let (l, r) = round(l, r, s.rmask, k.rk[5]);
+    let (lmask, rmask) = (u64::from(s.lmask), u64::from(s.rmask));
+    let (l, r) = (x >> s.rb, x & rmask);
+    let (l, r) = round(l, r, lmask, k.rk[0]);
+    let (l, r) = round(l, r, rmask, k.rk[1]);
+    let (l, r) = round(l, r, lmask, k.rk[2]);
+    let (l, r) = round(l, r, rmask, k.rk[3]);
+    let (l, r) = round(l, r, lmask, k.rk[4]);
+    let (l, r) = round(l, r, rmask, k.rk[5]);
     // After an even number of rounds the halves have their original widths.
     (l << s.rb) | r
 }

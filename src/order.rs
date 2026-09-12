@@ -1,7 +1,7 @@
 //! Validation, compilation and random access.
 //!
 //! The compiler separates source handles from the configuration, then builds a tree
-//! with lengths, concat offsets, interleave profiles and shuffle shapes. [`get`]
+//! with lengths, concat offsets, interleave profiles and shuffle salts. [`get`]
 //! follows that tree to resolve a position without keeping iteration state.
 
 use crate::cursor::{Cursor, resolve_range};
@@ -33,18 +33,13 @@ pub(crate) enum Node {
         il: Interleave,
         children: Vec<Self>,
     },
-    /// `salt` is the input configuration's salt, computed before pruning.
-    Shuffle {
-        salt: u64,
-        shape: Shape,
-        child: Box<Self>,
-    },
     /// `child` repeated: positions `0..len`, `child_len` per repetition, the last one cut
-    /// short when `len` is not a multiple (a cycle).
+    /// short when `len` is not a multiple (a cycle). A shuffle is one shuffled pass.
     Repeat {
         child_len: usize,
         len: usize,
-        /// Input salt when this node shuffles each pass; nested shuffles stay fixed.
+        /// The input configuration's salt, computed before pruning, when this node
+        /// shuffles each pass; nested shuffles stay fixed.
         shuffle: Option<u64>,
         child: Box<Self>,
     },
@@ -68,7 +63,6 @@ impl Node {
             Self::Source { len, .. } | Self::Repeat { len, .. } | Self::Slice { len, .. } | Self::Stride { len, .. } => *len,
             Self::Concat { offsets, .. } => *offsets.last().unwrap(),
             Self::Mix { il, .. } => il.len(),
-            Self::Shuffle { shape, .. } => shape.n,
         }
     }
 }
@@ -324,12 +318,11 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (u32, usi
                 pos = j;
                 node = &children[s];
             }
-            Node::Shuffle { salt, shape, child } => {
-                pos = perm::permute(*shape, perm::key(order_seed, 0, *salt), pos);
-                node = child;
-            }
-            Node::Repeat { child_len, shuffle, child, .. } => {
-                let pass = pos / child_len;
+            Node::Repeat { child_len, len, shuffle, child } => {
+                // A single pass, such as a shuffle, never divides. Comparing the lengths
+                // rather than the position keeps the compiler from folding this branch
+                // back into an unconditional division.
+                let pass = if len <= child_len { 0 } else { pos / child_len };
                 pos -= pass * child_len;
                 if let Some(salt) = shuffle {
                     pos = perm::permute(Shape::new(*child_len), perm::key(order_seed, pass, *salt), pos);
@@ -358,7 +351,8 @@ struct Compiled {
 
 impl Compiled {
     /// Build a repetition after validating its input and target length.
-    /// A positive target length requires a nonempty input.
+    /// A positive target length requires a nonempty input. A single plain pass
+    /// needs no node; a single shuffled pass over more than one element is a shuffle.
     fn repeat_to(self, len: usize, shuffled: bool) -> Self {
         let Self { node: child, len: child_len, salt } = self;
         let shuffle = (shuffled && child_len > 1).then_some(salt.value);
@@ -415,7 +409,7 @@ impl<T: Source> Compiler<T> {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, depth),
             Seq::Mix(parts) => self.mix_parts(parts, depth),
-            Seq::Shuffle { inner } => self.shuffle(*inner, depth),
+            Seq::Shuffle { inner } => self.repeat(1, *inner, true, depth),
             Seq::Repeat { times, inner } => self.repeat(times, *inner, false, depth),
             Seq::Cycle { len, inner } => self.cycled(len, *inner, false, depth),
             Seq::ShuffledRepeat { times, inner } => self.repeat(times, *inner, true, depth),
@@ -476,25 +470,16 @@ impl<T: Source> Compiler<T> {
         self.mix(children, &schedule)
     }
 
-    fn shuffle(&mut self, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
-        let mut child = self.shuffle_child(inner, depth)?;
-        if child.len > 1 {
-            child.node = Node::Shuffle { salt: child.salt.value, shape: Shape::new(child.len), child: Box::new(child.node) };
+    /// Compiles a repetition's input. A shuffled input must contain no mix, and is
+    /// validated as such even if the repetition or its output folds away.
+    fn repeat_child(&mut self, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
+        if !shuffled {
+            return self.child(0, inner, depth);
         }
-        child.salt = perm::shuffled_salt(child.salt);
-        Ok(child)
-    }
-
-    /// Validate the original input even if the shuffle or its output folds away.
-    fn shuffle_child(&mut self, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         let enclosing = self.shuffle_path_len.replace(self.path.len());
         let child = self.child(0, inner, depth);
         self.shuffle_path_len = enclosing;
         child
-    }
-
-    fn repeat_child(&mut self, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        if shuffled { self.shuffle_child(inner, depth) } else { self.child(0, inner, depth) }
     }
 
     fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
