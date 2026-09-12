@@ -246,7 +246,7 @@ cargo bench --bench ordering
 cargo bench --bench ordering -- mix_100
 ```
 
-The [benchmark suite](benches/ordering.rs) covers a billion-record shuffle, shuffled repeats and cycles, a mix
+The [benchmark suite](benches/ordering.rs) covers a billion-record shuffle, a shuffled repeat, a mix
 of 100 shuffled datasets, and a mix of 1,000 shuffled datasets with 20% scheduled.
 Each measures construction, random lookup, fresh seek, reused cursor seek, and a
 100,000-item walk. Sources are lengths only; no record I/O is included.
@@ -255,10 +255,10 @@ precomputed. Both seek measurements include the first item; fresh seek also
 includes cursor construction and destruction. Walk timing includes its initial
 seek and reports throughput in elements per second.
 
-The `selection` workloads measure slices over shuffles, repeats and mixes; strides
-over sources, shuffles, repeats and mixes; and a mix whose parts combine these
-selections. Each uses the same construction, lookup, seek and walk measurements.
-Run them with `cargo bench --bench ordering -- selection`.
+The `selection` workloads measure a slice and a stride over the same shuffle, which
+compares the two selection cursors, and a stride over a mix, which exercises the
+mix's short-skip path. Each uses the same construction, lookup, seek and walk
+measurements. Run them with `cargo bench --bench ordering -- selection`.
 
 The `cursor_state` group measures cloning after entering a smaller concat child,
 seeking the clone back, repeated seeks between children, and walking across children

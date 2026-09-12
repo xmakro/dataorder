@@ -9,7 +9,6 @@ fn ordering(c: &mut Criterion) {
     let workloads = [
         ("shuffle", Seq::source(1_000_000_000).shuffle()),
         ("repeat_shuffled", Seq::source(1024).repeat_shuffled(1_000_000)),
-        ("cycle_to_shuffled", Seq::source(1024).cycle_to_shuffled(1_000_000_001)),
         ("mix_100", Seq::mix((0..100).map(|_| Seq::source(1_000_000).shuffle()))),
         (
             "scheduled_1000",
@@ -18,17 +17,11 @@ fn ordering(c: &mut Criterion) {
                 (Seq::source(100_000).shuffle(), schedule)
             })),
         ),
+        // The same shuffle behind each selection cursor: a unit stride and a longer one.
         ("selection/slice_shuffle", Seq::source(1_000_000_000).shuffle().skip(12_345).take(750_000_000)),
-        ("selection/slice_repeat", Seq::source(1024).repeat(1_000_000).skip(17).take(900_000_000)),
-        ("selection/slice_mix", Seq::mix((0..100).map(|_| Seq::source(1_000_000).shuffle())).skip(12_345).take(75_000_000)),
-        ("selection/stride_source", Seq::source(1_000_000_000).skip(11).step_by(8)),
         ("selection/stride_shuffle", Seq::source(1_000_000_000).shuffle().skip(11).step_by(8)),
-        ("selection/stride_repeat", Seq::source(1024).repeat(1_000_000).skip(17).step_by(7)),
+        // A short stride over a mix walks its interleave between elements instead of seeking.
         ("selection/stride_mix", Seq::mix((0..100).map(|_| Seq::source(1_000_000).shuffle())).skip(11).step_by(8)),
-        (
-            "selection/mix_selected_parts",
-            Seq::mix((0..100).map(|i| Seq::source(1_000_000).shuffle().skip(11).take(900_000).step_by(1 + i % 4))),
-        ),
     ];
 
     for (name, seq) in workloads {
