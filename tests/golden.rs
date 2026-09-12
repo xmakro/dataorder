@@ -83,32 +83,32 @@ fn golden_orders() {
         ("shuffle, shuffled repeat", src(0, 37).shuffle().repeat_shuffled(3), 42),
         ("shuffled repeat, shuffled cycle", src(0, 37).repeat_shuffled(2).cycle_to_shuffled(100), 42),
     ];
-    // Captured from the prior implementation with every shuffle seed set to zero,
-    // before removing the per-shuffle seed. Nested cases (shuffle(concat) and the last
-    // three) were independently calculated with Python integer Feistel arithmetic
-    // and the configuration salt step for each shuffled layer. shuffle(concat) also
-    // uses the associative polynomial salt. Other cases are unchanged.
+    // Captured after the 0.4.0 key derivation change. Every case without a mix
+    // (shuffles, repeats, cycles, selections and shuffled repetitions, nested or not)
+    // was independently recomputed in Python from the documented Feistel arithmetic,
+    // key derivation and configuration salts. The mix cases are this implementation's
+    // output.
     const EXPECTED: [u64; 20] = [
-        9636474030837673273,
-        99794755355777013,
-        9286240989508410160,
-        14935844359599640341,
-        2169467847850813516,
-        6077391615804054636,
-        4777681411854005729,
-        14822918342460314720,
-        6306593996894984370,
-        9905920817996087845,
-        8047275810872675024,
-        2356273720401712677,
-        13646566052028493114,
-        15158694468846685013,
-        3667822865842139108,
-        4895949453059197240,
-        10785437813920805584,
-        3556920425061620029,
-        7959941557936061057,
-        17791197923179096559,
+        8775043117251707565,
+        3994110308236394269,
+        3557037918981979648,
+        9224125550474297501,
+        17133402622130432927,
+        1083239877109596384,
+        3718334892975712781,
+        12369965706742603044,
+        4378099840426581584,
+        10161468430947224613,
+        4352769584230633250,
+        16917178287728660389,
+        5795192745291637981,
+        5529291456710688149,
+        14913036641801498832,
+        949497126177981280,
+        2289177200024162075,
+        15290745128168257965,
+        13806615233696808257,
+        12692409462087837018,
     ];
     let actual: Vec<u64> = cases
         .iter()
@@ -121,7 +121,7 @@ fn golden_orders() {
     assert_eq!(actual, EXPECTED, "orders changed for {names:?}");
     // A few elements in the clear, for the first case.
     let order = Order::new(src(0, 1000).shuffle()).unwrap();
-    const FIRST: [usize; 6] = [151, 178, 291, 270, 785, 758];
+    const FIRST: [usize; 6] = [526, 829, 306, 360, 895, 764];
     assert_eq!(order.cursor(0..6).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     assert!((0..6).all(|k| order.get(k).unwrap().record_index == FIRST[k]));
 }
@@ -145,8 +145,8 @@ fn golden_name_salted_order() {
     // Pin the public salt helper as well as its effect on the whole permutation.
     // Both the prefix and fingerprint were independently calculated from the specified
     // FNV-1a and Feistel arithmetic, rather than obtained by blessing this test's output.
-    const FIRST: [usize; 12] = [702, 250, 476, 856, 914, 348, 674, 781, 21, 676, 402, 820];
-    const EXPECTED: u64 = 14_434_970_332_188_175_925;
+    const FIRST: [usize; 12] = [506, 411, 725, 884, 42, 543, 801, 386, 458, 650, 383, 516];
+    const EXPECTED: u64 = 15_280_393_085_099_573_649;
     let order = Order::with_seed(Seq::source(Named { name: "web/训练.bin" }).shuffle(), 42).unwrap();
     assert_eq!(order.cursor(..12).unwrap().map(|item| item.record_index).collect::<Vec<_>>(), FIRST);
     let actual = order

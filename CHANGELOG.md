@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** simplify shuffle key derivation. The order seed, local pass number and
+  configuration salt are hashed together in one step, without the former
+  zero-local-seed offset or a separate first-pass path. Every shuffled order changes;
+  the public API and serialized format are unchanged. Resume older orders with their
+  original crate version.
+
 - **Breaking:** remove `MAX_DEPTH` and `ErrorKind::TooDeep`. Compilation no longer
   counts nesting levels, so configurations of any depth compile. Compilation, mapping,
   cloning, comparison and destruction recurse with depth as before, so arbitrarily

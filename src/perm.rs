@@ -70,27 +70,18 @@ pub(crate) fn mix64(mut z: u64) -> u64 {
 
 const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// The key of a shuffle with `order_seed`, local `pass` and configuration
-/// `salt`. Ordinary shuffles use pass zero. These inputs are hashed together, not merely
-/// xored, so no simple relation between them reproduces another combination's key. Not a
-/// security boundary: seeds are for reproducibility.
+/// The key of a shuffle with `order_seed`, local `pass` and configuration `salt`.
+/// Ordinary shuffles use pass zero. The seed and the salt are each mixed before the
+/// three are hashed together, so no simple relation between them reproduces another
+/// combination's key. Not a security boundary: seeds are for reproducibility.
 #[inline(always)]
 pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
-    let pass_seed = if pass == 0 { order_seed } else { pass_seed(order_seed, pass) };
-    // Keep the former zero-local-seed offset to preserve shuffled-repeat ordering.
-    let a = mix64(mix64(0x2545_F491_4F6C_DD1D).wrapping_add(pass_seed.wrapping_mul(PHI)).wrapping_add(mix64(salt)) ^ 0x1F83_D9AB_FB41_BD6B);
+    let a = mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add(mix64(salt)).wrapping_add((pass as u64).wrapping_mul(PHI)));
     let mut k = Key::UNSET;
     for (i, rk) in k.rk.iter_mut().enumerate() {
         *rk = mix64(a.wrapping_add((i as u64).wrapping_mul(PHI)));
     }
     k
-}
-
-/// The seed of a pass after the first. Out of line so that the first pass, which every
-/// shuffle uses, does not wait for the compiler to speculatively compute it as well.
-#[inline(never)]
-fn pass_seed(order_seed: u64, pass: usize) -> u64 {
-    mix64(mix64(order_seed ^ 0x3C6E_F372_FE94_F82B).wrapping_add((pass as u64).wrapping_mul(PHI)) ^ PHI)
 }
 
 /// An ordered configuration fingerprint and the multiplier needed to append it.
@@ -320,13 +311,11 @@ mod tests {
     }
 
     #[test]
-    fn public_seeds_with_patterned_consecutive_images() {
-        // Seven multiply-and-truncate rounds produced serial correlation 0.0512 on the
-        // first case and consecutive-difference chi-square 13,622 on the second. Use the
+    fn public_lengths_with_patterned_consecutive_images() {
+        // Seven multiply-and-truncate rounds produced serial correlation 0.0512 at the
+        // first length and consecutive-difference chi-square 13,622 at the second. Use the
         // public API: a bare length contributes a source salt, unlike the private helper.
-        // These order seeds reproduce the former local seeds 1 and 18_437 with order
-        // seed zero, keeping the same regression permutations after removing local seeds.
-        for (n, seed) in [(56_444, 10_701_884_503_043_813_976), (65_536, 1_868_409_662_210_368_291)] {
+        for (n, seed) in [(56_444, 1), (65_536, 18_437)] {
             assert_statistics(&public_perm(n, seed), seed, 5.0);
         }
     }
