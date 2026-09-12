@@ -139,7 +139,7 @@ impl<'a, T> Iterator for Cursor<'a, T> {
         }
         self.pos += 1;
         let (src, index) = self.root.next(self.order.seed);
-        Some(Item { source_ordinal: src as usize, source: &self.order.sources[src as usize], record_index: index })
+        Some(Item { source_ordinal: src, source: &self.order.sources[src], record_index: index })
     }
 
     /// Skips `n` elements without visiting them, then yields the next.
@@ -209,7 +209,7 @@ const UNSEEKED: usize = usize::MAX;
 pub(crate) enum NodeCursor<'a> {
     Empty,
     Source {
-        src: u32,
+        src: usize,
         offset: usize,
         next: usize,
     },
@@ -272,7 +272,7 @@ impl<'a> NodeCursor<'a> {
 
     /// The next element. Must not be called past the end.
     #[inline]
-    fn next(&mut self, order_seed: u64) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (usize, usize) {
         match self {
             NodeCursor::Empty => unreachable!("dataorder: next in an empty sequence"),
             NodeCursor::Source { src, next, .. } => {
@@ -353,7 +353,7 @@ impl<'a> ConcatCursor<'a> {
 
     /// Keep the ordinary child step inlined into node dispatch.
     #[inline(always)]
-    fn next(&mut self, order_seed: u64) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (usize, usize) {
         if self.left == 0 {
             self.idx += 1;
             self.left = self.offsets[self.idx + 1] - self.offsets[self.idx];
@@ -408,7 +408,7 @@ impl<'a> RepeatCursor<'a> {
 
     /// Keep the ordinary child step inlined into node dispatch.
     #[inline(always)]
-    fn next(&mut self, order_seed: u64) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (usize, usize) {
         if self.left == 0 {
             self.left = self.child_len;
             self.child.seek(0, order_seed);
@@ -469,7 +469,7 @@ impl<'a> MixCursor<'a> {
 
     /// Inlined into dispatch to avoid a function call for each element.
     #[inline(always)]
-    fn next(&mut self, order_seed: u64) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (usize, usize) {
         let (s, j) = self.iter.step();
         self.pos += 1;
         if self.next_j[s] != j {
@@ -563,7 +563,7 @@ impl<'a> ShuffleCursor<'a> {
     /// the code, and every other node kind would pay their prologue at each level.
     /// Entering a pass is a tail call, so the ordinary step needs no frame of its own.
     #[inline(never)]
-    fn next(&mut self, order_seed: u64) -> (u32, usize) {
+    fn next(&mut self, order_seed: u64) -> (usize, usize) {
         debug_assert!(self.pass != UNSEEKED, "dataorder: next before positioning a shuffle");
         if self.pos == self.shape.n {
             return self.next_pass(order_seed);
@@ -574,14 +574,14 @@ impl<'a> ShuffleCursor<'a> {
     /// Enters the following pass and takes its first element.
     #[cold]
     #[inline(never)]
-    fn next_pass(&mut self, order_seed: u64) -> (u32, usize) {
+    fn next_pass(&mut self, order_seed: u64) -> (usize, usize) {
         self.position(self.pass + 1, 0, order_seed);
         self.step(order_seed)
     }
 
     /// The element at `pos` of the current pass.
     #[inline(always)]
-    fn step(&mut self, order_seed: u64) -> (u32, usize) {
+    fn step(&mut self, order_seed: u64) -> (usize, usize) {
         let p = perm::permute(self.shape, self.key, self.pos);
         self.pos += 1;
         match self.child {

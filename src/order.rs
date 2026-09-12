@@ -20,7 +20,7 @@ pub(crate) enum Node {
     Empty,
     /// Elements `offset..offset + len` of source `src` (an index into `Order::sources`).
     Source {
-        src: u32,
+        src: usize,
         offset: usize,
         len: usize,
     },
@@ -229,7 +229,7 @@ impl<T> Order<T> {
             return None;
         }
         let (src, index) = get(&self.root, pos, self.seed);
-        Some(Item { source_ordinal: src as usize, source: &self.sources[src as usize], record_index: index })
+        Some(Item { source_ordinal: src, source: &self.sources[src], record_index: index })
     }
 
     /// Returns a cursor over the whole order, starting at position 0.
@@ -303,7 +303,7 @@ impl<'a, T> IntoIterator for &'a Order<T> {
 }
 
 /// Resolve a position to `(source index, record index)` with an unchanged order seed.
-pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (u32, usize) {
+pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (usize, usize) {
     loop {
         match node {
             Node::Empty => unreachable!("dataorder: position in an empty sequence"),
@@ -422,7 +422,7 @@ impl<T: Source> Compiler<T> {
 
     fn source(&mut self, source: T) -> Result<Compiled, Error> {
         let len = source.len();
-        let src = u32::try_from(self.sources.len()).map_err(|_| self.err(ErrorKind::TooManySources))?;
+        let src = self.sources.len();
         let salt = perm::source_salt(source.salt(), len);
         self.sources.push(source);
         let node = if len == 0 { Node::Empty } else { Node::Source { src, offset: 0, len } };

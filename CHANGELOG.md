@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** remove `ErrorKind::TooManySources`. Sources are indexed with `usize`
+  throughout, so a configuration can hold as many sources as memory allows; compiled
+  node sizes are unchanged. Ordering and the serialized format are unchanged.
+
 - Validate schedules through `Schedule` itself and build each mix's interleave over
   its non-empty parts only. Remove the internal schedule error type, its conversion
   into `ErrorKind` and the empty-part special cases. Error kinds, paths, ordering
