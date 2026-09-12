@@ -225,9 +225,9 @@ resume existing checkpoints with their original crate version.
   Shuffle salts follow the original source configuration, including empty and
   selected-away sources. Each shuffle, shuffled repeat or shuffled cycle advances
   the salt once, even if its runtime node folds away. Plain repetitions and selections
-  pass it through unchanged. Changing a source's salt or original length, shuffled
-  layers, or concatenation grouping can change a shuffle above it. Compiler pruning
-  has no effect on these salts.
+  pass it through unchanged. Changing a source's salt or original length, or changing
+  shuffled layers, can change a shuffle above it. Regrouping concatenations or adding
+  empty concatenations preserves shuffling. Compiler pruning has no effect on these salts.
   Nested plain repeats compose: `.repeat(3).repeat(2)` matches `.repeat(6)`.
   Adding an outer repeat preserves the entire first pass, including nested epochs.
   The order seed passes down unchanged; each shuffled repeat uses only its local

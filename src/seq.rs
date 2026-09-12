@@ -56,7 +56,8 @@ pub enum Seq<T> {
     /// [`ErrorKind::ShuffleContainsMix`](crate::ErrorKind::ShuffleContainsMix).
     ///
     /// The permutation depends on the order's seed
-    /// and the input configuration's source salts, original lengths, shuffled layers and concat grouping.
+    /// and the input configuration's ordered source salts, original lengths and shuffled layers.
+    /// Concatenation grouping and empty concatenations do not affect it.
     /// Empty or discarded sources still contribute. See the crate's
     /// [shuffle rules](crate#shuffles-and-repetitions) for details.
     Shuffle {

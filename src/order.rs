@@ -353,7 +353,7 @@ pub(crate) fn get(mut node: &Node, mut pos: usize, order_seed: u64) -> (u32, usi
 struct Compiled {
     node: Node,
     len: usize,
-    salt: u64,
+    salt: perm::ConfigSalt,
 }
 
 impl Compiled {
@@ -361,7 +361,7 @@ impl Compiled {
     /// A positive target length requires a nonempty input.
     fn repeat_to(self, len: usize, shuffled: bool) -> Self {
         let Self { node: child, len: child_len, salt } = self;
-        let shuffle = (shuffled && child_len > 1).then_some(salt);
+        let shuffle = (shuffled && child_len > 1).then_some(salt.value);
         let node = if len == 0 || (len <= child_len && shuffle.is_none()) {
             slice(child, 0, len)
         } else {
@@ -479,7 +479,7 @@ impl<T: Source> Compiler<T> {
     fn shuffle(&mut self, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {
         let mut child = self.shuffle_child(inner, depth)?;
         if child.len > 1 {
-            child.node = Node::Shuffle { salt: child.salt, shape: Shape::new(child.len), child: Box::new(child.node) };
+            child.node = Node::Shuffle { salt: child.salt.value, shape: Shape::new(child.len), child: Box::new(child.node) };
         }
         child.salt = perm::shuffled_salt(child.salt);
         Ok(child)

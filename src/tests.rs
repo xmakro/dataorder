@@ -30,7 +30,7 @@ impl Source for Src {
 }
 
 /// Configuration salt, independent of materialization, selections and compiler folding.
-fn config_salt(seq: &Seq<Src>) -> u64 {
+fn config_salt(seq: &Seq<Src>) -> perm::ConfigSalt {
     match seq {
         Seq::Source(s) => perm::source_salt(s.salt(), s.len),
         Seq::Concat(parts) => perm::combine_salts(parts.iter().map(config_salt)),
@@ -120,7 +120,7 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
         }
         Seq::Shuffle { inner } => {
             let v = eval(inner, run_seed)?;
-            let (shape, key) = (Shape::new(v.len()), perm::key(run_seed, 0, config_salt(inner)));
+            let (shape, key) = (Shape::new(v.len()), perm::key(run_seed, 0, config_salt(inner).value));
             (0..v.len()).map(|i| v[perm::permute(shape, key, i)]).collect()
         }
         Seq::Repeat { times, inner } => {
@@ -132,7 +132,7 @@ fn eval(seq: &Seq<Src>, run_seed: u64) -> Result<Vec<(u32, usize)>, Error> {
             let n = v.len();
             let mut out = Vec::new();
             for pass in 0..*times {
-                let key = perm::key(run_seed, pass, config_salt(inner));
+                let key = perm::key(run_seed, pass, config_salt(inner).value);
                 out.extend((0..n).map(|i| v[perm::permute(Shape::new(n), key, i)]));
             }
             out
@@ -620,8 +620,6 @@ fn discarded_sources_contribute_to_shuffle_salts() {
     for seq in [
         Seq::concat([x(), src(1, 0)]),
         Seq::concat([src(1, 0), x()]),
-        Seq::concat([x(), Seq::concat([])]),
-        Seq::concat([Seq::concat([]), x()]),
         Seq::concat([x(), src(1, 50)]).take(100),
         Seq::concat([src(1, 50), x()]).skip(50),
         Seq::concat([src(1, 50), x(), src(2, 7)]).skip(50).take(100),
@@ -664,17 +662,82 @@ fn discarded_shuffled_layers_contribute_to_outer_shuffle_salts() {
     }
 }
 
-/// Configuration grouping survives concat flattening; plain unary wrappers preserve the salt.
+/// Concatenation grouping and empty concatenations do not alter shuffle salts.
 #[test]
-fn configuration_grouping_controls_shuffle_salts() {
+fn configuration_grouping_preserves_shuffle_salts() {
     let flat = Seq::concat([src(0, 100), src(1, 100), src(2, 100)]);
     let nested = Seq::concat([src(0, 100), Seq::concat([src(1, 100), src(2, 100)])]);
     assert_eq!(ids(Order::new(flat.clone()).unwrap().iter()), ids(Order::new(nested.clone()).unwrap().iter()));
-    assert_ne!(ids(Order::new(flat.shuffle()).unwrap().iter()), ids(Order::new(nested.shuffle()).unwrap().iter()));
+    assert_eq!(ids(Order::new(flat.shuffle()).unwrap().iter()), ids(Order::new(nested.shuffle()).unwrap().iter()));
     let x = || src(0, 100);
     let expected = ids(Order::new(x().shuffle()).unwrap().iter());
-    for seq in [x().skip(0), x().take(100), x().step_by(1), x().repeat(1), x().cycle_to(100), Seq::concat([x()])] {
+    for seq in [
+        x().skip(0),
+        x().take(100),
+        x().step_by(1),
+        x().repeat(1),
+        x().cycle_to(100),
+        Seq::concat([x()]),
+        Seq::concat([x(), Seq::concat([])]),
+        Seq::concat([Seq::concat([]), x()]),
+        Seq::concat([Seq::concat([]).repeat(7), x(), Seq::concat([Seq::concat([])]).take(0)]),
+    ] {
         assert_eq!(ids(Order::new(seq.shuffle()).unwrap().iter()), expected);
+    }
+}
+
+#[test]
+fn regrouped_concats_preserve_shuffled_operations_and_access() {
+    // All binary parenthesizations preserve the source order, including empty
+    // sources and children with their own shuffled layers and selections.
+    fn groupings(parts: &[Seq<Src>]) -> Vec<Seq<Src>> {
+        if parts.len() == 1 {
+            return vec![parts[0].clone()];
+        }
+        let mut variants = Vec::new();
+        for split in 1..parts.len() {
+            for left in groupings(&parts[..split]) {
+                for right in groupings(&parts[split..]) {
+                    variants.push(Seq::concat([left.clone(), right]));
+                }
+            }
+        }
+        variants
+    }
+
+    let parts = [src(0, 17).shuffle(), src(1, 0), src(2, 11).repeat_shuffled(2).skip(3).take(12), src(3, 13)];
+    let flat = Seq::concat(parts.clone());
+    let mut variants = groupings(&parts);
+    variants.push(Seq::concat([
+        Seq::concat([]),
+        Seq::concat([parts[0].clone(), Seq::concat([]), parts[1].clone()]).repeat(1),
+        Seq::concat([Seq::concat([]), parts[2].clone(), parts[3].clone()]).skip(0),
+        Seq::concat([Seq::concat([])]).take(0),
+    ]));
+    let wrap = |seq: Seq<Src>, mode| match mode {
+        0 => seq.shuffle(),
+        1 => seq.repeat_shuffled(3),
+        2 => seq.cycle_to_shuffled(87),
+        3 => Seq::concat([src(9, 7), seq.shuffle()]).shuffle(),
+        _ => seq.skip(5).take(32).step_by(2).repeat_shuffled(2),
+    };
+    for seed in [0, 42, u64::MAX] {
+        for mode in 0..5 {
+            let expected = Order::with_seed(wrap(flat.clone(), mode), seed).unwrap();
+            for variant in &variants {
+                let actual = Order::with_seed(wrap(variant.clone(), mode), seed).unwrap();
+                assert!(actual.iter().eq(expected.iter()), "seed={seed}, mode={mode}, variant={variant:?}");
+                for pos in 0..=expected.len() {
+                    assert_eq!(actual.get(pos), expected.get(pos));
+                }
+                let mut cursor = actual.iter();
+                for pos in [actual.len(), 0, actual.len() / 2, 1, actual.len() - 1] {
+                    cursor.reset(pos..).unwrap();
+                    assert!(cursor.clone().eq(expected.cursor(pos..).unwrap()));
+                    assert_eq!(cursor.nth(3), expected.get(pos + 3));
+                }
+            }
+        }
     }
 }
 

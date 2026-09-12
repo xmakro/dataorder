@@ -86,12 +86,13 @@ fn golden_orders() {
     // Captured from the prior implementation with every shuffle seed set to zero,
     // before removing the per-shuffle seed. Nested cases (shuffle(concat) and the last
     // three) were independently calculated with Python integer Feistel arithmetic
-    // and the configuration salt step for each shuffled layer. Other cases are unchanged.
+    // and the configuration salt step for each shuffled layer. shuffle(concat) also
+    // uses the associative polynomial salt. Other cases are unchanged.
     const EXPECTED: [u64; 20] = [
         9636474030837673273,
         99794755355777013,
         9286240989508410160,
-        2325999265252126505,
+        14935844359599640341,
         2169467847850813516,
         6077391615804054636,
         4777681411854005729,

@@ -96,8 +96,8 @@
 //! A shuffle visits every child position exactly once. Its permutation depends on:
 //!
 //! - The order's seed.
-//! - The input configuration's source salts, original source lengths, shuffled layers
-//!   and concatenation grouping, before pruning or flattening.
+//! - The input configuration's ordered source salts, original source lengths and
+//!   shuffled layers, before pruning or flattening.
 //!
 //! A shuffle's input configuration must contain no mixes, including empty or single-part
 //! mixes and mixes nested under other operations. Shuffle each input before mixing.
@@ -146,11 +146,12 @@
 //! advances the salt once, independent of its count or output length, even when its
 //! runtime node is folded away. These three operations use the same salt step, so
 //! their equivalent one-pass forms remain interchangeable inside larger sequences.
-//! A concatenation combines its children's salts in order; an empty concatenation
-//! has salt zero and a single-child concatenation passes its child's salt through.
-//! Nested concatenation grouping can therefore change a shuffle. Compiler pruning
-//! and flattening never change these salts. Modifying an excluded source can change
-//! a shuffle above the selection, even though that source contributes no records.
+//! A concatenation combines its children's salts in order, independent of grouping.
+//! Adding empty concatenations or changing `concat([a, b, c])` to
+//! `concat([a, concat([b, c])])` preserves shuffling. An actual source of length zero
+//! still contributes its identity. Compiler pruning and flattening never change
+//! these salts. Modifying an excluded source can change a shuffle above the selection,
+//! even though that source contributes no records.
 //!
 //! # Validation and limits
 //!

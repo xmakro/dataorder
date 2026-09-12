@@ -87,22 +87,47 @@ pub(crate) fn key(order_seed: u64, pass: usize, salt: u64) -> Key {
     k
 }
 
+/// An ordered configuration fingerprint and the multiplier needed to append it.
+/// The multiplier makes concatenation associative without storing individual salts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConfigSalt {
+    /// The salt used to derive permutation keys.
+    pub(crate) value: u64,
+    /// PHI raised to the number of contributions at this concatenation level, modulo 2^64.
+    factor: u64,
+}
+
+impl ConfigSalt {
+    /// No contributions: concatenating this summary changes nothing.
+    const EMPTY: Self = Self { value: 0, factor: 1 };
+
+    /// A source or a complete shuffled layer contributes one value to its parent.
+    fn single(value: u64) -> Self {
+        Self { value, factor: PHI }
+    }
+}
+
 /// A source's configuration salt, including its original length even when empty.
-pub(crate) fn source_salt(salt: u64, len: usize) -> u64 {
-    mix64(mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ (len as u64).wrapping_mul(PHI))
+pub(crate) fn source_salt(salt: u64, len: usize) -> ConfigSalt {
+    ConfigSalt::single(mix64(mix64(salt ^ 0x6A09_E667_F3BC_C908) ^ (len as u64).wrapping_mul(PHI)))
 }
 
 /// Advance the configuration salt after a shuffled layer. Key derivation mixes this
 /// offset, giving enclosing shuffles distinct keys without changing the child's key.
 /// All shuffled operations use the same step, independent of their output lengths.
-pub(crate) fn shuffled_salt(salt: u64) -> u64 {
-    salt.wrapping_add(PHI)
+/// A completed shuffled layer is one contribution to enclosing concatenations.
+pub(crate) fn shuffled_salt(salt: ConfigSalt) -> ConfigSalt {
+    ConfigSalt::single(salt.value.wrapping_add(PHI))
 }
 
 /// Combines child configuration salts in order, before flattening or dropping children.
-/// Empty lists use zero; a single child passes through unchanged. Grouping matters.
-pub(crate) fn combine_salts(salts: impl IntoIterator<Item = u64>) -> u64 {
-    salts.into_iter().reduce(|left, right| mix64(left.wrapping_add(PHI) ^ right)).unwrap_or(0)
+/// This polynomial fingerprint is associative: appending B shifts A by PHI^len(B).
+/// Empty concatenations are neutral; actual sources contribute even when empty.
+pub(crate) fn combine_salts(salts: impl IntoIterator<Item = ConfigSalt>) -> ConfigSalt {
+    salts.into_iter().fold(ConfigSalt::EMPTY, |left, right| ConfigSalt {
+        value: left.value.wrapping_mul(right.factor).wrapping_add(right.value),
+        factor: left.factor.wrapping_mul(right.factor),
+    })
 }
 
 /// One Feistel round: `(l, r)` becomes `(r, l ^ F(r))`, restricted to the left half's
@@ -153,6 +178,33 @@ mod tests {
     }
 
     #[test]
+    fn configuration_salts_combine_associatively() {
+        let parts = [
+            source_salt(1, 10),
+            ConfigSalt::single(0),
+            source_salt(2, 0),
+            shuffled_salt(combine_salts([source_salt(3, 7), source_salt(4, 11)])),
+            ConfigSalt::single(u64::MAX),
+        ];
+        let flat = combine_salts(parts);
+        for a in 0..=parts.len() {
+            for b in a..=parts.len() {
+                let left = combine_salts(parts[..a].iter().copied());
+                let middle = combine_salts(parts[a..b].iter().copied());
+                let right = combine_salts(parts[b..].iter().copied());
+                assert_eq!(combine_salts([left, middle, right]), flat);
+                assert_eq!(combine_salts([combine_salts([left, middle]), right]), flat);
+                assert_eq!(combine_salts([left, combine_salts([middle, right])]), flat);
+            }
+        }
+        assert_eq!(combine_salts([ConfigSalt::EMPTY, flat, ConfigSalt::EMPTY]), flat);
+        // Zero-valued contributions still occupy a position in the fingerprint.
+        assert_ne!(ConfigSalt::single(0), ConfigSalt::EMPTY);
+        assert_ne!(combine_salts([parts[0], parts[1]]).value, parts[0].value);
+        assert_ne!(combine_salts(parts.into_iter().rev()).value, flat.value);
+    }
+
+    #[test]
     fn bijection() {
         for n in [0usize, 1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 100, 255, 256, 257, 1000, 4097, 65_536, 100_003] {
             for seed in 0..4 {
@@ -187,7 +239,7 @@ mod tests {
         let c: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&c).filter(|(x, y)| x == y).count() < 10);
         // Different salts, and sources of different lengths or in another order, decorrelate.
-        let k = key(1, 0, source_salt(7, n));
+        let k = key(1, 0, source_salt(7, n).value);
         let d: Vec<usize> = (0..n).map(|i| permute(shape, k, i)).collect();
         assert!(a.iter().zip(&d).filter(|(x, y)| x == y).count() < 10);
         assert_ne!(source_salt(0, 1000), source_salt(0, 999));

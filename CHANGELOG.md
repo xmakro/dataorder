@@ -2,6 +2,15 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** make concatenation salts independent of grouping. Regrouping
+  `concat([a, b, c])` as `concat([a, concat([b, c])])`, or adding empty
+  concatenations, now preserves every enclosing shuffle and shuffled repetition.
+  Source order, original lengths, empty or discarded sources and shuffled layers
+  still contribute. Use a constant-size associative summary during compilation;
+  runtime nodes still store only the final salt. Shuffles above multiple source
+  contributions can change. The public API and serialized format are unchanged.
+  Resume older orders with their original crate version.
+
 - **Breaking:** derive distinct keys for nested shuffled layers. Each shuffle,
   shuffled repeat and shuffled cycle advances its configuration salt for enclosing
   shuffles, including when folded away. Equivalent one-pass forms remain
