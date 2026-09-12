@@ -2,6 +2,10 @@
 
 ## Unreleased (0.4.0)
 
+- Keep concat and repetition cursor state and boundary handling in dedicated
+  structs. Preserve direct skips, deferred boundary entry and child buffer reuse.
+  Ordering and the public API are unchanged.
+
 - **Breaking:** make concatenation salts independent of grouping. Regrouping
   `concat([a, b, c])` as `concat([a, concat([b, c])])`, or adding empty
   concatenations, now preserves every enclosing shuffle and shuffled repetition.
