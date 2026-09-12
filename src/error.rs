@@ -77,18 +77,16 @@ impl std::error::Error for Error {}
 pub enum ScheduleReason {
     /// At least one breakpoint is NaN or infinite.
     NonFiniteParameter,
-    /// Finite breakpoints violate their ordering, range or positive-area constraints.
+    /// Finite breakpoints violate their ordering, range or positive-area constraints,
+    /// or lie too close together for finite profile coefficients.
     InvalidBreakpoints,
-    /// Valid breakpoints produced non-finite profile coefficients.
-    CoefficientOverflow,
 }
 
 impl fmt::Display for ScheduleReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonFiniteParameter => write!(f, "a breakpoint is not finite"),
-            Self::InvalidBreakpoints => write!(f, "breakpoints are out of range, out of order, or have zero area"),
-            Self::CoefficientOverflow => write!(f, "derived profile coefficients exceed floating-point range"),
+            Self::InvalidBreakpoints => write!(f, "breakpoints are out of range, out of order, too close together, or have zero area"),
         }
     }
 }
@@ -132,8 +130,8 @@ pub enum ErrorKind {
     TooManyMixParts,
     /// The total length of a mix exceeds [`MAX_MIX_LEN`](crate::MAX_MIX_LEN).
     MixTooLong,
-    /// A schedule parameter is out of range or non-finite, or its derived profile
-    /// coefficients overflow floating-point arithmetic.
+    /// A schedule parameter is non-finite or its breakpoints are invalid; see
+    /// [`ScheduleReason`].
     InvalidSchedule {
         /// The schedule.
         schedule: Schedule,
@@ -178,10 +176,8 @@ impl fmt::Display for ErrorKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BoundsError {
-    /// An exclusive start at `usize::MAX` cannot be advanced by one.
-    StartOverflow,
-    /// An inclusive end at `usize::MAX` cannot be advanced by one.
-    EndOverflow,
+    /// An exclusive start or an inclusive end at `usize::MAX` cannot be advanced by one.
+    Overflow,
     /// The exclusive end precedes the start.
     Reversed {
         /// Inclusive start.
@@ -201,8 +197,7 @@ pub enum BoundsError {
 impl fmt::Display for BoundsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StartOverflow => write!(f, "range start overflows usize"),
-            Self::EndOverflow => write!(f, "range end overflows usize"),
+            Self::Overflow => write!(f, "range bound overflows usize"),
             Self::Reversed { start, end } => write!(f, "range {start}..{end} ends before it starts"),
             Self::OutOfBounds { end, len } => write!(f, "range end {end} out of range for {len} positions"),
         }

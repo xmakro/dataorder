@@ -2,6 +2,12 @@
 
 ## Unreleased (0.4.0)
 
+- **Breaking:** merge `BoundsError::StartOverflow` and `BoundsError::EndOverflow` into
+  `BoundsError::Overflow`, and remove `ScheduleReason::CoefficientOverflow`:
+  breakpoints too close together for finite profile coefficients are reported as
+  `ScheduleReason::InvalidBreakpoints`. Ordering and the serialized format are
+  unchanged.
+
 - **Breaking:** simplify shuffle key derivation. The order seed, local pass number and
   configuration salt are hashed together in one step, without the former
   zero-local-seed offset or a separate first-pass path. Every shuffled order changes;

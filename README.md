@@ -260,8 +260,8 @@ zero-sized handles. Ordinals follow the original configuration, including source
 whose nodes were removed during compilation. They are local to the order, not persistent dataset IDs.
 
 Schedule diagnostics are part of `ErrorKind`: `InvalidSchedule { schedule, reason }`
-includes a `ScheduleReason` for non-finite parameters, invalid breakpoints or
-coefficient overflow. `ScheduleTooSteep { len, peak_rate, limit }` carries the values behind
+includes a `ScheduleReason` for non-finite parameters or invalid breakpoints.
+`ScheduleTooSteep { len, peak_rate, limit }` carries the values behind
 excessive steepness. Both `Error::kind()` and `Error::into_kind()` retain these details.
 
 `Seq<T>` accepts any `T`, including unresolved dataset names or paths. All builders

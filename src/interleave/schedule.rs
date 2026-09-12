@@ -57,9 +57,10 @@ use crate::{ErrorKind, ScheduleReason};
 /// capacity, and no uniform filler is required.
 ///
 /// For numerical resolution, a part must satisfy
-/// `length × peak normalized rate ≤ MAX_MIX_LEN`. Very narrow transitions can
-/// overflow derived coefficients. Use equal adjacent breakpoints for an abrupt
-/// change. These individual numerical limits are separate from schedule overlap.
+/// `length × peak normalized rate ≤ MAX_MIX_LEN`. Very narrow transitions overflow
+/// the derived coefficients and are rejected as invalid breakpoints; use equal
+/// adjacent breakpoints for an abrupt change. These individual numerical limits are
+/// separate from schedule overlap.
 ///
 /// Equality compares variants and parameters using ordinary `f64` equality:
 /// `-0.0` equals `0.0`, and NaN equals nothing, including itself.
@@ -177,7 +178,7 @@ impl Schedule {
         }
         let profile = Profile::trapezoid(start, full, fade, off);
         if !profile.is_finite() {
-            return Err(invalid(ScheduleReason::CoefficientOverflow));
+            return Err(invalid(ScheduleReason::InvalidBreakpoints));
         }
         let peak_rate = profile.max_rate();
         if len as f64 * peak_rate > MAX_TOTAL_LEN as f64 {

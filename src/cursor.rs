@@ -178,11 +178,11 @@ impl<T> std::iter::FusedIterator for Cursor<'_, T> {}
 pub(crate) fn resolve_range(range: impl RangeBounds<usize>, len: usize) -> Result<Range<usize>, BoundsError> {
     let start = match range.start_bound() {
         Bound::Included(&s) => s,
-        Bound::Excluded(&s) => s.checked_add(1).ok_or(BoundsError::StartOverflow)?,
+        Bound::Excluded(&s) => s.checked_add(1).ok_or(BoundsError::Overflow)?,
         Bound::Unbounded => 0,
     };
     let end = match range.end_bound() {
-        Bound::Included(&e) => e.checked_add(1).ok_or(BoundsError::EndOverflow)?,
+        Bound::Included(&e) => e.checked_add(1).ok_or(BoundsError::Overflow)?,
         Bound::Excluded(&e) => e,
         Bound::Unbounded => len,
     };

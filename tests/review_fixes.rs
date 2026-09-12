@@ -22,17 +22,17 @@ fn checked_access_preserves_cursor_on_errors() {
     let empty = Order::new(Seq::source(0)).unwrap();
     assert_eq!(empty.get(0), None);
     assert_eq!((&empty).into_iter().next(), None);
-    assert_eq!(order.cursor(..=usize::MAX).unwrap_err(), BoundsError::EndOverflow);
-    assert_eq!(order.cursor((Bound::Excluded(usize::MAX), Bound::Unbounded)).unwrap_err(), BoundsError::StartOverflow);
+    assert_eq!(order.cursor(..=usize::MAX).unwrap_err(), BoundsError::Overflow);
+    assert_eq!(order.cursor((Bound::Excluded(usize::MAX), Bound::Unbounded)).unwrap_err(), BoundsError::Overflow);
     assert_eq!(order.cursor(10..9).unwrap_err(), BoundsError::Reversed { start: 10, end: 9 });
     assert_eq!(order.cursor(..18).unwrap_err(), BoundsError::OutOfBounds { end: 18, len: 17 });
     let mut c = order.cursor(3..10).unwrap();
     c.next(); // Initialize the cursor before testing rollback.
     let expected = c.clone().collect::<Vec<_>>();
-    assert_eq!(c.reset(..=usize::MAX), Err(BoundsError::EndOverflow));
+    assert_eq!(c.reset(..=usize::MAX), Err(BoundsError::Overflow));
     assert_eq!(c.offset(), 4);
     assert_eq!(c.clone().collect::<Vec<_>>(), expected);
-    assert_eq!(c.reset((Bound::Excluded(usize::MAX), Bound::Unbounded)), Err(BoundsError::StartOverflow));
+    assert_eq!(c.reset((Bound::Excluded(usize::MAX), Bound::Unbounded)), Err(BoundsError::Overflow));
     assert_eq!(c.offset(), 4);
     assert_eq!(c.clone().collect::<Vec<_>>(), expected);
     assert_eq!(c.reset(2..18), Err(BoundsError::OutOfBounds { end: 18, len: 17 }));
@@ -155,7 +155,7 @@ fn schedule_errors_describe_independent_profiles() {
     for (schedule, reason) in [
         (Schedule::delayed(f64::INFINITY), ScheduleReason::NonFiniteParameter),
         (Schedule::ramp(0.5, 0.25), ScheduleReason::InvalidBreakpoints),
-        (Schedule::ramp(0.0, f64::from_bits(1)), ScheduleReason::CoefficientOverflow),
+        (Schedule::ramp(0.0, f64::from_bits(1)), ScheduleReason::InvalidBreakpoints),
     ] {
         let err = Order::new(Seq::mix([(Seq::source(1), schedule)])).unwrap_err();
         let expected = ErrorKind::InvalidSchedule { schedule, reason };
