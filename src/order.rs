@@ -357,6 +357,21 @@ struct Compiled {
     salt: u64,
 }
 
+impl Compiled {
+    /// Build a repetition after validating its input and target length.
+    /// A positive target length requires a nonempty input.
+    fn repeat_to(self, len: usize, shuffled: bool) -> Self {
+        let Self { node: child, len: child_len, salt } = self;
+        let shuffle = (shuffled && child_len > 1).then_some(salt);
+        let node = if len == 0 || (len <= child_len && shuffle.is_none()) {
+            slice(child, 0, len)
+        } else {
+            Node::Repeat { child_len, len, shuffle, child: Box::new(child) }
+        };
+        Self { node, len, salt }
+    }
+}
+
 struct Compiler<T> {
     sources: Vec<T>,
     /// Child indices from the root to the node being compiled, for error reports.
@@ -482,33 +497,18 @@ impl<T: Source> Compiler<T> {
         if shuffled { self.shuffle_child(inner, depth) } else { self.child(0, inner, depth) }
     }
 
-    /// A single plain repetition leaves positions unchanged.
     fn repeat(&mut self, times: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node: child, len: child_len, salt } = self.repeat_child(inner, shuffled, depth)?;
-        let len = times.checked_mul(child_len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
-        let shuffle = (shuffled && child_len > 1).then_some(salt);
-        let node = if len == 0 {
-            Node::Empty
-        } else if times == 1 && shuffle.is_none() {
-            child
-        } else {
-            Node::Repeat { child_len, len, shuffle, child: Box::new(child) }
-        };
-        Ok(Compiled { node, len, salt })
+        let child = self.repeat_child(inner, shuffled, depth)?;
+        let len = times.checked_mul(child.len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
+        Ok(child.repeat_to(len, shuffled))
     }
 
     fn cycled(&mut self, len: usize, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
-        let Compiled { node, len: child_len, salt } = self.repeat_child(inner, shuffled, depth)?;
-        if len > 0 && child_len == 0 {
+        let child = self.repeat_child(inner, shuffled, depth)?;
+        if len > 0 && child.len == 0 {
             return Err(self.err(ErrorKind::EmptyCycle));
         }
-        let shuffle = (shuffled && child_len > 1).then_some(salt);
-        let node = if len == 0 || (len <= child_len && shuffle.is_none()) {
-            slice(node, 0, len)
-        } else {
-            Node::Repeat { child_len, len, shuffle, child: Box::new(node) }
-        };
-        Ok(Compiled { node, len, salt })
+        Ok(child.repeat_to(len, shuffled))
     }
 
     fn skip(&mut self, n: usize, inner: Seq<T>, depth: u32) -> Result<Compiled, Error> {

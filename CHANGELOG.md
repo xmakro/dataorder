@@ -2,6 +2,9 @@
 
 ## Unreleased (0.4.0)
 
+- Share repetition construction and folding between repeat and cycle compilation.
+  Keep their overflow and empty-input checks separate. Ordering is unchanged.
+
 - Store the order seed only in `Order` and pass it through cursor traversal.
   Remove per-node seed copies and their seek-time updates; derived shuffle keys
   remain cached. Ordering and the public API are unchanged.
