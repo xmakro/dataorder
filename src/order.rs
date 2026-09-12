@@ -8,7 +8,7 @@ use crate::cursor::{Cursor, resolve_range};
 use crate::interleave::{Interleave, Schedule};
 use crate::perm::{self, Shape};
 use crate::seq::MixPart;
-use crate::{BoundsError, Error, ErrorKind, MAX_DEPTH, Seq, Source};
+use crate::{BoundsError, Error, ErrorKind, MAX_DEPTH, MAX_MIX_LEN, Seq, Source};
 use std::fmt;
 use std::ops::RangeBounds;
 
@@ -408,7 +408,7 @@ impl<T: Source> Compiler<T> {
         match seq {
             Seq::Source(source) => self.source(source),
             Seq::Concat(parts) => self.concat(parts, depth),
-            Seq::Mix(parts) => self.mix_parts(parts, depth),
+            Seq::Mix(parts) => self.mix(parts, depth),
             Seq::Shuffle { inner } => self.repeat(1, *inner, true, depth),
             Seq::Repeat { times, inner } => self.repeat(times, *inner, false, depth),
             Seq::Cycle { len, inner } => self.cycled(len, *inner, false, depth),
@@ -461,15 +461,6 @@ impl<T: Source> Compiler<T> {
         Ok(Compiled { node, len, salt })
     }
 
-    fn mix_parts(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
-        if let Some(len) = self.shuffle_path_len {
-            return Err(Error::new(ErrorKind::ShuffleContainsMix, self.path[..len].to_vec()));
-        }
-        let schedule: Vec<Schedule> = parts.iter().map(|p| p.schedule).collect();
-        let children = self.children(parts.into_iter().map(|p| p.seq), depth)?;
-        self.mix(children, &schedule)
-    }
-
     /// Compiles a repetition's input. A shuffled input must contain no mix, and is
     /// validated as such even if the repetition or its output folds away.
     fn repeat_child(&mut self, inner: Seq<T>, shuffled: bool, depth: u32) -> Result<Compiled, Error> {
@@ -520,27 +511,41 @@ impl<T: Source> Compiler<T> {
         Ok(Compiled { node: stride(node, step), len: len.div_ceil(step), salt })
     }
 
-    /// Validate schedules even when the mix folds away.
-    fn mix(&mut self, parts: Vec<Compiled>, schedule: &[Schedule]) -> Result<Compiled, Error> {
+    /// Validates every part's length and schedule, then compiles the mix over its
+    /// non-empty parts. Empty parts and a mix that folds away are still validated.
+    fn mix(&mut self, parts: Vec<MixPart<T>>, depth: u32) -> Result<Compiled, Error> {
+        if let Some(len) = self.shuffle_path_len {
+            return Err(Error::new(ErrorKind::ShuffleContainsMix, self.path[..len].to_vec()));
+        }
+        let schedules: Vec<Schedule> = parts.iter().map(|part| part.schedule).collect();
+        let parts = self.children(parts.into_iter().map(|part| part.seq), depth)?;
         // The tournament tree indexes parts with u32 and needs a spare bit.
         if parts.len() >= u32::MAX as usize / 2 {
             return Err(self.err(ErrorKind::TooManyMixParts));
         }
         let salt = perm::combine_salts(parts.iter().map(|part| part.salt));
-        let lens: Vec<usize> = parts.iter().map(|part| part.len).collect();
-        let mut il = Interleave::with_schedule(&lens, schedule).map_err(|e| {
-            let (kind, part) = e.into_kind();
-            self.err_at(kind, part)
-        })?;
-        let len = il.len();
-        let mut children: Vec<Node> = parts.into_iter().filter_map(|part| (part.len > 0).then_some(part.node)).collect();
+        let mut len = 0usize;
+        for part in &parts {
+            len = len.checked_add(part.len).ok_or_else(|| self.err(ErrorKind::LengthOverflow))?;
+            if len as u64 > MAX_MIX_LEN {
+                return Err(self.err(ErrorKind::MixTooLong));
+            }
+        }
+        let mut live = Vec::new();
+        let mut children = Vec::new();
+        for (i, (part, schedule)) in parts.into_iter().zip(schedules).enumerate() {
+            let profile = schedule.profile(part.len).map_err(|kind| self.err_at(kind, Some(i)))?;
+            if part.len > 0 {
+                live.push((part.len, profile));
+                children.push(part.node);
+            }
+        }
         children.shrink_to_fit();
-        il.remove_empty();
         let node = match children.len() {
             0 => Node::Empty,
             // A single sequence is interleaved with nothing: it stays in order.
             1 => children.pop().unwrap(),
-            _ => Node::Mix { il, children },
+            _ => Node::Mix { il: Interleave::new(live), children },
         };
         Ok(Compiled { node, len, salt })
     }

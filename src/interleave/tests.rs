@@ -2,11 +2,29 @@
 //! properties, exact seeks, balance bounds and the schedule semantics.
 
 use super::*;
+use crate::ErrorKind;
 use crate::tests::Rng;
 use Schedule::*;
 
 fn full(il: &Interleave) -> Vec<(usize, usize)> {
     il.iter(0..il.len()).collect()
+}
+
+/// Builds the interleave the compiler would: every part's schedule is validated
+/// against its length, and only the non-empty parts take part.
+fn build(lens: &[usize], schedules: &[Schedule]) -> Result<Interleave, ErrorKind> {
+    let mut parts = Vec::new();
+    for (&n, schedule) in lens.iter().zip(schedules) {
+        let profile = schedule.profile(n)?;
+        if n > 0 {
+            parts.push((n, profile));
+        }
+    }
+    Ok(Interleave::new(parts))
+}
+
+fn uniform(lens: &[usize]) -> Interleave {
+    build(lens, &vec![Uniform; lens.len()]).unwrap()
 }
 
 /// Brute force: sort every element by (key, sequence, index).
@@ -34,9 +52,6 @@ fn worst_deviation(il: &Interleave, all: &[(usize, usize)]) -> Vec<f64> {
     let mut worst = vec![0.0f64; k];
     for t in 0..=all.len() {
         for s in 0..k {
-            if il.seqs[s].n == 0 {
-                continue;
-            }
             let ideal = il.seqs[s].n as f64 * share(il, s, t as f64 / n);
             worst[s] = worst[s].max((counts[s] as f64 - ideal).abs());
         }
@@ -90,7 +105,7 @@ fn scheduled_cases() -> Vec<(Vec<usize>, Vec<Schedule>)> {
         (vec![2000, 500], vec![Uniform, Schedule::ramp(0.2, 0.6)]),
         (vec![14, 124, 43], vec![Schedule::delayed(0.5), Uniform, Schedule::ramp(0.2, 0.6)]),
         (vec![500, 500, 500, 500], vec![Uniform, Schedule::delayed(0.1), Schedule::delayed(0.3), Schedule::ramp(0.0, 0.5)]),
-        (vec![300, 300, 0, 7], vec![Schedule::delayed(0.0), Schedule::delayed(0.0), Schedule::delayed(0.9), Uniform]),
+        (vec![300, 300, 7], vec![Schedule::delayed(0.0), Schedule::delayed(0.0), Uniform]),
         (vec![1000, 50, 50], vec![Uniform, Schedule::delayed(0.9), Schedule::ramp(0.8, 0.95)]),
         (vec![100, 100, 800], vec![Schedule::ramp(0.0, 0.5), Schedule::ramp(0.5, 1.0), Uniform]),
         (vec![3, 1000, 1], vec![Schedule::delayed(0.7), Uniform, Schedule::ramp(0.2, 0.9)]),
@@ -102,8 +117,8 @@ fn scheduled_cases() -> Vec<(Vec<usize>, Vec<Schedule>)> {
 }
 
 fn all_cases() -> Vec<Interleave> {
-    let mut v: Vec<Interleave> = uniform_cases().iter().map(|l| Interleave::new(l)).collect();
-    v.extend(scheduled_cases().iter().map(|(l, s)| Interleave::with_schedule(l, s).unwrap()));
+    let mut v: Vec<Interleave> = uniform_cases().iter().map(|l| uniform(l)).collect();
+    v.extend(scheduled_cases().iter().map(|(l, s)| build(l, s).unwrap()));
     v
 }
 
@@ -111,7 +126,7 @@ fn all_cases() -> Vec<Interleave> {
 fn independent_constant_profiles_resolve_an_exact_tie() {
     // The singleton key is 1/4. The other part's first key is also 1/4;
     // the lower part index wins, independently of the other part's support.
-    let il = Interleave::with_schedule(&[1, 3], &[Uniform, Schedule::trapezoid(0.0625, 0.0625, 0.8125, 0.8125)]).unwrap();
+    let il = build(&[1, 3], &[Uniform, Schedule::trapezoid(0.0625, 0.0625, 0.8125, 0.8125)]).unwrap();
     let expected = [(0, 0), (1, 0), (1, 1), (1, 2)];
     assert_eq!(full(&il), expected);
     for start in 0..=il.len() {
@@ -231,10 +246,10 @@ fn random_configurations() {
                 }
             })
             .collect();
-        let il = match Interleave::with_schedule(&lens, &schedule) {
-            Ok(il) => il,
-            Err(e) => panic!("{lens:?} {schedule:?}: {e}"),
-        };
+        // Empty parts never reach the interleave: the compiler drops them first.
+        let (lens, schedule): (Vec<usize>, Vec<Schedule>) = lens.into_iter().zip(schedule).filter(|&(n, _)| n > 0).unzip();
+        let k = lens.len();
+        let il = build(&lens, &schedule).unwrap_or_else(|e| panic!("{lens:?} {schedule:?}: {e}"));
         checked += 1;
         let n = il.len();
         let all = full(&il);
@@ -277,7 +292,7 @@ fn random_configurations() {
 #[test]
 fn uniform_balance() {
     for lens in uniform_cases() {
-        let il = Interleave::new(&lens);
+        let il = uniform(&lens);
         let worst = worst_deviation(&il, &full(&il));
         for (s, w) in worst.iter().enumerate() {
             assert!(*w <= 2.0, "lens {lens:?} seq {s}: deviation {w}");
@@ -288,7 +303,7 @@ fn uniform_balance() {
 #[test]
 fn equal_lengths_round_robin_in_input_order() {
     for k in 1..=17usize {
-        let il = Interleave::new(&vec![6usize; k]);
+        let il = uniform(&vec![6usize; k]);
         for (t, (s, j)) in full(&il).into_iter().enumerate() {
             assert_eq!(s, t % k);
             assert_eq!(j, t / k);
@@ -304,7 +319,7 @@ fn joint_count(il: &Interleave, t: f64) -> f64 {
 #[test]
 fn schedules_are_followed_on_the_virtual_clock() {
     for (lens, schedule) in scheduled_cases() {
-        let il = Interleave::with_schedule(&lens, &schedule).unwrap();
+        let il = build(&lens, &schedule).unwrap();
         let all = full(&il);
         for step in 0..=100 {
             let t = step as f64 / 100.0;
@@ -325,11 +340,11 @@ fn schedules_are_followed_on_the_virtual_clock() {
 fn uniform_and_explicit_constant_schedules_are_interchangeable() {
     for constant in [Uniform, Schedule::delayed(0.0), Schedule::until(1.0)] {
         let lens = [300, 200, 100];
-        let a = Interleave::with_schedule(&lens, &[Uniform, Schedule::ramp(0.2, 0.6), Schedule::until(0.8)]).unwrap();
-        let b = Interleave::with_schedule(&lens, &[constant, Schedule::ramp(0.2, 0.6), Schedule::until(0.8)]).unwrap();
+        let a = build(&lens, &[Uniform, Schedule::ramp(0.2, 0.6), Schedule::until(0.8)]).unwrap();
+        let b = build(&lens, &[constant, Schedule::ramp(0.2, 0.6), Schedule::until(0.8)]).unwrap();
         assert_eq!(full(&a), full(&b));
         // Changing another source's schedule does not alter this source's keys.
-        let c = Interleave::with_schedule(&lens, &[constant, Schedule::until(0.1), Schedule::delayed(0.9)]).unwrap();
+        let c = build(&lens, &[constant, Schedule::until(0.1), Schedule::delayed(0.9)]).unwrap();
         for j in 0..lens[0] {
             assert_eq!(a.key(0, j, &mut 0), c.key(0, j, &mut 0));
         }
@@ -338,7 +353,6 @@ fn uniform_and_explicit_constant_schedules_are_interchangeable() {
 
 #[test]
 fn rejects_bad_configurations() {
-    use ScheduleError::*;
     for bad in [
         Schedule::delayed(1.0),
         Schedule::delayed(-0.1),
@@ -355,60 +369,29 @@ fn rejects_bad_configurations() {
         Schedule::trapezoid(0.1, f64::INFINITY, 0.5, 0.9),
         Schedule::until(0.0),
     ] {
-        assert!(matches!(Interleave::with_schedule(&[10, 10], &[Uniform, bad]), Err(InvalidParameter { seq: 1, .. })), "{bad:?}");
+        // Breakpoints are validated whether or not the part has elements.
+        for len in [10, 0] {
+            assert!(matches!(bad.profile(len), Err(ErrorKind::InvalidSchedule { .. })), "{bad:?} over {len} elements");
+        }
     }
     // Overlapping schedules and gaps impose no shared capacity constraint.
-    assert!(Interleave::with_schedule(&[600, 400], &[Schedule::until(0.5), Uniform]).is_ok());
-    assert!(Interleave::with_schedule(&[500, 500], &[Schedule::until(0.5), Uniform]).is_ok());
-    assert!(matches!(
-        Interleave::with_schedule(&[1 << 30, 1 << 30], &[Uniform, Schedule::trapezoid(0.0, 0.0, 1e-6, 1e-6)]),
-        Err(TooSteep { seq: 1, .. })
-    ));
-    #[cfg(target_pointer_width = "64")]
-    assert_eq!(Interleave::with_schedule(&[MAX_TOTAL_LEN as usize, 1], &[Uniform, Uniform]).err(), Some(TooLong));
-    #[cfg(target_pointer_width = "32")]
-    assert_eq!(Interleave::with_schedule(&[usize::MAX, 1], &[Uniform, Uniform]).err(), Some(LengthOverflow));
-    assert!(matches!(
-        Interleave::with_schedule(&[1 << 30, 1 << 30], &[Uniform, Schedule::delayed(0.999999)]),
-        Err(TooSteep { seq: 1, .. })
-    ));
-    // Schedules on empty sequences are ignored, and consistent all-scheduled setups work.
-    assert!(Interleave::with_schedule(&[10, 0], &[Uniform, Schedule::delayed(0.999)]).is_ok());
-    let il = Interleave::with_schedule(&[100, 100], &[Schedule::delayed(0.0), Schedule::delayed(0.0)]).unwrap();
+    assert_eq!(build(&[600, 400], &[Schedule::until(0.5), Uniform]).unwrap().len(), 1000);
+    assert_eq!(build(&[500, 500], &[Schedule::until(0.5), Uniform]).unwrap().len(), 1000);
+    for steep in [Schedule::trapezoid(0.0, 0.0, 1e-6, 1e-6), Schedule::delayed(0.999999)] {
+        assert!(matches!(steep.profile(1 << 30), Err(ErrorKind::ScheduleTooSteep { len, .. }) if len == 1 << 30), "{steep:?}");
+        // Numerical limits concern elements, so an empty part is never too steep.
+        assert!(matches!(steep.profile(0), Ok(None)), "{steep:?}");
+    }
+    // A schedule on an empty part is validated but draws from no profile; uniform parts
+    // share one profile, and consistent all-scheduled setups work.
+    assert!(matches!(Schedule::delayed(0.999).profile(0), Ok(None)));
+    assert!(matches!(Uniform.profile(10), Ok(None)));
+    assert!(matches!(Schedule::delayed(0.5).profile(10), Ok(Some(_))));
+    let il = build(&[100, 100], &[Schedule::delayed(0.0), Schedule::delayed(0.0)]).unwrap();
     assert_eq!(full(&il).len(), 200);
     // A delay halfway along the virtual clock begins one quarter through this output.
-    let il = Interleave::with_schedule(&[500, 500], &[Uniform, Schedule::delayed(0.5)]).unwrap();
+    let il = build(&[500, 500], &[Uniform, Schedule::delayed(0.5)]).unwrap();
     assert_eq!(full(&il).iter().position(|&(s, _)| s == 1), Some(251));
-}
-
-/// Empty sequences take no part in the stagger: the order is that of the non-empty ones alone.
-#[test]
-fn empty_sequences_do_not_affect_the_order() {
-    let mut rng = Rng(0xE0E0_1234);
-    for lens in uniform_cases() {
-        let live: Vec<usize> = lens.iter().copied().filter(|&n| n > 0).collect();
-        let mut map = Vec::new(); // index in `lens` -> index in `live`
-        let mut next = 0;
-        for &n in &lens {
-            map.push(next);
-            if n > 0 {
-                next += 1;
-            }
-        }
-        let got: Vec<(usize, usize)> = full(&Interleave::new(&lens)).into_iter().map(|(s, j)| (map[s], j)).collect();
-        assert_eq!(got, full(&Interleave::new(&live)), "{lens:?}");
-    }
-    for (lens, schedule) in scheduled_cases() {
-        let il = Interleave::with_schedule(&lens, &schedule).unwrap();
-        let mut lens2 = lens.clone();
-        let mut schedule2 = schedule.clone();
-        let at = rng.below(lens.len() + 1);
-        lens2.insert(at, 0);
-        schedule2.insert(at, if at.is_multiple_of(2) { Schedule::delayed(0.99) } else { Schedule::until(0.01) });
-        let il2 = Interleave::with_schedule(&lens2, &schedule2).unwrap();
-        let got: Vec<(usize, usize)> = full(&il2).into_iter().map(|(s, j)| (if s > at { s - 1 } else { s }, j)).collect();
-        assert_eq!(got, full(&il), "{lens:?} {schedule:?} with an empty part at {at}");
-    }
 }
 
 /// Repositioning an iterator gives the same elements as creating a fresh one.
@@ -431,12 +414,12 @@ fn reseeking_matches_fresh_iterators() {
 #[test]
 fn empty_and_trivial() {
     for lens in [vec![], vec![0], vec![0, 0]] {
-        let il = Interleave::new(&lens);
+        let il = uniform(&lens);
         assert_eq!(il.len(), 0);
         assert_eq!(il.len(), 0);
         assert_eq!(il.iter(0..0).count(), 0);
     }
-    let il = Interleave::new(&[5]);
+    let il = uniform(&[5]);
     assert_eq!(full(&il), (0..5).map(|j| (0, j)).collect::<Vec<_>>());
     assert_eq!(il.iter(2..2).count(), 0);
     assert_eq!(il.iter(3..5).collect::<Vec<_>>(), vec![(0, 3), (0, 4)]);
@@ -447,7 +430,7 @@ fn huge_lengths_seek_consistently() {
     let max_len = usize::try_from(MAX_TOTAL_LEN).unwrap_or(usize::MAX);
     let lens = [max_len / 2, max_len / 2 - max_len / 32, 7, 1, max_len / 64];
     let schedule = [Uniform, Uniform, Schedule::delayed(0.5), Uniform, Schedule::ramp(0.3, 0.7)];
-    let il = Interleave::with_schedule(&lens, &schedule).unwrap();
+    let il = build(&lens, &schedule).unwrap();
     let n = il.len();
     let mut rng = Rng(777);
     for _ in 0..40 {

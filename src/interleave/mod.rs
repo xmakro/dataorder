@@ -15,8 +15,9 @@
 //! ```
 //!
 //! Here `j` is the index within part `i`, `n_i` is its length, `k` is the number of
-//! non-empty parts, and `r` is its rank among them. The stagger makes equal uniform
-//! parts round-robin. Empty parts do not affect it. The merge sorts by
+//! parts and `r` is the part's rank. The compiler builds an interleave over a mix's
+//! non-empty parts only, so empty parts do not affect it. The stagger makes equal
+//! uniform parts round-robin. The merge sorts by
 //! `(key, part index, element index)` and preserves every part's local order.
 //!
 //! Virtual time is not output progress. In the continuous model, output progress
@@ -49,7 +50,6 @@ mod tournament;
 
 pub(crate) use iter::Iter;
 pub use schedule::Schedule;
-pub(crate) use schedule::ScheduleError;
 
 use profile::Profile;
 use std::ops::Range;
@@ -62,18 +62,17 @@ pub(crate) const MAX_TOTAL_LEN: u64 = 1 << 46;
 #[derive(Clone, Copy, Debug)]
 struct Seq {
     n: usize,
-    /// `1/n` (0 for an empty sequence): keys multiply by it instead of dividing (monotone
-    /// in `j` all the same).
+    /// `1/n`: keys multiply by it instead of dividing (monotone in `j` all the same).
     inv_n: f64,
-    /// Stagger offset `(2r+1)/(2k')` among the `k'` non-empty sequences (0 for an empty one).
+    /// Stagger offset `(2r+1)/(2k)` of the sequence with rank `r` among the `k` sequences.
     phi: f64,
     /// Index into `Interleave::profiles`; 0 is the shared uniform profile.
     profile: u32,
 }
 
-/// A balanced, order-preserving interleaving of `k` sequences with schedules,
-/// given only their lengths. Build it with [`Interleave::with_schedule`] and walk any
-/// merged range with [`Interleave::iter`].
+/// A balanced, order-preserving interleaving of `k` non-empty sequences with schedules,
+/// given only their lengths. Build it with [`Interleave::new`] and walk any merged range
+/// with [`Interleave::iter`].
 #[derive(Clone, Debug)]
 pub(crate) struct Interleave {
     seqs: Vec<Seq>,
@@ -83,97 +82,33 @@ pub(crate) struct Interleave {
 }
 
 impl Interleave {
-    /// All sequences [`Schedule::Uniform`].
-    ///
-    /// # Panics
-    /// If the total length exceeds [`MAX_TOTAL_LEN`].
-    #[cfg(test)]
-    pub(crate) fn new(lens: &[usize]) -> Self {
-        Self::with_schedule(lens, &vec![Schedule::Uniform; lens.len()]).expect("interleave: total length exceeds MAX_TOTAL_LEN")
-    }
-
-    /// Builds a mix from lengths and schedules, one schedule per part.
-    /// Empty parts still have their parameters validated but do not affect the
-    /// resulting order. Costs `O(k)` for `k` parts, independent of their lengths.
-    ///
-    /// # Panics
-    /// If `lens` and `schedule` differ in length.
-    pub(crate) fn with_schedule(lens: &[usize], schedule: &[Schedule]) -> Result<Self, ScheduleError> {
-        assert_eq!(lens.len(), schedule.len(), "interleave: one schedule per sequence");
-        let k = lens.len();
-        let mut total: usize = 0;
-        for &n in lens {
-            total = total.checked_add(n).ok_or(ScheduleError::LengthOverflow)?;
-            if total as u64 > MAX_TOTAL_LEN {
-                return Err(ScheduleError::TooLong);
-            }
-        }
-        let live = lens.iter().filter(|&&n| n > 0).count();
-        let mut rank = 0usize;
+    /// Builds a mix from its non-empty parts' lengths and profiles, `None` meaning
+    /// uniform, in part order. The caller has validated each profile against its part's
+    /// length and the total against [`MAX_TOTAL_LEN`]; see [`Schedule::profile`].
+    /// Costs `O(k)` for `k` parts, independent of their lengths.
+    pub(crate) fn new(parts: Vec<(usize, Option<Profile>)>) -> Self {
+        let k = parts.len();
         let mut seqs = Vec::with_capacity(k);
         let mut profiles = vec![Profile::trapezoid(0.0, 0.0, 1.0, 1.0)];
-        for (i, (&n, &s)) in lens.iter().zip(schedule).enumerate() {
-            let profile = match s {
-                Schedule::Uniform => None,
-                Schedule::Trapezoid { start: d0, full: d1, fade: d2, off: d3 } => {
-                    let ordered = 0.0 <= d0 && d0 <= d1 && d1 <= d2 && d2 <= d3 && d3 <= 1.0 && d0 < d3;
-                    if !([d0, d1, d2, d3].iter().all(|d| d.is_finite()) && ordered) {
-                        return Err(ScheduleError::InvalidParameter {
-                            seq: i,
-                            schedule: s,
-                            reason: if [d0, d1, d2, d3].iter().all(|d| d.is_finite()) {
-                                crate::ScheduleReason::InvalidBreakpoints
-                            } else {
-                                crate::ScheduleReason::NonFiniteParameter
-                            },
-                        });
-                    }
-                    Some(Profile::trapezoid(d0, d1, d2, d3))
-                }
-            };
+        let mut total = 0;
+        for (rank, (n, profile)) in parts.into_iter().enumerate() {
+            debug_assert!(n > 0, "interleave: empty part");
             let profile = match profile {
-                // Profile 0 is the shared uniform one; an empty scheduled sequence uses it too.
                 None => 0,
-                Some(p) => {
-                    if n > 0 && !p.is_finite() {
-                        return Err(ScheduleError::InvalidParameter {
-                            seq: i,
-                            schedule: s,
-                            reason: crate::ScheduleReason::CoefficientOverflow,
-                        });
-                    }
-                    if n as f64 * p.max_rate() > MAX_TOTAL_LEN as f64 {
-                        return Err(ScheduleError::TooSteep { seq: i, len: n, peak_rate: p.max_rate() });
-                    }
-                    if n == 0 {
-                        0
-                    } else {
-                        profiles.push(p);
-                        (profiles.len() - 1) as u32
-                    }
+                Some(profile) => {
+                    profiles.push(profile);
+                    (profiles.len() - 1) as u32
                 }
             };
-            let (inv_n, phi) = if n > 0 {
-                rank += 1;
-                (1.0 / n as f64, (2 * rank - 1) as f64 / (2 * live) as f64)
-            } else {
-                (0.0, 0.0)
-            };
-            seqs.push(Seq { n, inv_n, phi, profile });
+            total += n;
+            seqs.push(Seq { n, inv_n: 1.0 / n as f64, phi: (2 * rank + 1) as f64 / (2 * k) as f64, profile });
         }
-        Ok(Self { seqs, profiles, total })
+        Self { seqs, profiles, total }
     }
 
     /// Length of the merged sequence (sum of all sequence lengths).
     pub(crate) fn len(&self) -> usize {
         self.total
-    }
-
-    /// After validation, compile a mix against only its live children. The stagger and
-    /// profiles already ignored empty parts, so compaction preserves every key and tie.
-    pub(crate) fn remove_empty(&mut self) {
-        self.seqs.retain(|s| s.n > 0);
-        self.seqs.shrink_to_fit();
     }
 
     /// `true` when some non-empty sequence has a schedule.

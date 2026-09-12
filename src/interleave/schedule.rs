@@ -1,8 +1,8 @@
-//! Public schedules and internal schedule validation errors.
+//! Public schedules and the validated draw-rate profiles behind them.
 
 use super::MAX_TOTAL_LEN;
-use crate::ErrorKind;
-use std::fmt;
+use super::profile::Profile;
+use crate::{ErrorKind, ScheduleReason};
 
 /// Spreads a part's elements along a shared virtual clock from 0 to 1.
 ///
@@ -158,42 +158,31 @@ impl Schedule {
     pub const fn trapezoid(start: f64, full: f64, fade: f64, off: f64) -> Self {
         Self::Trapezoid { start, full, fade, off }
     }
-}
 
-/// Why a schedule configuration was rejected.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ScheduleError {
-    /// The total length exceeds `usize::MAX`.
-    LengthOverflow,
-    /// The total length exceeds [`MAX_TOTAL_LEN`].
-    TooLong,
-    /// A breakpoint or derived profile coefficient is invalid.
-    InvalidParameter { seq: usize, schedule: Schedule, reason: crate::ScheduleReason },
-    /// `length × peak rate` of a scheduled sequence exceeds [`MAX_TOTAL_LEN`].
-    TooSteep { seq: usize, len: usize, peak_rate: f64 },
-}
-
-impl ScheduleError {
-    /// The kind and, for a problem with one part, the part's index.
-    pub(crate) fn into_kind(self) -> (ErrorKind, Option<usize>) {
-        match self {
-            Self::LengthOverflow => (ErrorKind::LengthOverflow, None),
-            Self::TooLong => (ErrorKind::MixTooLong, None),
-            Self::InvalidParameter { seq, schedule, reason } => (ErrorKind::InvalidSchedule { schedule, reason }, Some(seq)),
-            Self::TooSteep { seq, len, peak_rate } => (ErrorKind::ScheduleTooSteep { len, peak_rate, limit: MAX_TOTAL_LEN }, Some(seq)),
+    /// The draw-rate profile of a part with `len` elements, or `None` for the shared
+    /// uniform profile. Breakpoints are validated for every part; an empty part then
+    /// draws from no profile. A non-empty part must also have finite derived
+    /// coefficients and satisfy `len × peak rate ≤ MAX_TOTAL_LEN`.
+    pub(crate) fn profile(self, len: usize) -> Result<Option<Profile>, ErrorKind> {
+        let Self::Trapezoid { start, full, fade, off } = self else { return Ok(None) };
+        let invalid = |reason| ErrorKind::InvalidSchedule { schedule: self, reason };
+        if ![start, full, fade, off].iter().all(|d| d.is_finite()) {
+            return Err(invalid(ScheduleReason::NonFiniteParameter));
         }
+        if !(0.0 <= start && start <= full && full <= fade && fade <= off && off <= 1.0 && start < off) {
+            return Err(invalid(ScheduleReason::InvalidBreakpoints));
+        }
+        if len == 0 {
+            return Ok(None);
+        }
+        let profile = Profile::trapezoid(start, full, fade, off);
+        if !profile.is_finite() {
+            return Err(invalid(ScheduleReason::CoefficientOverflow));
+        }
+        let peak_rate = profile.max_rate();
+        if len as f64 * peak_rate > MAX_TOTAL_LEN as f64 {
+            return Err(ErrorKind::ScheduleTooSteep { len, peak_rate, limit: MAX_TOTAL_LEN });
+        }
+        Ok(Some(profile))
     }
 }
-
-impl fmt::Display for ScheduleError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LengthOverflow => write!(f, "total length exceeds usize::MAX"),
-            Self::TooLong => write!(f, "total length exceeds {MAX_TOTAL_LEN}"),
-            Self::InvalidParameter { seq, schedule, .. } => write!(f, "sequence {seq}: invalid {schedule:?}"),
-            Self::TooSteep { seq, .. } => write!(f, "sequence {seq}: too long for the steepness of its schedule"),
-        }
-    }
-}
-
-impl std::error::Error for ScheduleError {}
