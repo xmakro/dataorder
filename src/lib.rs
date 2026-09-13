@@ -1,4 +1,4 @@
-//! Deterministic ordering for large datasets: shuffle, seek anywhere, then stream.
+//! Deterministic ordering for large datasets: shuffle, seek anywhere, then iterate.
 //!
 //! Shuffle and mix billions of records without storing an index array. Memory grows
 //! with the sources and the sequence structure, not with the number of records. Each
