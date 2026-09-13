@@ -11,9 +11,9 @@
 //! - **Walk from there:** a mix keeps a tournament tree and chooses each next part with
 //!   O(log k) comparisons for `k` parts, instead of seeking again for every element.
 //!
-//! See the [cost model](#cost) for the cost of each operation and the
-//! [README](https://github.com/xmakro/dataorder/blob/main/README.md#performance) for
-//! the benchmarks.
+//! See the [cost model](#cost) for the cost of each operation and
+//! [`benches/ordering.rs`](https://github.com/xmakro/dataorder/blob/main/benches/ordering.rs)
+//! for the benchmarks.
 //!
 //! Three types make up the API:
 //!
@@ -187,9 +187,9 @@
 //! child replaces the child state, and entering a new mix part can allocate. A clone
 //! copies the initialized state without spare capacity, so its later seeks may
 //! allocate. `last()` uses [`Order::get`] and allocates independently of the cursor's
-//! buffers. The
-//! [README](https://github.com/xmakro/dataorder/blob/main/README.md#performance)
-//! describes the benchmarks.
+//! buffers. The benchmarks in
+//! [`benches/ordering.rs`](https://github.com/xmakro/dataorder/blob/main/benches/ordering.rs)
+//! measure construction, random lookup, seeks and a sequential walk.
 //!
 //! # Feature flags
 //!
@@ -225,7 +225,7 @@
 //! The same configuration, source lengths and salts, and seed produce the same order
 //! on every supported platform. A release that changes an order or the serialized
 //! configuration format is a breaking change: a new minor version while the crate is
-//! 0.x. Save [`CRATE_VERSION`] in checkpoints for a conservative exact-version check.
+//! 0.x.
 //!
 //! Calculations use IEEE 754 binary64 with separate multiply and add expressions, so
 //! targets with hardware or software binary64 agree; x87-only `i586` targets using
@@ -275,14 +275,6 @@ pub use source::{Source, salt};
 /// assert_eq!(Order::new(repeated).map(|order| order.len()), Ok(3 * (1 << 30) + 3));
 /// ```
 pub const MAX_MIX_LEN: u64 = interleave::MAX_TOTAL_LEN;
-
-/// Version of the linked `dataorder` crate, including its patch version.
-///
-/// Save it alongside the configuration, source metadata, seed and worker settings, and
-/// require an exact match on restore unless the application has verified a compatible
-/// migration. A difference does not necessarily mean that the ordering changed; see the
-/// crate's [stability policy](crate#stability).
-pub const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The README's code blocks, compiled as doctests.
 #[cfg(doctest)]

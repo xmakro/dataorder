@@ -11,7 +11,7 @@ which dataset to read and which record within it. Loading the record is up to yo
   O(1) time on average and O(1) space, so the permutation is never stored.
 - **Seek anywhere.** Jumping to any position costs about the same wherever it is;
   nothing before it is replayed.
-- **Stream cheaply.** After a seek, a mix picks the next dataset with O(log k)
+- **Iterate cheaply.** After a seek, a mix picks the next dataset with O(log k)
   comparisons for k datasets.
 - **Reproduce exactly.** The same configuration, dataset lengths and seed give the
   same order on every supported platform.
@@ -27,7 +27,7 @@ dataorder = "0.4"
 ```
 
 Implement `Source` for your dataset handle; only its length is required. Give each
-dataset a distinct name and derive its salt from it, so that datasets of the same
+dataset a distinct key and derive its salt from it, so that datasets of the same
 length shuffle differently and moving their files does not change the order. Then
 describe a sequence with `Seq` and compile it into an `Order`:
 
@@ -35,19 +35,19 @@ describe a sequence with `Seq` and compile it into an `Order`:
 use dataorder::{Order, Seq, Source};
 
 struct Dataset {
-    name: &'static str,
+    key: &'static str,
     records: usize,
 }
 
 impl Source for Dataset {
     fn len(&self) -> usize { self.records }
-    fn salt(&self) -> u64 { dataorder::salt(self.name) }
+    fn salt(&self) -> u64 { dataorder::salt(self.key) }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Two passes over each dataset, shuffled differently on each pass, interleaved.
-    let web = Seq::source(Dataset { name: "web", records: 1_000_000_000 }).repeat_shuffled(2);
-    let code = Seq::source(Dataset { name: "code", records: 200_000_000 }).repeat_shuffled(2);
+    let web = Seq::source(Dataset { key: "web", records: 1_000_000_000 }).repeat_shuffled(2);
+    let code = Seq::source(Dataset { key: "code", records: 200_000_000 }).repeat_shuffled(2);
     let order = Order::with_seed(Seq::mix([web, code]), 42)?;
     assert_eq!(order.len(), 2_400_000_000);
 
@@ -55,19 +55,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resume = 1_500_000_000;
     for item in order.cursor(resume..resume + 10)? {
         // Load the record with your own reader.
-        println!("{}: record {}", item.source.name, item.record_index);
+        println!("{}: record {}", item.source.key, item.record_index);
     }
     Ok(())
 }
 ```
-
-Each position maps to an `Item`: `source`, a reference to the dataset; `record_index`,
-the record's index within it; and `source_ordinal`, the dataset's index in
-`order.sources()`. `get(pos)` returns one item. `iter()` and `cursor(range)?` return a
-`Cursor` over the whole order or a range of it, which yields the same items as `get`
-and moves with `reset(range)?`. The order reads each handle's length once; keep it
-stable. Slices, arrays, vectors and `usize` implement `Source` too, and `map_sources`
-turns plain names or paths in a `Seq` into handles before the order is built.
 
 ## Building sequences
 
@@ -85,11 +77,7 @@ turns plain names or paths in a `Seq` into handles before the order is built.
 | Split across workers | `.skip(worker).step_by(workers)` |
 
 Sequences nest freely, with one rule: shuffle before mixing. A shuffle's input must
-not contain a mix, and `Order::new` rejects one that does. To split an order across
-workers, apply `.skip(index).step_by(count)` to the finished sequence: worker `index`
-gets every `count`-th position, and the workers cover the order exactly once between
-them. See [`Seq::step_by`](https://docs.rs/dataorder/latest/dataorder/enum.Seq.html#method.step_by)
-for the costs and caveats.
+not contain a mix, and `Order::new` rejects one that does.
 
 ### Proportions
 
@@ -154,34 +142,19 @@ shuffle at once; the
 [shuffle rules](https://docs.rs/dataorder/latest/dataorder/#shuffles-and-repetitions)
 say what a permutation depends on and which configuration changes keep it.
 
-To resume a run, save the configuration, seed, position and `dataorder::CRATE_VERSION`,
-then rebuild the order and open a cursor at that position. A release that changes any
-order is a breaking change, so resume with the crate version that produced the run.
-The optional `serde` feature serializes configurations; with JSON, enable
-`serde_json/float_roundtrip` so that schedule parameters survive a round trip.
-
-## Errors
-
-`Order::new` validates the whole configuration and returns an `Error` with a kind and
-the path to the offending node: skipping or taking past the end, a zero step, a length
-that overflows `usize`, an invalid schedule, a shuffle over a mix. `get` returns `None`
-past the end. `cursor` and `reset` return a `BoundsError` for a bad range and leave the
-cursor unchanged. See
-[validation and limits](https://docs.rs/dataorder/latest/dataorder/#validation-and-limits).
+To resume a run, save the configuration, seed and position, then rebuild the order and
+open a cursor at that position. A release that changes any order is a breaking change,
+so resume with the crate version that produced the run. The optional `serde` feature
+serializes configurations; with JSON, enable `serde_json/float_roundtrip` so that
+schedule parameters survive a round trip.
 
 ## Performance
 
 Building an order costs time that depends on the configuration, not on the data.
 `get` walks from the root to a dataset: a binary search per concat, one permutation
-per shuffle and a bounded seek per mix. A cursor pays for one seek, then streams;
+per shuffle and a bounded seek per mix. A cursor pays for one seek, then iterates;
 reuse it with `reset` when seeking often, since it keeps its buffers. The
 [cost model](https://docs.rs/dataorder/latest/dataorder/#cost) has the details.
-
-The [Criterion](https://criterion-rs.github.io/book/) benchmarks in
-[benches/ordering.rs](benches/ordering.rs) time construction, random lookup, seeking
-and streaming over a billion-record shuffle, a shuffled repeat, mixes of 100 and 1,000
-shuffled datasets and sliced and strided selections, with no record I/O. Allocation
-behavior is pinned by [tests/cost.rs](tests/cost.rs).
 
 ## Development
 
@@ -201,4 +174,4 @@ from an independent Python oracle; run the generator without `--check` to regene
 them after changing it. To compare benchmarks across a change, run them with
 `-- --save-baseline before` on the old code and `-- --baseline before` on the new.
 
-Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).

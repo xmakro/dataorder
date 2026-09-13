@@ -98,7 +98,7 @@ crate version that produced them.
   reinterpreted.
 
 - **Breaking:** remove `salt_path`; pass the dataset identity's bytes to `salt`.
-  Rename `ORDERING_VERSION` to `CRATE_VERSION`.
+  Remove `ORDERING_VERSION`.
 
 - Store each shuffled node's first-pass key in the compiled order and derive later
   passes' keys only when a cursor enters them; `set_seed` re-derives the stored keys
